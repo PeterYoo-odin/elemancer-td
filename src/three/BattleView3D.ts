@@ -96,12 +96,17 @@ export class BattleView3D {
 
   private raycaster = new THREE.Raycaster()
   private ndc = new THREE.Vector2()
-  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+  // Pick plane raised to the build-tile top (y≈0.5): with the tilted camera a y=0
+  // plane crosses ~1/3 tile past the visible surface, so a cold touch tap (no prior
+  // hover) would land a cell off. y=0.5 keeps hover+tap WYSIWYG. (plane: y = -const)
+  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.5)
   private hitPoint = new THREE.Vector3()
 
   private boardTiles!: THREE.InstancedMesh
   private hoverMesh!: THREE.Mesh
   private hoverMat!: THREE.MeshBasicMaterial
+  private portalMesh!: THREE.Mesh
+  private baseMesh!: THREE.Mesh
   private buffDirty = true
 
   private enemyPools = new Map<EnemyKind, EnemySlot[]>()
@@ -276,16 +281,16 @@ export class BattleView3D {
     const portalMesh = new THREE.Mesh(portalGeo, portalMat)
     portalMesh.position.set(wx(portal.x), 0.55, wz(portal.y))
     portalMesh.rotation.x = Math.PI / 2
-    portalMesh.name = 'portal'
     this.scene.add(portalMesh)
+    this.portalMesh = portalMesh
 
     const baseGeo = new THREE.OctahedronGeometry(0.5, 0)
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x2ff7c3, emissive: 0x2ff7c3, emissiveIntensity: 1.1, roughness: 0.25, metalness: 0.2, flatShading: true })
     this.disposables.push(baseGeo, baseMat)
     const baseMesh = new THREE.Mesh(baseGeo, baseMat)
     baseMesh.position.set(wx(base.x), 0.85, wz(base.y))
-    baseMesh.name = 'base'
     this.scene.add(baseMesh)
+    this.baseMesh = baseMesh
     const baseLight = new THREE.PointLight(0x2ff7c3, 0.8, 8, 2)
     baseLight.position.copy(baseMesh.position)
     this.scene.add(baseLight)
@@ -359,6 +364,8 @@ export class BattleView3D {
     }
     if (any) {
       ;(this.particles.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
+      // colours are written per-emit; flag them too or every burst renders black
+      ;(this.particles.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true
     }
   }
 
@@ -936,11 +943,10 @@ export class BattleView3D {
     }
     // billboard particles handled by Points automatically
 
-    // portal spin + base bob
-    const portal = this.scene.getObjectByName('portal')
-    if (portal) portal.rotation.z += dt * 1.2
-    const base = this.scene.getObjectByName('base')
-    if (base) { base.rotation.y += dt * 0.8; base.position.y = 0.85 + Math.sin(this.clockT * 2) * 0.06 }
+    // portal spin + base bob (cached refs — no per-frame scene-graph walk)
+    this.portalMesh.rotation.z += dt * 1.2
+    this.baseMesh.rotation.y += dt * 0.8
+    this.baseMesh.position.y = 0.85 + Math.sin(this.clockT * 2) * 0.06
 
     // hover pulse
     if (this.hoverMesh.visible) this.hoverMesh.scale.setScalar(1 + Math.sin(this.clockT * 6) * 0.06)
