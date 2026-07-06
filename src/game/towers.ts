@@ -6,6 +6,8 @@
 //
 // Range is in tiles; the scene multiplies by TILE. Cooldown is in seconds.
 
+import type { DamageType, Element, StatusKind, TargetMode } from '../sim/combat'
+
 export type TowerKind = 'cannon' | 'frost' | 'flame' | 'storm' | 'arcane'
 
 export interface TowerLevel {
@@ -13,6 +15,10 @@ export interface TowerLevel {
   range: number // tiles
   cooldown: number // seconds between shots
   upgradeCost: number // gold to REACH this level (0 for base)
+  // --- slice-3 combat model (all optional; fall back to the TowerDef defaults) ---
+  damageType?: DamageType // branch can change the counter type (Sniper→Pierce, Mortar→Siege)
+  armorPen?: number // flat armor ignored
+  armorTear?: number // Siege/branch: flat armor stripped from the target (status)
   // Frost:
   slowFactor?: number // enemy speed multiplier while slowed (e.g. 0.5)
   slowDuration?: number // seconds the slow lingers
@@ -46,9 +52,15 @@ export interface TowerDef {
   color: number
   accent: number
   projectile: boolean // fires a travelling projectile (cannon) vs instant
-  synergyDamage: boolean // deals BONUS damage to frost-slowed enemies
-  antiAir: boolean // can target Flyers
+  synergyDamage: boolean // deals BONUS damage to afflicted (slow/burn/stun) enemies → combos
+  antiAir: boolean // can target Flyers (canHitAir)
   support: boolean // Arcane: buffs adjacent towers instead of only attacking
+  // --- slice-3 combat model ---
+  damageType: DamageType // default counter type vs enemy armor
+  element?: Element // optional elemental affinity → engages the element wheel
+  armorPen?: number // default flat armor ignored
+  status?: StatusKind // signature status this tower applies (for the UI/combos)
+  defaultTargeting: TargetMode // starting targeting priority (player-switchable)
   levels: [TowerLevel, TowerLevel, TowerLevel]
   branches: [TowerBranch, TowerBranch]
 }
@@ -67,14 +79,18 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
     synergyDamage: true,
     antiAir: false,
     support: false,
+    damageType: 'Physical',
+    armorPen: 0,
+    defaultTargeting: 'First',
     levels: [
       { damage: 24, range: 2.7, cooldown: 0.85, upgradeCost: 0 },
       { damage: 42, range: 3.1, cooldown: 0.72, upgradeCost: 85 },
       { damage: 70, range: 3.5, cooldown: 0.6, upgradeCost: 150 },
     ],
     branches: [
-      { key: 'sniper', name: 'Sniper', blurb: 'Colossal single hit · huge range', damage: 190, range: 5.2, cooldown: 1.15, upgradeCost: 320 },
-      { key: 'mortar', name: 'Mortar', blurb: 'Lobbed shell · splash blast', damage: 95, range: 3.9, cooldown: 0.85, upgradeCost: 320, splash: 1.5 },
+      // Sniper reforges the shot into armour-piercing rounds; Mortar into siege shells.
+      { key: 'sniper', name: 'Sniper', blurb: 'Colossal single hit · huge range', damage: 190, range: 5.2, cooldown: 1.15, upgradeCost: 320, damageType: 'Pierce', armorPen: 8 },
+      { key: 'mortar', name: 'Mortar', blurb: 'Lobbed shell · splash blast', damage: 95, range: 3.9, cooldown: 0.85, upgradeCost: 320, splash: 1.5, damageType: 'Siege' },
     ],
   },
   frost: {
@@ -88,6 +104,10 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
     synergyDamage: false,
     antiAir: false,
     support: false,
+    damageType: 'Magic',
+    element: 'Water',
+    status: 'slow',
+    defaultTargeting: 'Close',
     levels: [
       { damage: 5, range: 2.2, cooldown: 0.6, upgradeCost: 0, slowFactor: 0.55, slowDuration: 1.3 },
       { damage: 8, range: 2.6, cooldown: 0.55, upgradeCost: 70, slowFactor: 0.45, slowDuration: 1.5 },
@@ -109,6 +129,10 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
     synergyDamage: true,
     antiAir: false,
     support: false,
+    damageType: 'Magic',
+    element: 'Fire',
+    status: 'burn',
+    defaultTargeting: 'Close',
     levels: [
       { damage: 9, range: 1.85, cooldown: 1.0, upgradeCost: 0, burnDps: 11, burnDuration: 2.2, splash: 1.0 },
       { damage: 15, range: 2.15, cooldown: 0.9, upgradeCost: 75, burnDps: 18, burnDuration: 2.4, splash: 1.15 },
@@ -130,6 +154,9 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
     synergyDamage: true,
     antiAir: true,
     support: false,
+    damageType: 'Magic',
+    element: 'Storm',
+    defaultTargeting: 'First',
     levels: [
       { damage: 20, range: 3.0, cooldown: 0.95, upgradeCost: 0, chainCount: 2, chainRange: 2.2, chainFalloff: 0.8 },
       { damage: 30, range: 3.3, cooldown: 0.85, upgradeCost: 110, chainCount: 3, chainRange: 2.4, chainFalloff: 0.82 },
@@ -151,6 +178,9 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
     synergyDamage: false,
     antiAir: true,
     support: true,
+    damageType: 'Magic',
+    element: 'Light',
+    defaultTargeting: 'Strong',
     levels: [
       { damage: 6, range: 1.6, cooldown: 1.2, upgradeCost: 0, buffDamage: 0.2, buffRange: 0.1 },
       { damage: 9, range: 1.6, cooldown: 1.1, upgradeCost: 90, buffDamage: 0.3, buffRange: 0.12 },

@@ -19,6 +19,8 @@ export type EnemyKind =
   | 'swarm'
   | 'boss'
 
+import type { ArmorType, Element } from '../sim/combat'
+
 export type EnemyShape = 'triangle' | 'square' | 'hex' | 'circle' | 'diamond'
 
 export interface EnemyDef {
@@ -31,6 +33,12 @@ export interface EnemyDef {
   accent: number // outline / detail colour
   shape: EnemyShape
   reward: number // battle-gold on kill
+
+  // --- slice-3 combat model (NO immunity flags, ever) ---
+  armor: ArmorType // routes through the damage-type × armor grid
+  flatArmor: number // flat damage soaked per hit (default 0, mostly small)
+  affinity?: Element // elemental-only; engages the wheel vs elemental towers
+  isAir?: boolean // only canHitAir towers may target it (targeting, not immunity)
 
   // --- special archetype flags (all optional) ---
   flying?: boolean // only anti-air towers can target it
@@ -53,6 +61,8 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     accent: 0x2f7a10,
     shape: 'triangle',
     reward: 6,
+    armor: 'Unarmored',
+    flatArmor: 0,
   },
   grunt: {
     kind: 'grunt',
@@ -64,6 +74,8 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     accent: 0x8a4400,
     shape: 'square',
     reward: 10,
+    armor: 'Light',
+    flatArmor: 1,
   },
   brute: {
     kind: 'brute',
@@ -75,6 +87,8 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     accent: 0x7a0a28,
     shape: 'hex',
     reward: 22,
+    armor: 'Heavy',
+    flatArmor: 3,
   },
   flyer: {
     kind: 'flyer',
@@ -87,6 +101,10 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     shape: 'diamond',
     reward: 12,
     flying: true,
+    armor: 'Light',
+    flatArmor: 0,
+    affinity: 'Light', // Storm (strong vs Light) shreds it; Fire (weak) fizzles
+    isAir: true,
   },
   shielded: {
     kind: 'shielded',
@@ -100,6 +118,8 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     reward: 16,
     shield: 90,
     shieldBlock: 0.6,
+    armor: 'Fortified', // Siege (Mortar) & Magic love it; Pierce (Sniper) struggles
+    flatArmor: 2,
   },
   healer: {
     kind: 'healer',
@@ -114,6 +134,9 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     healRadius: 2.2,
     healAmount: 14,
     healInterval: 1.4,
+    armor: 'Unarmored',
+    flatArmor: 0,
+    affinity: 'Nature', // Fire (strong vs Nature) melts it; Storm (weak) barely dents
   },
   swarm: {
     kind: 'swarm',
@@ -125,6 +148,8 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     accent: 0xb07d00,
     shape: 'triangle',
     reward: 3,
+    armor: 'Unarmored',
+    flatArmor: 0,
   },
   boss: {
     kind: 'boss',
@@ -139,5 +164,7 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     shield: 400,
     shieldBlock: 0.5,
     boss: true,
+    armor: 'Warded', // resists ALL Magic (0.5×) — bring Physical/Siege cannons
+    flatArmor: 5,
   },
 }
