@@ -68,7 +68,7 @@ export class BootScene extends Phaser.Scene {
     this.tweens.add({ targets: prompt, alpha: 0.25, duration: 800, yoyo: true, repeat: -1 })
 
     this.add
-      .text(width / 2, height - 56, 'v0.1 scaffold · built in Odin', {
+      .text(width / 2, height - 56, 'v0.2 · built in Odin', {
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',
         color: '#6b5a9a',
@@ -76,10 +76,10 @@ export class BootScene extends Phaser.Scene {
       .setOrigin(0.5)
 
     this.input.once('pointerdown', () => {
-      prompt.setText('Entering battle…')
+      prompt.setText('Entering…')
       this.cameras.main.flash(300, 123, 47, 247)
       this.cameras.main.fadeOut(320, 20, 12, 50)
-      this.time.delayedCall(340, () => this.scene.start('Battle'))
+      this.time.delayedCall(340, () => this.scene.start('Menu'))
     })
   }
 }

@@ -1,6 +1,10 @@
 import Phaser from 'phaser'
 import { BootScene } from './scenes/BootScene'
+import { MenuScene } from './scenes/MenuScene'
+import { MapScene } from './scenes/MapScene'
 import { BattleScene } from './scenes/BattleScene'
+import { WorkshopScene } from './scenes/WorkshopScene'
+import { ShopScene } from './scenes/ShopScene'
 
 // Portrait, mobile-first. FIT scaling letterboxes cleanly on any phone/desktop.
 const config: Phaser.Types.Core.GameConfig = {
@@ -14,7 +18,7 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 1280,
   },
   render: { antialias: true, pixelArt: false },
-  scene: [BootScene, BattleScene],
+  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene],
 }
 
 new Phaser.Game(config)
