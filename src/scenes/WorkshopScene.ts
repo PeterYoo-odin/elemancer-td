@@ -49,8 +49,6 @@ export class WorkshopScene extends Phaser.Scene {
 
     const bg = this.add.graphics().setDepth(2)
     const draw = () => {
-      const lvl = nodeLevel(economy.data, node.id)
-      const cost = nextCost(economy.data, node)
       bg.clear()
       bg.fillStyle(isDiamond ? 0x2a2050 : 0x241a48, 0.96)
       bg.fillRoundedRect(x - w / 2, y - h / 2, w, h, 14)

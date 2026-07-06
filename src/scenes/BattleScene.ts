@@ -164,6 +164,7 @@ export class BattleScene extends Phaser.Scene {
   private mode: InputMode = 'idle'
   private buildKind: TowerKind | null = null
   private aimingSpell: SpellKey | null = null
+  private justEnteredAiming = false
   private ghost?: Phaser.GameObjects.Container
   private ghostRing?: Phaser.GameObjects.Arc
   private aimReticle?: Phaser.GameObjects.Container
@@ -494,9 +495,9 @@ export class BattleScene extends Phaser.Scene {
     this.startBtn = this.makeButtonSync(150, 120, 250, 58, 'START ▶', 0x2ea043, () => this.startWave())
     this.startLabel = this.startBtn.getData('label') as Phaser.GameObjects.Text
 
-    this.pauseLabel = (this.makeButtonSync(612, 120, 74, 58, 'II', 0x4a3a7a, () => this.togglePause())
+    this.pauseLabel = (this.makeButtonSync(606, 120, 70, 58, 'II', 0x4a3a7a, () => this.togglePause())
       .getData('label') as Phaser.GameObjects.Text)
-    this.speedLabel = (this.makeButtonSync(680, 120, 74, 58, '1x', 0x4a3a7a, () => this.toggleSpeed())
+    this.speedLabel = (this.makeButtonSync(684, 120, 70, 58, '1x', 0x4a3a7a, () => this.toggleSpeed())
       .getData('label') as Phaser.GameObjects.Text)
   }
 
@@ -665,6 +666,7 @@ export class BattleScene extends Phaser.Scene {
       this.deselect()
       this.mode = 'aiming'
       this.aimingSpell = sb.key
+      this.justEnteredAiming = true // swallow this same tap in the scene handler
       this.spawnAimReticle(sb.def)
     } else {
       this.castSpell(sb, this.scale.width / 2, MAP_Y + MAP_H / 2)
@@ -803,8 +805,15 @@ export class BattleScene extends Phaser.Scene {
 
   private onPointerDown(p: Phaser.Input.Pointer): void {
     if (this.state === 'won' || this.state === 'lost') return
+    if (this.paused) return // pause/quit buttons are their own handlers
 
     if (this.mode === 'aiming') {
+      // The tap that entered aim mode reaches this scene handler on the SAME
+      // frame (GameObject handler fires first). Swallow it so aim mode sticks.
+      if (this.justEnteredAiming) {
+        this.justEnteredAiming = false
+        return
+      }
       const inMap = p.x >= MAP_X && p.x < MAP_X + MAP_W && p.y >= MAP_Y && p.y < MAP_Y + MAP_H
       if (inMap && this.aimingSpell) {
         const sb = this.spellByKey(this.aimingSpell)
@@ -874,6 +883,7 @@ export class BattleScene extends Phaser.Scene {
 
   private exitAiming(): void {
     this.aimingSpell = null
+    this.justEnteredAiming = false
     if (this.mode === 'aiming') this.mode = 'idle'
     this.clearAimReticle()
   }
@@ -1648,13 +1658,31 @@ export class BattleScene extends Phaser.Scene {
   }
 
   // ---- Controls ------------------------------------------------------------
+  private pauseQuitBtn?: Phaser.GameObjects.Container
   private togglePause(): void {
     if (this.state === 'won' || this.state === 'lost') return
     this.paused = !this.paused
     if (this.pauseLabel) this.pauseLabel.setText(this.paused ? '▶' : 'II')
     this.tweens.timeScale = this.paused ? 0 : this.gameSpeed
-    if (this.paused) this.showBanner('PAUSED')
-    else this.clearBanner()
+    if (this.paused) {
+      this.showBanner('PAUSED')
+      this.exitBuild()
+      this.exitAiming()
+      this.pauseQuitBtn = this.makeButtonSync(
+        360, 760, 360, 76, this.endless ? 'RETIRE & BANK' : 'QUIT TO MAP', 0xff6a3c, () => this.quitBattle(),
+      )
+      this.pauseQuitBtn.setDepth(41)
+    } else {
+      this.clearBanner()
+      this.pauseQuitBtn?.destroy()
+      this.pauseQuitBtn = undefined
+    }
+  }
+
+  private quitBattle(): void {
+    if (this.endless) economy.awardEndless(this.waveIndex)
+    this.cameras.main.fadeOut(220, 20, 12, 50)
+    this.time.delayedCall(240, () => this.scene.start(this.endless ? 'Menu' : 'Map'))
   }
 
   private toggleSpeed(): void {
