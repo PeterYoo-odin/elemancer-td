@@ -1,0 +1,19 @@
+{
+  "name": "elemancer-td",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Elemancer TD — a colorful cartoon idle + tower-defense hybrid. Built in Odin.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.80.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0"
+  }
+}
