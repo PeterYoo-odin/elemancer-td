@@ -107,12 +107,25 @@ function validate(sim: Sim, tick: number): void {
   }
 }
 
+// A stable monotonic id must NEVER resurrect (go inactive, then active again).
+// That would mean a pooled slot was reused without a fresh id — the bug that
+// makes the view render a dead entity and projectiles re-home onto the reused slot.
+function checkIds(sim: Sim, retired: Set<number>, tick: number): void {
+  // (1) no ACTIVE id may already be retired (that's a resurrection = stale reuse)
+  for (const e of sim.enemies) if (e.active && retired.has(e.id)) fail(`enemy id ${e.id} resurrected (stale pooled-slot reuse) @${tick}`)
+  for (const p of sim.projectiles) if (p.active && retired.has(p.id)) fail(`projectile id ${p.id} resurrected @${tick}`)
+  // (2) retire every currently-inactive slot's id (they must never come back)
+  for (const e of sim.enemies) if (!e.active) retired.add(e.id)
+  for (const p of sim.projectiles) if (!p.active) retired.add(p.id)
+}
+
 function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: number; wavesReached: number } {
   // flood uses the longest 6-lane path (index 5) to maximise concurrency
   const sim = makeSim(seed, mode === 'flood' ? 5 : 3)
   saturateTowers(sim, mode)
   let tick = 0
   let maxEntities = 0
+  const retired = new Set<number>()
   // flood keeps piling up past the 60-wave functional target to PROVE hundreds coexist
   const waveTarget = mode === 'flood' ? 200 : TARGET_WAVES
   while (sim.waveIndex < waveTarget && tick < STEP_BUDGET) {
@@ -127,6 +140,7 @@ function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: nu
     for (const t of sim.towers) if (t.active) ents++
     maxEntities = Math.max(maxEntities, ents)
     validate(sim, tick)
+    checkIds(sim, retired, tick)
     // flood only needs to PROVE hundreds coexist with clean math — early-exit once shown
     if (mode === 'flood' && maxEntities >= 300) break
   }

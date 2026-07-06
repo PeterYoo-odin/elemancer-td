@@ -484,7 +484,9 @@ export class Sim {
   }
 
   private freeEnemy(): SimEnemy {
-    for (const e of this.enemies) if (!e.active) return e
+    // A reused pooled slot MUST get a fresh monotonic id, or the view keeps the
+    // dead entity's GameObject and projectiles re-home onto the reused slot.
+    for (const e of this.enemies) if (!e.active) { e.id = this.nextId++; return e }
     const e: SimEnemy = {
       id: 0, active: false, def: ENEMIES.runner, kind: 'runner', maxHp: 1, hp: 1, shield: 0, shieldMax: 0,
       dist: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
@@ -587,7 +589,7 @@ export class Sim {
     const def = TOWERS[kind]
     const cc = cellCenter(col, row)
     let t: SimTower | null = null
-    for (const cand of this.towers) if (!cand.active) { t = cand; break }
+    for (const cand of this.towers) if (!cand.active) { t = cand; t.id = this.nextId++; break }
     if (!t) {
       t = {
         id: this.nextId++, active: false, def, kind, level: 0, branch: -1, col, row,
@@ -812,7 +814,7 @@ export class Sim {
     const s = this.stats(t)
     const splash = (s.splash ?? 0) * TILE * (1 + this.upgrades.splashBonus)
     let p: SimProjectile | null = null
-    for (const cand of this.projectiles) if (!cand.active) { p = cand; break }
+    for (const cand of this.projectiles) if (!cand.active) { p = cand; p.id = this.nextId++; break }
     if (!p) {
       p = {
         id: this.nextId++, active: false, x: 0, y: 0, tx: 0, ty: 0, targetId: -1, speed: PROJECTILE_SPEED,
