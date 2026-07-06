@@ -76,8 +76,10 @@ export class BootScene extends Phaser.Scene {
       .setOrigin(0.5)
 
     this.input.once('pointerdown', () => {
-      prompt.setText('Battle scene builds next!')
+      prompt.setText('Entering battle…')
       this.cameras.main.flash(300, 123, 47, 247)
+      this.cameras.main.fadeOut(320, 20, 12, 50)
+      this.time.delayedCall(340, () => this.scene.start('Battle'))
     })
   }
 }
