@@ -138,7 +138,7 @@ export class BattleScene extends Phaser.Scene {
   private towerButtons: Phaser.GameObjects.Container[] = []
   private spellButtons: Array<{ key: SpellKey; def: SpellDef; cont: Phaser.GameObjects.Container; ring: Phaser.GameObjects.Graphics }> = []
   private upgradePanel?: Phaser.GameObjects.Container
-  private draftPanel?: Phaser.GameObjects.Container
+  private draftObjects: Phaser.GameObjects.GameObject[] = []
   private telegraph?: Phaser.GameObjects.Container
   private buffLinks!: Phaser.GameObjects.Graphics
   private banner?: Phaser.GameObjects.Text
@@ -186,7 +186,7 @@ export class BattleScene extends Phaser.Scene {
     this.ghostRing = undefined
     this.aimReticle = undefined
     this.upgradePanel = undefined
-    this.draftPanel = undefined
+    this.draftObjects = []
     this.telegraph = undefined
     this.banner = undefined
     this.pauseQuitBtn = undefined
@@ -1040,8 +1040,10 @@ export class BattleScene extends Phaser.Scene {
   private setupInput(): void {
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
       if (this.mode === 'aiming' && this.aimReticle) {
-        const inMap = p.x >= MAP_X && p.x < MAP_X + MAP_W && p.y >= MAP_Y && p.y < MAP_Y + MAP_H
-        this.aimReticle.setVisible(inMap).setPosition(p.x, p.y)
+        // WORLD coords everywhere (matches the ghost/placement mapping) so the
+        // reticle sits under the finger regardless of Scale.FIT letterboxing.
+        const inMap = p.worldX >= MAP_X && p.worldX < MAP_X + MAP_W && p.worldY >= MAP_Y && p.worldY < MAP_Y + MAP_H
+        this.aimReticle.setVisible(inMap).setPosition(p.worldX, p.worldY)
       }
     })
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onPointerDown(p))
@@ -1051,21 +1053,27 @@ export class BattleScene extends Phaser.Scene {
     if (this.sim.state === 'won' || this.sim.state === 'lost' || this.sim.state === 'draft') return
     if (this.paused) return
 
+    // ONE consistent pointer→world mapping everywhere. The ghost preview uses
+    // worldX/worldY; the tap resolves the cell with the SAME coords so the
+    // highlighted buildable cell and the placed cell always match.
+    const px = p.worldX
+    const py = p.worldY
+
     if (this.mode === 'aiming') {
       if (this.justEnteredAiming) {
         this.justEnteredAiming = false
         return
       }
-      const inMap = p.x >= MAP_X && p.x < MAP_X + MAP_W && p.y >= MAP_Y && p.y < MAP_Y + MAP_H
-      if (inMap && this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
+      const inMap = px >= MAP_X && px < MAP_X + MAP_W && py >= MAP_Y && py < MAP_Y + MAP_H
+      if (inMap && this.aimingSpell) this.sim.castSpell(this.aimingSpell, px, py)
       this.exitAiming()
       return
     }
 
     // let the upgrade panel's own buttons handle taps in its region
-    if (this.upgradePanel && Phaser.Geom.Rectangle.Contains(new Phaser.Geom.Rectangle(120, 840, 480, 230), p.x, p.y)) return
+    if (this.upgradePanel && Phaser.Geom.Rectangle.Contains(new Phaser.Geom.Rectangle(120, 840, 480, 230), px, py)) return
 
-    const cell = worldToCell(p.x, p.y)
+    const cell = worldToCell(px, py)
     if (!cell) return
 
     if (this.mode === 'building') {
@@ -1224,14 +1232,19 @@ export class BattleScene extends Phaser.Scene {
     this.exitBuild()
     this.exitAiming()
     this.deselect()
+
+    // IMPORTANT: the cards must each be TOP-LEVEL interactive containers (the
+    // proven pattern used by every working button in this game). Nesting them in
+    // the same container as a full-screen interactive `overlay` makes Phaser's
+    // input sort ambiguous and the overlay swallows the tap. So: overlay stays a
+    // standalone object BELOW the cards (depth 37), cards sit at depth 40 on top.
+    const objs: Phaser.GameObjects.GameObject[] = []
     const overlay = this.add.rectangle(360, 640, 720, 1280, 0x000000, 0.6).setDepth(37)
-    overlay.setInteractive()
+    overlay.setInteractive() // blocks taps from reaching the field/buttons behind
     const title = this.add.text(360, 360, 'CHOOSE A POWER', { fontFamily: 'Arial Black', fontSize: '44px', color: '#c06bff' }).setOrigin(0.5).setDepth(38)
     title.setStroke('#000000', 8)
     const sub = this.add.text(360, 410, 'Pick 1 of 3 — lasts the whole run', { fontFamily: 'Arial', fontSize: '20px', color: '#d8d0ff' }).setOrigin(0.5).setDepth(38)
-    const kids: Phaser.GameObjects.GameObject[] = [overlay, title, sub]
-    const panel = this.add.container(0, 0, kids).setDepth(38)
-    this.draftPanel = panel
+    objs.push(overlay, title, sub)
 
     const cards = this.sim.draftOffer
     const cw = 200, ch = 250, gap = 20
@@ -1239,7 +1252,7 @@ export class BattleScene extends Phaser.Scene {
     cards.forEach((card, i) => {
       const cx = 360 - totalW / 2 + cw / 2 + i * (cw + gap)
       const cy = 640
-      const cardCont = this.add.container(cx, cy).setDepth(39)
+      const cardCont = this.add.container(cx, cy).setDepth(40)
       const cBg = this.add.graphics()
       cBg.fillStyle(0x1c1038, 1)
       cBg.fillRoundedRect(-cw / 2, -ch / 2, cw, ch, 18)
@@ -1253,15 +1266,22 @@ export class BattleScene extends Phaser.Scene {
       const pick = this.add.text(0, ch / 2 - 30, 'PICK', { fontFamily: 'Arial Black', fontSize: '22px', color: '#' + card.color.toString(16).padStart(6, '0') }).setOrigin(0.5)
       cardCont.add([cBg, gem, rarity, name, desc, pick])
       cardCont.setSize(cw, ch)
+      // whole card is tappable (generous hit area, not just the tiny PICK text)
       cardCont.setInteractive(new Phaser.Geom.Rectangle(-cw / 2, -ch / 2, cw, ch), Phaser.Geom.Rectangle.Contains)
       cardCont.setScale(0.4)
       this.tweens.add({ targets: cardCont, scale: 1, duration: 260, delay: 100 + i * 90, ease: 'Back.easeOut' })
       this.tweens.add({ targets: gem, angle: 360, duration: 6000, repeat: -1 })
       cardCont.on('pointerover', () => this.tweens.add({ targets: cardCont, scale: 1.06, duration: 120 }))
       cardCont.on('pointerout', () => this.tweens.add({ targets: cardCont, scale: 1, duration: 120 }))
-      cardCont.on('pointerdown', () => this.pickDraft(i, cx, cy, card.color))
-      panel.add(cardCont)
+      cardCont.on('pointerdown', () => {
+        // immediate pressed feedback, then resolve (pickDraft guards exactly-one)
+        this.tweens.add({ targets: cardCont, scale: 0.9, duration: 90, yoyo: true })
+        this.pickDraft(i, cx, cy, card.color)
+      })
+      objs.push(cardCont)
     })
+
+    this.draftObjects = objs
   }
 
   private pickDraft(index: number, x: number, y: number, color: number): void {
@@ -1274,9 +1294,12 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private hideDraft(): void {
+    // idempotent: pickDraft calls this directly, and update() may also call it
+    // once state leaves 'draft' — either path must be safe to run twice.
+    if (!this.draftShown && this.draftObjects.length === 0) return
     this.draftShown = false
-    this.draftPanel?.destroy()
-    this.draftPanel = undefined
+    for (const o of this.draftObjects) o.destroy()
+    this.draftObjects = []
   }
 
   // ======================================================================
