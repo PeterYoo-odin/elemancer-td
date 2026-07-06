@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import { TOWERS, type TowerKind } from '../game/towers'
-import { LEVELS, levelById, starsForClear, type LevelDef } from '../game/levels'
+import { LEVELS, levelById, serpentine, starsForClear, type LevelDef } from '../game/levels'
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, cellCenter, type SimEvent } from '../sim'
@@ -72,7 +72,8 @@ export class BattleScene extends Phaser.Scene {
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
-    this.view = new BattleView3D(this.sim, this.level.palette, accent)
+    const pathCells = serpentine(this.level.lanes) // ordered spawn→base, for tile orientation
+    this.view = new BattleView3D(this.sim, this.level.palette, accent, pathCells)
     this.view.mount(document.body)
 
     // ---- DOM HUD ----
@@ -195,12 +196,14 @@ export class BattleScene extends Phaser.Scene {
     this.buildKind = kind
     this.mode = 'building'
     this.view.setHover(null, false)
+    this.view.setBuildHighlight(true)
   }
 
   private exitBuild(): void {
     this.buildKind = null
     if (this.mode === 'building') this.mode = 'idle'
     this.view.setHover(null, false)
+    this.view.setBuildHighlight(false)
   }
 
   private onSpellButton(key: SpellKey): void {

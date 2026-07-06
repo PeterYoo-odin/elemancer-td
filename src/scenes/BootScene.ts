@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import { models } from '../three/models'
 
 const NEON = [0x7b2ff7, 0x2ff7c3, 0xff6ad5, 0xffd54a, 0x4ad9ff]
 
@@ -57,29 +58,51 @@ export class BootScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setStroke('#2ff7c3', 6)
 
-    // Pulsing play prompt.
+    // Pulsing play prompt (revealed once the 3D art assets finish preloading).
     const prompt = this.add
-      .text(width / 2, height * 0.62, 'TAP TO PLAY', {
+      .text(width / 2, height * 0.62, 'LOADING…', {
         fontFamily: 'Arial, sans-serif',
         fontSize: '40px',
         color: '#a0f0ff',
       })
       .setOrigin(0.5)
-    this.tweens.add({ targets: prompt, alpha: 0.25, duration: 800, yoyo: true, repeat: -1 })
+
+    // Slim progress bar under the prompt.
+    const barW = 360
+    const barX = width / 2 - barW / 2
+    const barY = height * 0.62 + 46
+    const barBg = this.add.rectangle(width / 2, barY, barW, 10, 0x2a1c48).setOrigin(0.5)
+    const barFill = this.add.rectangle(barX, barY, 2, 10, 0x2ff7c3).setOrigin(0, 0.5)
 
     this.add
-      .text(width / 2, height - 56, 'v0.2 · built in Odin', {
+      .text(width / 2, height - 56, 'v0.3 · built in Odin', {
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',
         color: '#6b5a9a',
       })
       .setOrigin(0.5)
 
-    this.input.once('pointerdown', () => {
-      prompt.setText('Entering…')
-      this.cameras.main.flash(300, 123, 47, 247)
-      this.cameras.main.fadeOut(320, 20, 12, 50)
-      this.time.delayedCall(340, () => this.scene.start('Menu'))
-    })
+    const startWhenReady = () => {
+      barBg.setVisible(false)
+      barFill.setVisible(false)
+      prompt.setText('TAP TO PLAY')
+      this.tweens.add({ targets: prompt, alpha: 0.25, duration: 800, yoyo: true, repeat: -1 })
+      this.input.once('pointerdown', () => {
+        prompt.setText('Entering…')
+        this.cameras.main.flash(300, 123, 47, 247)
+        this.cameras.main.fadeOut(320, 20, 12, 50)
+        this.time.delayedCall(340, () => this.scene.start('Menu'))
+      })
+    }
+
+    if (models.ready) {
+      barFill.width = barW
+      startWhenReady()
+    } else {
+      models
+        .load((frac) => { barFill.width = Math.max(2, barW * frac) })
+        .then(startWhenReady)
+        .catch(startWhenReady) // never trap the player on a failed asset
+    }
   }
 }

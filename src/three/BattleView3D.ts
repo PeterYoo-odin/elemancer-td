@@ -18,10 +18,15 @@ import { COLS, ROWS, MAP_X, MAP_Y, MAP_W, MAP_H, worldToCell } from '../sim'
 import { TOWERS, type TowerKind } from '../game/towers'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
+import { models } from './models'
 
 const TILE_PX = 80
 const CX = MAP_X + MAP_W / 2 // 360
 const CY = MAP_Y + MAP_H / 2 // 640
+
+// The Kenney tiles are 1×1 with their top surface at y=0.2 — a near-flat board, so
+// a single pick plane at this height is WYSIWYG everywhere (no per-cell-height hack).
+const GROUND = 0.2
 
 // sim px → world units
 function wx(simX: number): number { return (simX - CX) / TILE_PX }
@@ -53,7 +58,9 @@ interface EnemySlot {
 
 interface TowerSlot {
   group: THREE.Group
-  turret: THREE.Group
+  bodyGroup: THREE.Group // fixed pedestal/body (Kenney stacked parts)
+  turret: THREE.Group // aims toward the target (weapon/crystal cap + orbs)
+  orbs: THREE.Object3D[] // bobbing emissive accents
   ring: THREE.Mesh
   ringMat: THREE.MeshBasicMaterial
   glow: THREE.PointLight
@@ -96,18 +103,30 @@ export class BattleView3D {
 
   private raycaster = new THREE.Raycaster()
   private ndc = new THREE.Vector2()
-  // Pick plane raised to the build-tile top (y≈0.5): with the tilted camera a y=0
-  // plane crosses ~1/3 tile past the visible surface, so a cold touch tap (no prior
-  // hover) would land a cell off. y=0.5 keeps hover+tap WYSIWYG. (plane: y = -const)
-  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.5)
+  // Pick plane sits exactly at the Kenney tile top (y=GROUND). The board is now
+  // near-flat (all tiles top within 0.1 of each other), so this single plane is
+  // WYSIWYG for both hover and a cold first tap — no per-cell-height hack needed.
+  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GROUND)
   private hitPoint = new THREE.Vector3()
 
-  private boardTiles!: THREE.InstancedMesh
+  private boardMeshes: THREE.InstancedMesh[] = [] // grass + road instanced tiles
+  private detailGroup = new THREE.Group()
+  private buildHighlight = new THREE.Group()
   private hoverMesh!: THREE.Mesh
   private hoverMat!: THREE.MeshBasicMaterial
   private portalMesh!: THREE.Mesh
   private baseMesh!: THREE.Mesh
   private buffDirty = true
+
+  // shared kit materials (atlas map + role tint/emissive) — few draw-call state changes
+  private atlasBaseMat!: THREE.MeshStandardMaterial
+  private elemMats = new Map<TowerKind, THREE.MeshStandardMaterial>()
+  private orbMats = new Map<TowerKind, THREE.MeshStandardMaterial>()
+  private detailCrystalMat!: THREE.MeshStandardMaterial
+  private orbGeo!: THREE.IcosahedronGeometry
+  private blobTex!: THREE.CanvasTexture
+  private blobMat!: THREE.MeshBasicMaterial
+  private blobGeo!: THREE.CircleGeometry
 
   private enemyPools = new Map<EnemyKind, EnemySlot[]>()
   private enemyViews = new Map<number, EnemySlot>()
@@ -146,6 +165,7 @@ export class BattleView3D {
     private sim: Sim,
     private palette: FieldPalette,
     private accent: number, // element-ground accent for the arena floor
+    private pathCells: ReadonlyArray<[number, number]> = [], // ordered spawn→base cells
   ) {
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'battle3d-canvas'
@@ -172,9 +192,16 @@ export class BattleView3D {
     this.pLife = new Float32Array(MAX_PARTICLES)
     this.pMaxLife = new Float32Array(MAX_PARTICLES)
 
+    this.scene.add(this.detailGroup)
+    this.scene.add(this.buildHighlight)
+    this.buildHighlight.visible = false
+
     this.initSharedGeom()
+    this.initModelMaterials()
     this.setupLights()
     this.setupBoard()
+    this.setupDetails()
+    this.setupBuildHighlight()
     this.setupParticles()
     this.setupHover()
 
@@ -197,78 +224,260 @@ export class BattleView3D {
   }
 
   // ---------------------------------------------------------------- lights
+  // Coherence rig: warm KEY + cool FILL + cool RIM + soft sky/ground hemi, plus a
+  // low ambient floor so nothing crushes to black. Kept deliberately tight so the
+  // whole board reads as one palette and the emissive tower caps are what pops.
   private setupLights(): void {
-    const hemi = new THREE.HemisphereLight(0xcfe4ff, 0x2a1c48, 0.85)
+    const hemi = new THREE.HemisphereLight(0xdbeaff, 0x35264f, 0.7) // cool sky, warm-ish ground
     this.scene.add(hemi)
-    const key = new THREE.DirectionalLight(0xfff2d6, 1.15)
-    key.position.set(6, 14, 8)
+    this.scene.add(new THREE.AmbientLight(0x40507a, 0.35))
+    const key = new THREE.DirectionalLight(0xfff1cf, 1.25) // warm sun from front-right
+    key.position.set(7, 15, 9)
     this.scene.add(key)
-    const fill = new THREE.DirectionalLight(0x8fb4ff, 0.35)
-    fill.position.set(-8, 6, -6)
+    const fill = new THREE.DirectionalLight(0x9ec4ff, 0.4) // cool bounce from the left
+    fill.position.set(-9, 6, -5)
     this.scene.add(fill)
-    // two soft coloured accents for the candy neon feel
-    const p1 = new THREE.PointLight(this.accent, 0.6, 26, 2)
-    p1.position.set(-3, 4, 4)
-    this.scene.add(p1)
-    const p2 = new THREE.PointLight(0xff6ad5, 0.5, 26, 2)
-    p2.position.set(3, 4, -4)
-    this.scene.add(p2)
+    const rim = new THREE.DirectionalLight(0xbf9bff, 0.35) // violet rim from behind
+    rim.position.set(0, 8, -12)
+    this.scene.add(rim)
+    // one soft coloured accent tuned to the world's element ground.
+    const accent = new THREE.PointLight(this.accent, 0.45, 26, 2)
+    accent.position.set(-2, 4, 3)
+    this.scene.add(accent)
+  }
+
+  // ------------------------------------------------------ shared kit materials
+  private initModelMaterials(): void {
+    const atlas = models.atlas()
+    // ONE textured material drives every kit body/tile mesh (their UVs index the
+    // shared atlas), so the board + tower bodies collapse to a few draw calls.
+    this.atlasBaseMat = new THREE.MeshStandardMaterial({
+      map: atlas ?? null,
+      color: atlas ? 0xffffff : 0x9aa4b0, // flat stone if the atlas ever fails
+      roughness: 0.82,
+      metalness: 0.05,
+    })
+    this.disposables.push(this.atlasBaseMat)
+
+    for (const kind of Object.keys(TOWERS) as TowerKind[]) {
+      const col = TOWERS[kind].color
+      const sig = new THREE.MeshStandardMaterial({
+        map: atlas ?? null, color: atlas ? 0xffffff : col,
+        emissive: col, emissiveIntensity: 0.6, roughness: 0.5, metalness: 0.25,
+      })
+      this.elemMats.set(kind, sig)
+      this.disposables.push(sig)
+      const orb = new THREE.MeshStandardMaterial({
+        color: col, emissive: col, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.1, flatShading: true,
+      })
+      this.orbMats.set(kind, orb)
+      this.disposables.push(orb)
+    }
+    this.orbGeo = new THREE.IcosahedronGeometry(0.12, 0)
+    this.disposables.push(this.orbGeo)
+
+    this.detailCrystalMat = new THREE.MeshStandardMaterial({
+      map: atlas ?? null, color: atlas ? 0xffffff : 0x4ad9ff,
+      emissive: 0x4ad9ff, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2,
+    })
+    this.disposables.push(this.detailCrystalMat)
+
+    // Soft radial contact-shadow blob (cheap substitute for real shadow maps).
+    const cv = document.createElement('canvas')
+    cv.width = cv.height = 64
+    const ctx = cv.getContext('2d')!
+    const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 30)
+    grad.addColorStop(0, 'rgba(0,0,0,0.5)')
+    grad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, 64, 64)
+    this.blobTex = new THREE.CanvasTexture(cv)
+    this.disposables.push(this.blobTex)
+    this.blobMat = new THREE.MeshBasicMaterial({ map: this.blobTex, transparent: true, depthWrite: false, opacity: 0.85 })
+    this.disposables.push(this.blobMat)
+    this.blobGeo = new THREE.CircleGeometry(1, 20)
+    this.disposables.push(this.blobGeo)
+  }
+
+  // paint every mesh in a cloned model with a shared material (drops the model's
+  // own per-file material so we hold few materials and re-tint by role).
+  private paint(obj: THREE.Object3D, mat: THREE.Material): void {
+    obj.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) m.material = mat })
+  }
+
+  private addBlob(parent: THREE.Object3D, radius: number, y = 0.012): void {
+    const b = new THREE.Mesh(this.blobGeo, this.blobMat)
+    b.rotation.x = -Math.PI / 2
+    b.position.y = y
+    b.scale.setScalar(radius)
+    parent.add(b)
   }
 
   // ---------------------------------------------------------------- board
+  // Renders the near-flat Kenney board: one InstancedMesh for grass/build tiles
+  // (per-instance world tint) plus a small InstancedMesh per road-tile TYPE, each
+  // oriented by matching the tile's default open edges to the local path direction.
   private setupBoard(): void {
-    // one InstancedMesh of beveled-feel boxes; per-instance colour + height.
-    const total = COLS * ROWS
-    const geo = new THREE.BoxGeometry(0.92, 1, 0.92)
-    this.disposables.push(geo)
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: false, flatShading: true, roughness: 0.85, metalness: 0.05 })
-    this.disposables.push(mat)
-    const inst = new THREE.InstancedMesh(geo, mat, total)
-    inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    const dummy = new THREE.Object3D()
-    const grassA = new THREE.Color(this.palette.grassA)
-    const grassB = new THREE.Color(this.palette.grassB)
-    const buildC = new THREE.Color(this.palette.build)
-    const pathC = new THREE.Color(this.palette.path)
-    const pathEdge = new THREE.Color(this.palette.pathEdge)
-    let i = 0
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const cell = this.sim.grid[r][c]
-        const x = wx(MAP_X + c * TILE_PX + TILE_PX / 2)
-        const z = wz(MAP_Y + r * TILE_PX + TILE_PX / 2)
-        let col: THREE.Color
-        let top: number // top-surface height
-        const h = hash2(c, r)
-        if (cell === 'path') {
-          col = pathC.clone().lerp(pathEdge, ((c + r) % 2) * 0.25)
-          top = 0.16 // sunken road
-        } else if (cell === 'build') {
-          col = buildC.clone()
-          top = 0.5 + h * 0.12
-        } else {
-          col = ((c + r) % 2 === 0 ? grassA : grassB).clone()
-          top = 0.4 + h * 0.18
-        }
-        // box height so its TOP sits at `top`, bottom well below (thick base)
-        const boxH = top + 1.2
-        dummy.position.set(x, top - boxH / 2, z)
-        dummy.scale.set(1, boxH, 1)
+    const groundGeo = models.geometry('tile')
+    if (groundGeo) {
+      const nonPath: Array<[number, number, string]> = []
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++)
+          if (this.sim.grid[r][c] !== 'path') nonPath.push([c, r, this.sim.grid[r][c]])
+      const inst = new THREE.InstancedMesh(groundGeo, this.atlasBaseMat, nonPath.length)
+      const dummy = new THREE.Object3D()
+      // Tint the (green) atlas grass toward each world's palette, lifted toward white
+      // so the multiply stays bright and readable instead of muddying to brown.
+      const white = new THREE.Color(0xffffff)
+      const grassA = new THREE.Color(this.palette.grassA).lerp(white, 0.24)
+      const grassB = new THREE.Color(this.palette.grassB).lerp(white, 0.24)
+      const buildC = new THREE.Color(this.palette.build).lerp(white, 0.34)
+      nonPath.forEach(([c, r, kind], i) => {
+        dummy.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2), 0, wz(MAP_Y + r * TILE_PX + TILE_PX / 2))
         dummy.rotation.set(0, 0, 0)
+        dummy.scale.setScalar(1)
         dummy.updateMatrix()
         inst.setMatrixAt(i, dummy.matrix)
-        inst.setColorAt(i, col)
-        i++
+        inst.setColorAt(i, kind === 'build' ? buildC : (c + r) % 2 === 0 ? grassA : grassB)
+      })
+      inst.instanceMatrix.needsUpdate = true
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true
+      inst.frustumCulled = false
+      this.boardMeshes.push(inst)
+      this.scene.add(inst)
+      this.disposables.push(groundGeo)
+    }
+
+    this.setupRoad()
+    this.setupEndpoints()
+  }
+
+  // Classify each ordered path cell → tile type + Y-rotation, then batch by type.
+  private setupRoad(): void {
+    const geos: Record<string, THREE.BufferGeometry | null> = {
+      straight: models.geometry('tile-straight'),
+      corner: models.geometry('tile-corner-round'),
+      spawn: models.geometry('tile-spawn'),
+      end: models.geometry('tile-end'),
+    }
+    for (const g of Object.values(geos)) if (g) this.disposables.push(g)
+
+    const path = this.pathCells
+    if (!path.length) return
+    const buckets: Record<string, Array<{ x: number; z: number; theta: number }>> = {
+      straight: [], corner: [], spawn: [], end: [],
+    }
+    const V = (x: number, z: number) => new THREE.Vector3(x, 0, z)
+    const dirTo = (from: [number, number], to: [number, number]) =>
+      V(Math.sign(to[0] - from[0]), Math.sign(to[1] - from[1]))
+    const ROT = [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]
+    const rot = (v: THREE.Vector3, th: number) => {
+      const c = Math.cos(th), s = Math.sin(th)
+      return V(v.x * c + v.z * s, -v.x * s + v.z * c)
+    }
+    const eq = (a: THREE.Vector3, b: THREE.Vector3) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.z - b.z) < 0.01
+    // find θ mapping default open-edge set → required set (pair, unordered)
+    const solvePair = (d1: THREE.Vector3, d2: THREE.Vector3, r1: THREE.Vector3, r2: THREE.Vector3) => {
+      for (const th of ROT) {
+        const a = rot(d1, th), b = rot(d2, th)
+        if ((eq(a, r1) && eq(b, r2)) || (eq(a, r2) && eq(b, r1))) return th
+      }
+      return 0
+    }
+    const solveSingle = (d: THREE.Vector3, r: THREE.Vector3) => {
+      for (const th of ROT) if (eq(rot(d, th), r)) return th
+      return 0
+    }
+    const PZ = V(0, 1), NZ = V(0, -1), PX = V(1, 0)
+
+    for (let i = 0; i < path.length; i++) {
+      const cell = path[i]
+      const x = wx(MAP_X + cell[0] * TILE_PX + TILE_PX / 2)
+      const z = wz(MAP_Y + cell[1] * TILE_PX + TILE_PX / 2)
+      const toNext = i < path.length - 1 ? dirTo(cell, path[i + 1]) : null
+      const toPrev = i > 0 ? dirTo(cell, path[i - 1]) : null
+      if (i === 0 && toNext) {
+        // spawn: road passes straight through (off-board entry is opposite `next`)
+        buckets.spawn.push({ x, z, theta: solvePair(PZ, NZ, toNext, rot(toNext, Math.PI)) })
+      } else if (i === path.length - 1 && toPrev) {
+        // base: road enters from the previous cell and terminates
+        buckets.end.push({ x, z, theta: solveSingle(PZ, toPrev) })
+      } else if (toPrev && toNext) {
+        if (eq(toPrev, rot(toNext, Math.PI))) {
+          buckets.straight.push({ x, z, theta: solvePair(PZ, NZ, toPrev, toNext) })
+        } else {
+          buckets.corner.push({ x, z, theta: solvePair(PX, PZ, toPrev, toNext) })
+        }
       }
     }
-    inst.instanceMatrix.needsUpdate = true
-    if (inst.instanceColor) inst.instanceColor.needsUpdate = true
-    inst.frustumCulled = false
-    this.boardTiles = inst
-    this.scene.add(inst)
 
-    // portal (top) + base crystal (bottom) markers
-    this.setupEndpoints()
+    const dummy = new THREE.Object3D()
+    for (const type of ['straight', 'corner', 'spawn', 'end'] as const) {
+      const geo = geos[type]
+      const list = buckets[type]
+      if (!geo || !list.length) continue
+      const inst = new THREE.InstancedMesh(geo, this.atlasBaseMat, list.length)
+      list.forEach((t, i) => {
+        dummy.position.set(t.x, 0, t.z)
+        dummy.rotation.set(0, t.theta, 0)
+        dummy.scale.setScalar(1)
+        dummy.updateMatrix()
+        inst.setMatrixAt(i, dummy.matrix)
+      })
+      inst.instanceMatrix.needsUpdate = true
+      inst.frustumCulled = false
+      this.boardMeshes.push(inst)
+      this.scene.add(inst)
+    }
+  }
+
+  // Scatter trees / rocks / crystals on non-play (blocked) cells for life.
+  private setupDetails(): void {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (this.sim.grid[r][c] !== 'blocked') continue
+        const h = hash2(c * 3 + 1, r * 5 + 2)
+        if (h > 0.5) continue // only decorate ~half the blocked cells
+        const pick = hash2(c * 7 + 3, r * 2 + 9)
+        let name: string, mat: THREE.Material, blob: number, scale: number
+        if (pick < 0.34) { name = h < 0.25 ? 'detail-tree-large' : 'detail-tree'; mat = this.atlasBaseMat; blob = 0.28; scale = 0.9 + h }
+        else if (pick < 0.68) { name = h < 0.25 ? 'detail-rocks-large' : 'detail-rocks'; mat = this.atlasBaseMat; blob = 0.32; scale = 0.85 + h * 0.5 }
+        else { name = h < 0.2 ? 'detail-crystal-large' : 'detail-crystal'; mat = this.detailCrystalMat; blob = 0.22; scale = 0.9 + h }
+        const g = new THREE.Group()
+        const obj = models.clone(name)
+        this.paint(obj, mat)
+        obj.scale.setScalar(scale)
+        obj.rotation.y = pick * Math.PI * 2
+        g.add(obj)
+        if (name.indexOf('rocks') < 0) this.addBlob(g, blob)
+        // jitter within the cell so scatter doesn't look grid-locked
+        const jx = (hash2(c, r * 2) - 0.5) * 0.4
+        const jz = (hash2(c * 2, r) - 0.5) * 0.4
+        g.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2) + jx, GROUND, wz(MAP_Y + r * TILE_PX + TILE_PX / 2) + jz)
+        this.detailGroup.add(g)
+      }
+    }
+  }
+
+  // Buildable-cell highlight (shown while placing a tower) using selection markers.
+  private setupBuildHighlight(): void {
+    const cells = this.sim.buildCells()
+    const geo = models.geometry('selection-a')
+    const mat = new THREE.MeshBasicMaterial({ color: 0x8affc0, transparent: true, opacity: 0.32, depthWrite: false })
+    this.disposables.push(mat)
+    if (geo) this.disposables.push(geo)
+    for (const { col, row } of cells) {
+      const mesh = geo
+        ? new THREE.Mesh(geo, mat)
+        : new THREE.Mesh(this.blobGeo, mat)
+      if (!geo) mesh.rotation.x = -Math.PI / 2
+      mesh.position.set(wx(MAP_X + col * TILE_PX + TILE_PX / 2), GROUND + 0.015, wz(MAP_Y + row * TILE_PX + TILE_PX / 2))
+      this.buildHighlight.add(mesh)
+    }
+  }
+
+  setBuildHighlight(on: boolean): void {
+    this.buildHighlight.visible = on
   }
 
   private setupEndpoints(): void {
@@ -279,7 +488,7 @@ export class BattleView3D {
     const portalMat = new THREE.MeshStandardMaterial({ color: 0x9a5cff, emissive: 0x9a5cff, emissiveIntensity: 1.4, roughness: 0.4 })
     this.disposables.push(portalGeo, portalMat)
     const portalMesh = new THREE.Mesh(portalGeo, portalMat)
-    portalMesh.position.set(wx(portal.x), 0.55, wz(portal.y))
+    portalMesh.position.set(wx(portal.x), GROUND + 0.35, wz(portal.y))
     portalMesh.rotation.x = Math.PI / 2
     this.scene.add(portalMesh)
     this.portalMesh = portalMesh
@@ -288,7 +497,7 @@ export class BattleView3D {
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x2ff7c3, emissive: 0x2ff7c3, emissiveIntensity: 1.1, roughness: 0.25, metalness: 0.2, flatShading: true })
     this.disposables.push(baseGeo, baseMat)
     const baseMesh = new THREE.Mesh(baseGeo, baseMat)
-    baseMesh.position.set(wx(base.x), 0.85, wz(base.y))
+    baseMesh.position.set(wx(base.x), GROUND + 0.55, wz(base.y))
     this.scene.add(baseMesh)
     this.baseMesh = baseMesh
     const baseLight = new THREE.PointLight(0x2ff7c3, 0.8, 8, 2)
@@ -440,7 +649,7 @@ export class BattleView3D {
     const x = wx(MAP_X + cell.col * TILE_PX + TILE_PX / 2)
     const z = wz(MAP_Y + cell.row * TILE_PX + TILE_PX / 2)
     this.hoverMesh.visible = true
-    this.hoverMesh.position.set(x, 0.62, z)
+    this.hoverMesh.position.set(x, GROUND + 0.03, z)
     this.hoverMat.color.set(ok ? 0x9affc0 : 0xff5b7a)
   }
 
@@ -479,10 +688,14 @@ export class BattleView3D {
     const group = new THREE.Group()
     group.add(body)
 
-    // contact shadow
+    // grounded on the (near-flat) Kenney board: ground bodies rest their base on the
+    // tile top; flyers hover above it. Shadow stays pinned to the ground plane.
+    const hoverY = def.isAir ? GROUND + 0.8 : GROUND + r
+
+    // contact shadow (kept on the ground under the unit, even for flyers)
     const shadow = new THREE.Mesh(this.shadowGeo, this.shadowMat())
     shadow.rotation.x = -Math.PI / 2
-    shadow.position.y = 0.02
+    shadow.position.y = GROUND + 0.03 - hoverY
     shadow.scale.setScalar(r * 1.6)
     group.add(shadow)
 
@@ -506,7 +719,6 @@ export class BattleView3D {
     }
 
     this.scene.add(group)
-    const hoverY = def.isAir ? 0.9 : r + 0.05
     return { kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r }
   }
 
@@ -530,96 +742,96 @@ export class BattleView3D {
   }
 
   // ---------------------------------------------------------------- towers
-  private makeTowerTurret(kind: TowerKind, level: number, branch: number): THREE.Group {
-    const def = TOWERS[kind]
-    const g = new THREE.Group()
-    const col = def.color
-    const emis = new THREE.Color(col)
-    const mat = () => new THREE.MeshStandardMaterial({ color: col, emissive: emis, emissiveIntensity: 0.55, roughness: 0.35, metalness: 0.3, flatShading: true })
-    const tier = Math.min(level, 3)
-    const grow = 1 + tier * 0.12
-    if (kind === 'cannon') {
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.26 * grow, 12, 10), mat())
-      head.position.y = 0.9
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.55 + tier * 0.08, 10), mat())
-      barrel.rotation.z = Math.PI / 2
-      barrel.position.set(0.28, 0.9, 0)
-      g.add(head, barrel)
-      if (branch === 0) { // sniper — long barrel
-        const bg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 8), mat())
-        bg.rotation.z = Math.PI / 2; bg.position.set(0.5, 0.9, 0); g.add(bg)
-      } else if (branch === 1) { // mortar — wide mouth
-        const bg = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.12, 0.4, 10), mat())
-        bg.rotation.z = Math.PI / 2; bg.position.set(0.34, 0.95, 0); g.add(bg)
-      }
-    } else if (kind === 'frost') {
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(0.24 * grow, 0.7 + tier * 0.12, 6), mat())
-      spire.position.y = 1.0
-      g.add(spire)
-      for (let k = 0; k < 3 + tier; k++) {
-        const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.12, 0), mat())
-        const a = (k / (3 + tier)) * Math.PI * 2
-        shard.position.set(Math.cos(a) * 0.3, 0.65, Math.sin(a) * 0.3)
-        g.add(shard)
-      }
-    } else if (kind === 'flame') {
-      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.28 * grow, 0.18, 0.4, 8), mat())
-      bowl.position.y = 0.75
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.2 * grow, 0.5 + tier * 0.12, 6), mat())
-      flame.position.y = 1.15
-      g.add(bowl, flame)
-    } else if (kind === 'storm') {
-      const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.26 * grow, 0), mat())
-      orb.position.y = 1.05
-      g.add(orb)
-      for (let k = 0; k < 2 + tier; k++) {
-        const bolt = new THREE.Mesh(new THREE.TetrahedronGeometry(0.14, 0), mat())
-        const a = (k / (2 + tier)) * Math.PI * 2
-        bolt.position.set(Math.cos(a) * 0.34, 1.05, Math.sin(a) * 0.34)
-        g.add(bolt)
-      }
-    } else { // arcane
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.26 * grow, 0.06, 8, 18), mat())
-      ring.position.y = 1.0
-      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.16 * grow, 0), mat())
-      core.position.y = 1.0
-      g.add(ring, core)
+  // Kenney modular parts stacked on a fixed body; an aiming cap (weapon/crystals)
+  // carries the ELEMENT via an emissive-tinted material + optional bobbing orb.
+  // Tier (level) grows the silhouette by adding parts; branch swaps the crown/weapon.
+  private static readonly PART_H: Record<string, number> = {
+    'tower-round-base': 0.21,
+    'tower-round-bottom-a': 0.6, 'tower-round-bottom-b': 0.6, 'tower-round-bottom-c': 0.6,
+    'tower-round-middle-a': 0.6, 'tower-round-middle-b': 0.6, 'tower-round-middle-c': 0.6,
+    'tower-round-top-a': 0.5, 'tower-round-top-b': 0.5, 'tower-round-top-c': 0.533,
+  }
+  private static readonly BOTTOM: Record<TowerKind, string> = { cannon: 'a', frost: 'a', flame: 'b', storm: 'c', arcane: 'a' }
+  private static readonly MIDDLE: Record<TowerKind, string> = { cannon: 'a', frost: 'c', flame: 'a', storm: 'b', arcane: 'c' }
+  private static readonly TOP: Record<TowerKind, string> = { cannon: 'a', frost: 'c', flame: 'a', storm: 'b', arcane: 'c' }
+
+  private addOrb(slot: TowerSlot, kind: TowerKind, h: number, scale: number): void {
+    const o = new THREE.Mesh(this.orbGeo, this.orbMats.get(kind)!)
+    o.scale.setScalar(scale)
+    o.position.y = h
+    o.userData.y0 = h
+    o.userData.phase = slot.orbs.length * 1.7
+    slot.turret.add(o)
+    slot.orbs.push(o)
+  }
+
+  private assembleTower(slot: TowerSlot, t: SimTower): void {
+    slot.bodyGroup.clear()
+    slot.turret.clear()
+    slot.orbs = []
+    const kind = t.kind
+    const level = t.level // 0..2 linear, 3 = branched
+    const branch = t.branch // -1 none else 0/1
+    const H = BattleView3D.PART_H
+    const add = (name: string, y: number): number => {
+      const o = models.clone(name)
+      this.paint(o, this.atlasBaseMat)
+      o.position.y = y
+      slot.bodyGroup.add(o)
+      return y + (H[name] ?? 0.5)
     }
-    // register disposal for all created geos/mats in this turret
-    g.traverse((o) => {
-      const m = o as THREE.Mesh
-      if (m.isMesh) {
-        this.disposables.push(m.geometry)
-        if (Array.isArray(m.material)) m.material.forEach((mm) => this.disposables.push(mm))
-        else this.disposables.push(m.material)
-      }
-    })
-    return g
+    let y = add('tower-round-base', 0)
+    y = add('tower-round-bottom-' + BattleView3D.BOTTOM[kind], y)
+    if (level >= 1) y = add('tower-round-middle-' + BattleView3D.MIDDLE[kind], y)
+    if (level >= 2) {
+      let topVar = BattleView3D.TOP[kind]
+      if (level >= 3) topVar = branch === 0 ? 'a' : 'b'
+      y = add('tower-round-top-' + topVar, y)
+    }
+
+    // aiming cap pivots at the top of the body
+    slot.turret.position.y = y
+    const capMat = this.elemMats.get(kind)!
+    const grow = 1 + Math.min(level, 3) * 0.07
+    const putWeapon = (name: string) => {
+      const o = models.clone(name)
+      this.paint(o, capMat)
+      o.scale.setScalar(grow)
+      slot.turret.add(o)
+    }
+    const putCrystals = (scale: number) => {
+      const o = models.clone('tower-round-crystals')
+      this.paint(o, capMat)
+      o.scale.setScalar(scale)
+      o.position.y = 0.365 * scale // seat its centred geometry on the body top
+      slot.turret.add(o)
+    }
+    if (kind === 'cannon') putWeapon(branch === 1 ? 'weapon-catapult' : 'weapon-cannon')
+    else if (kind === 'flame') putWeapon(branch === 0 ? 'weapon-catapult' : 'weapon-turret')
+    else if (kind === 'storm') { putWeapon(branch === 1 ? 'weapon-cannon' : 'weapon-ballista'); this.addOrb(slot, kind, 0.55, 1) }
+    else if (kind === 'frost') putCrystals(grow * (branch === 1 ? 1.25 : 1))
+    else { putCrystals(grow); this.addOrb(slot, kind, 0.7, branch === 1 ? 1.4 : 1) } // arcane
+
+    slot.level = level
+    slot.branch = branch
   }
 
   private createTowerSlot(t: SimTower): TowerSlot {
     const def = t.def
     const g = new THREE.Group()
-    g.position.set(wx(t.x), 0, wz(t.y))
+    g.position.set(wx(t.x), GROUND, wz(t.y)) // sits on the tile top
+    const bodyGroup = new THREE.Group()
+    const turret = new THREE.Group()
+    g.add(bodyGroup, turret)
+    this.addBlob(g, 0.5) // contact shadow
 
-    // base pedestal
-    const baseGeo = new THREE.CylinderGeometry(0.36, 0.42, 0.7, 8)
-    const baseMat = new THREE.MeshStandardMaterial({ color: def.accent, roughness: 0.7, metalness: 0.2, flatShading: true })
-    this.disposables.push(baseGeo, baseMat)
-    const base = new THREE.Mesh(baseGeo, baseMat)
-    base.position.y = 0.85
-    g.add(base)
-
-    const turret = this.makeTowerTurret(t.kind, t.level, t.branch)
-    g.add(turret)
-
-    // range ring on the ground
+    // range ring on the ground (element coloured)
     const ringGeo = new THREE.RingGeometry(0.9, 0.98, 40)
     const ringMat = new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
     this.disposables.push(ringGeo, ringMat)
     const ring = new THREE.Mesh(ringGeo, ringMat)
     ring.rotation.x = -Math.PI / 2
-    ring.position.y = 0.62
+    ring.position.y = 0.03
     ring.visible = false
     g.add(ring)
 
@@ -627,18 +839,14 @@ export class BattleView3D {
     glow.position.y = 1.1
     g.add(glow)
 
+    const slot: TowerSlot = { group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0 }
+    this.assembleTower(slot, t)
     this.scene.add(g)
-    return { group: g, turret, ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0 }
+    return slot
   }
 
   private rebuildTurret(slot: TowerSlot, t: SimTower): void {
-    slot.group.remove(slot.turret)
-    slot.turret.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { /* geos/mats disposed at teardown */ } })
-    const turret = this.makeTowerTurret(t.kind, t.level, t.branch)
-    slot.group.add(turret)
-    slot.turret = turret
-    slot.level = t.level
-    slot.branch = t.branch
+    this.assembleTower(slot, t)
   }
 
   // ---------------------------------------------------------------- projectiles
@@ -946,12 +1154,20 @@ export class BattleView3D {
     // portal spin + base bob (cached refs — no per-frame scene-graph walk)
     this.portalMesh.rotation.z += dt * 1.2
     this.baseMesh.rotation.y += dt * 0.8
-    this.baseMesh.position.y = 0.85 + Math.sin(this.clockT * 2) * 0.06
+    this.baseMesh.position.y = GROUND + 0.55 + Math.sin(this.clockT * 2) * 0.06
 
     // hover pulse
     if (this.hoverMesh.visible) this.hoverMesh.scale.setScalar(1 + Math.sin(this.clockT * 6) * 0.06)
 
-    // tower turret idle spin for orb-y ones
+    // bob tower accent orbs
+    for (const [, s] of this.towerViews) {
+      for (const o of s.orbs) {
+        const y0 = o.userData.y0 as number
+        o.position.y = y0 + Math.sin(this.clockT * 2.2 + (o.userData.phase as number)) * 0.07
+        o.rotation.y += dt * 1.5
+      }
+    }
+
     this.updateParticles(dt)
     this.updateTransients(dt)
     this.composer.render()
@@ -1009,9 +1225,12 @@ export class BattleView3D {
     for (const [, g] of this.enemyGeo) g.dispose()
     this.enemyGeo.clear()
 
-    // towers
+    // towers + details share REGISTRY geometry/materials — just detach; never
+    // dispose their geometry (the persistent registry re-uploads it next battle).
     for (const [, s] of this.towerViews) this.scene.remove(s.group)
     this.towerViews.clear()
+    this.scene.remove(this.detailGroup)
+    this.scene.remove(this.buildHighlight)
 
     // projectiles pooled — geos/mats tracked in disposables
     this.projViews.clear()
@@ -1023,8 +1242,10 @@ export class BattleView3D {
     }
     this.disposables = []
 
-    // board
-    this.boardTiles.dispose()
+    // board instanced meshes (dispose instance buffers; their cloned geometry is
+    // also tracked in `disposables` above — dispose is idempotent)
+    for (const m of this.boardMeshes) { this.scene.remove(m); m.dispose() }
+    this.boardMeshes = []
 
     // composer render targets + passes
     this.composer.dispose()
