@@ -22,6 +22,7 @@ import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import { models } from './models'
+import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
 import { appSettings } from '../ui/settings'
 import { heroCutout } from '../ui/heroArt'
 
@@ -78,11 +79,25 @@ interface EnemySlot {
   crownMat: THREE.MeshBasicMaterial | null
 }
 
+// One animated garnish on a tower (floating ring / orb / flame / runestone):
+// spawned from the tower's AccentSpec list; render() drives spin/bob/flicker.
+interface TowerAccent {
+  obj: THREE.Object3D
+  spec: AccentSpec
+  x0: number
+  y0: number
+  z0: number
+  s0: number // base uniform scale (flicker multiplies this)
+}
+
 interface TowerSlot {
   group: THREE.Group
-  bodyGroup: THREE.Group // fixed pedestal/body (Kenney stacked parts)
-  turret: THREE.Group // aims toward the target (weapon/crystal cap + orbs)
-  orbs: THREE.Object3D[] // bobbing emissive accents
+  bodyGroup: THREE.Group // fixed pedestal/body (procedural merged hull)
+  turret: THREE.Group // aims toward the target (weapon/crystal crown)
+  accents: TowerAccent[] // animated emissive garnish (rings, orbs, flames)
+  emitter: TowerVisual['emitter'] | null // idle element FX (mist/embers/sparks)
+  emitAcc: number // throttles idle emission
+  height: number // approx model height (veil + glow placement)
   ring: THREE.Mesh
   ringMat: THREE.MeshBasicMaterial
   glow: THREE.PointLight
@@ -215,10 +230,11 @@ export class BattleView3D {
 
   // shared kit materials (atlas map + role tint/emissive) — few draw-call state changes
   private atlasBaseMat!: THREE.MeshStandardMaterial
-  private elemMats = new Map<TowerKind, THREE.MeshStandardMaterial>()
+  // per-element tower materials by role: body (stone/hull), trim (metal), dark
+  // (iron/obsidian). The 'core' role uses orbMats — the palette-driven emissive.
+  private towerMats = new Map<TowerKind, { body: THREE.MeshStandardMaterial; trim: THREE.MeshStandardMaterial; dark: THREE.MeshStandardMaterial }>()
   private orbMats = new Map<TowerKind, THREE.MeshStandardMaterial>()
   private detailCrystalMat!: THREE.MeshStandardMaterial
-  private orbGeo!: THREE.IcosahedronGeometry
   private blobTex!: THREE.CanvasTexture
   private blobMat!: THREE.MeshBasicMaterial
   private blobGeo!: THREE.CircleGeometry
@@ -413,23 +429,34 @@ export class BattleView3D {
     })
     this.disposables.push(this.atlasBaseMat)
 
+    // Per-element PBR-ish tower themes. Bodies/trims are hand-picked so each
+    // element reads at a glance; the CORE (orbMats) carries the palette colour —
+    // towers are pockets of restored colour, so the glow is what pops.
+    const THEME: Record<TowerKind, { body: number; bodyRough: number; bodyMetal: number; trim: number; trimRough: number; trimMetal: number; trimGlow: number; dark: number }> = {
+      cannon: { body: 0x8a96b4, bodyRough: 0.62, bodyMetal: 0.28, trim: 0xb9c7dd, trimRough: 0.34, trimMetal: 0.85, trimGlow: 0, dark: 0x3a4258 },
+      frost: { body: 0xe4f2fb, bodyRough: 0.42, bodyMetal: 0.05, trim: 0x9fdcf5, trimRough: 0.25, trimMetal: 0.1, trimGlow: 0.28, dark: 0x7d97ac },
+      flame: { body: 0x54424a, bodyRough: 0.6, bodyMetal: 0.15, trim: 0xc9884a, trimRough: 0.38, trimMetal: 0.8, trimGlow: 0.06, dark: 0x271c20 },
+      storm: { body: 0x6b6377, bodyRough: 0.55, bodyMetal: 0.35, trim: 0xd9b25e, trimRough: 0.3, trimMetal: 0.9, trimGlow: 0.05, dark: 0x393344 },
+      arcane: { body: 0xd7cdec, bodyRough: 0.5, bodyMetal: 0.08, trim: 0xe2c477, trimRough: 0.32, trimMetal: 0.85, trimGlow: 0.08, dark: 0x5b4c7f },
+    }
     for (const kind of Object.keys(TOWERS) as TowerKind[]) {
       // equipped store skin = palette swap; falls back to the stock element color
       const col = towerPalette(kind).color
-      const sig = new THREE.MeshStandardMaterial({
-        map: atlas ?? null, color: atlas ? 0xffffff : col,
-        emissive: col, emissiveIntensity: 0.6, roughness: 0.5, metalness: 0.25,
+      const th = THEME[kind]
+      const body = new THREE.MeshStandardMaterial({ color: th.body, roughness: th.bodyRough, metalness: th.bodyMetal })
+      const trim = new THREE.MeshStandardMaterial({
+        color: th.trim, roughness: th.trimRough, metalness: th.trimMetal,
+        emissive: th.trimGlow > 0 ? th.trim : 0x000000, emissiveIntensity: th.trimGlow,
       })
-      this.elemMats.set(kind, sig)
-      this.disposables.push(sig)
+      const dark = new THREE.MeshStandardMaterial({ color: th.dark, roughness: 0.5, metalness: 0.45 })
+      this.towerMats.set(kind, { body, trim, dark })
+      this.disposables.push(body, trim, dark)
       const orb = new THREE.MeshStandardMaterial({
         color: col, emissive: col, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.1, flatShading: true,
       })
       this.orbMats.set(kind, orb)
       this.disposables.push(orb)
     }
-    this.orbGeo = new THREE.IcosahedronGeometry(0.12, 0)
-    this.disposables.push(this.orbGeo)
 
     this.detailCrystalMat = new THREE.MeshStandardMaterial({
       map: atlas ?? null, color: atlas ? 0xffffff : 0x4ad9ff,
@@ -1039,79 +1066,50 @@ export class BattleView3D {
   }
 
   // ---------------------------------------------------------------- towers
-  // Kenney modular parts stacked on a fixed body; an aiming cap (weapon/crystals)
-  // carries the ELEMENT via an emissive-tinted material + optional bobbing orb.
-  // Tier (level) grows the silhouette by adding parts; branch swaps the crown/weapon.
-  private static readonly PART_H: Record<string, number> = {
-    'tower-round-base': 0.21,
-    'tower-round-bottom-a': 0.6, 'tower-round-bottom-b': 0.6, 'tower-round-bottom-c': 0.6,
-    'tower-round-middle-a': 0.6, 'tower-round-middle-b': 0.6, 'tower-round-middle-c': 0.6,
-    'tower-round-top-a': 0.5, 'tower-round-top-b': 0.5, 'tower-round-top-c': 0.533,
+  // Procedural per-element models (towerModels.ts): each (kind, level, branch)
+  // resolves to cached merged geometry per MATERIAL ROLE, plus a list of animated
+  // accents. Tier grows mass + ornament; the two L3 branches get distinct crowns.
+  private roleMat(kind: TowerKind, role: PartRole): THREE.Material {
+    if (role === 'core') return this.orbMats.get(kind)!
+    return this.towerMats.get(kind)![role]
   }
-  private static readonly BOTTOM: Record<TowerKind, string> = { cannon: 'a', frost: 'a', flame: 'b', storm: 'c', arcane: 'a' }
-  private static readonly MIDDLE: Record<TowerKind, string> = { cannon: 'a', frost: 'c', flame: 'a', storm: 'b', arcane: 'c' }
-  private static readonly TOP: Record<TowerKind, string> = { cannon: 'a', frost: 'c', flame: 'a', storm: 'b', arcane: 'c' }
 
-  private addOrb(slot: TowerSlot, kind: TowerKind, h: number, scale: number): void {
-    const o = new THREE.Mesh(this.orbGeo, this.orbMats.get(kind)!)
-    o.scale.setScalar(scale)
-    o.position.y = h
-    o.userData.y0 = h
-    o.userData.phase = slot.orbs.length * 1.7
-    slot.turret.add(o)
-    slot.orbs.push(o)
+  private addAccent(slot: TowerSlot, kind: TowerKind, spec: AccentSpec): void {
+    const mat = spec.role === 'core' ? this.orbMats.get(kind)! : this.towerMats.get(kind)!.trim
+    const m = new THREE.Mesh(accentGeometry(spec.shape), mat)
+    m.rotation.order = 'YXZ' // fixed X/Z tilt + animated Y spin = precession
+    m.rotation.x = spec.tiltX ?? 0
+    m.rotation.z = spec.tiltZ ?? 0
+    const s = spec.scale
+    m.scale.set(s, s * (spec.scaleY ?? 1), s)
+    const x0 = spec.x ?? 0
+    const z0 = spec.z ?? 0
+    m.position.set(x0 + (spec.orbit ?? 0), spec.y, z0)
+    ;(spec.attach === 'body' ? slot.bodyGroup : slot.turret).add(m)
+    slot.accents.push({ obj: m, spec, x0, y0: spec.y, z0, s0: s })
   }
 
   private assembleTower(slot: TowerSlot, t: SimTower): void {
     slot.bodyGroup.clear()
     slot.turret.clear()
-    slot.orbs = []
+    slot.accents = []
     const kind = t.kind
-    const level = t.level // 0..2 linear, 3 = branched
-    const branch = t.branch // -1 none else 0/1
-    const H = BattleView3D.PART_H
-    const add = (name: string, y: number): number => {
-      const o = models.clone(name)
-      this.paint(o, this.atlasBaseMat)
-      o.position.y = y
-      slot.bodyGroup.add(o)
-      return y + (H[name] ?? 0.5)
+    const v = towerVisual(kind, t.level, t.branch)
+    for (const role of Object.keys(v.body) as PartRole[]) {
+      slot.bodyGroup.add(new THREE.Mesh(v.body[role]!, this.roleMat(kind, role)))
     }
-    let y = add('tower-round-base', 0)
-    y = add('tower-round-bottom-' + BattleView3D.BOTTOM[kind], y)
-    if (level >= 1) y = add('tower-round-middle-' + BattleView3D.MIDDLE[kind], y)
-    if (level >= 2) {
-      let topVar = BattleView3D.TOP[kind]
-      if (level >= 3) topVar = branch === 0 ? 'a' : 'b'
-      y = add('tower-round-top-' + topVar, y)
+    for (const role of Object.keys(v.turret) as PartRole[]) {
+      slot.turret.add(new THREE.Mesh(v.turret[role]!, this.roleMat(kind, role)))
     }
+    slot.turret.position.y = v.turretY
+    slot.turretY0 = v.turretY
+    slot.height = v.height
+    slot.emitter = v.emitter ?? null
+    slot.glow.position.y = v.height * 0.8
+    for (const spec of v.accents) this.addAccent(slot, kind, spec)
 
-    // aiming cap pivots at the top of the body
-    slot.turret.position.y = y
-    slot.turretY0 = y
-    const capMat = this.elemMats.get(kind)!
-    const grow = 1 + Math.min(level, 3) * 0.07
-    const putWeapon = (name: string) => {
-      const o = models.clone(name)
-      this.paint(o, capMat)
-      o.scale.setScalar(grow)
-      slot.turret.add(o)
-    }
-    const putCrystals = (scale: number) => {
-      const o = models.clone('tower-round-crystals')
-      this.paint(o, capMat)
-      o.scale.setScalar(scale)
-      o.position.y = 0.365 * scale // seat its centred geometry on the body top
-      slot.turret.add(o)
-    }
-    if (kind === 'cannon') putWeapon(branch === 1 ? 'weapon-catapult' : 'weapon-cannon')
-    else if (kind === 'flame') putWeapon(branch === 0 ? 'weapon-catapult' : 'weapon-turret')
-    else if (kind === 'storm') { putWeapon(branch === 1 ? 'weapon-cannon' : 'weapon-ballista'); this.addOrb(slot, kind, 0.55, 1) }
-    else if (kind === 'frost') putCrystals(grow * (branch === 1 ? 1.25 : 1))
-    else { putCrystals(grow); this.addOrb(slot, kind, 0.7, branch === 1 ? 1.4 : 1) } // arcane
-
-    slot.level = level
-    slot.branch = branch
+    slot.level = t.level
+    slot.branch = t.branch
   }
 
   private createTowerSlot(t: SimTower): TowerSlot {
@@ -1138,7 +1136,8 @@ export class BattleView3D {
     g.add(glow)
 
     const slot: TowerSlot = {
-      group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
+      group: g, bodyGroup, turret, accents: [], emitter: null, emitAcc: 0, height: 1,
+      ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
       aimYaw: -t.aimAngle, targetYaw: -t.aimAngle, recoilT: 0, lastFireFlash: 0,
       dropT: 0.0001, dropDone: false, pulseT: 0, phase: (t.x * 13.37 + t.y * 7.77) % (Math.PI * 2), turretY0: 0, baseRange: 0,
       greyed: false, greyVeil: null, fused: false, fusionRing: null,
@@ -1160,12 +1159,16 @@ export class BattleView3D {
         this.disposables.push(this.greyVeilGeo, this.greyVeilMat)
       }
       const m = new THREE.Mesh(this.greyVeilGeo, this.greyVeilMat)
-      m.position.y = 0.95
-      m.scale.set(1, 1.4, 1)
       s.group.add(m)
       s.greyVeil = m
     }
-    if (s.greyVeil) s.greyVeil.visible = on
+    if (s.greyVeil) {
+      s.greyVeil.visible = on
+      if (on) { // size the shroud to the current tier's silhouette
+        s.greyVeil.position.y = s.height * 0.52
+        s.greyVeil.scale.set(1, Math.max(1.2, s.height * 0.75), 1)
+      }
+    }
   }
 
   private rebuildTurret(slot: TowerSlot, t: SimTower): void {
@@ -2054,11 +2057,41 @@ export class BattleView3D {
         s.ring.scale.setScalar(s.baseRange * (1 + Math.sin(this.clockT * 4) * 0.015))
         s.ringMat.opacity = 0.62 + Math.sin(this.clockT * 4) * 0.22
       }
-      if (!s.greyed) {
-        for (const o of s.orbs) {
-          const y0 = o.userData.y0 as number
-          o.position.y = y0 + Math.sin(this.clockT * 2.2 + (o.userData.phase as number)) * 0.07
-          o.rotation.y += dt * 1.5
+      // idle LIFE: floating rings, orbiting runestones, flickering flame cores.
+      // Frozen (but visible) when greyed or under reduce-motion — glow still reads.
+      if (!s.greyed && this.motionOk) {
+        const tt = this.clockT
+        for (const a of s.accents) {
+          const sp = a.spec
+          const ph = (sp.phase ?? 0) + s.phase
+          if (sp.orbit) {
+            const ang = tt * (sp.spin ?? 1) + ph
+            a.obj.position.x = a.x0 + Math.cos(ang) * sp.orbit
+            a.obj.position.z = a.z0 + Math.sin(ang) * sp.orbit
+          } else if (sp.spin) {
+            a.obj.rotation.y = tt * sp.spin + ph
+          }
+          if (sp.bobAmp) a.obj.position.y = a.y0 + Math.sin(tt * (sp.bobSpeed ?? 2.2) + ph) * sp.bobAmp
+          if (sp.flicker) {
+            // two off-beat sines ≈ organic shimmer; slight inverse-Y squash-stretch
+            const f = 1 + (Math.sin(tt * 11 + ph) * 0.6 + Math.sin(tt * 17.3 + ph * 2) * 0.4) * sp.flicker
+            a.obj.scale.set(a.s0 * f, a.s0 * (sp.scaleY ?? 1) * (1 + (1 - f) * 0.7), a.s0 * f)
+          }
+        }
+        // idle element breath: frost mist / flame embers / storm sparks / arcane motes
+        if (s.emitter) {
+          s.emitAcc += dt
+          const period = 1 / s.emitter.rate
+          if (s.emitAcc >= period) {
+            s.emitAcc %= period
+            const e = s.emitter
+            const col = e.type === 'mist' ? 0xcfeeff : e.type === 'embers' ? 0xff8a3c : e.type === 'sparks' ? 0xffe97a : 0xd6a6ff
+            this.emitParticles(
+              s.group.position.x + (Math.random() - 0.5) * 0.34, GROUND + e.y,
+              s.group.position.z + (Math.random() - 0.5) * 0.34,
+              col, 1, e.type === 'sparks' ? 1.5 : 0.45,
+            )
+          }
         }
       }
     }

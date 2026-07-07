@@ -19,23 +19,16 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 const KIT_BASE = `${import.meta.env.BASE_URL}models/kenney-td/`
 
-// Every model we actually use this pass (board tiles, details, tower parts, weapons).
+// Every model we actually use this pass (board tiles + scatter details; towers
+// are now procedural — see towerModels.ts — so the kit tower parts aren't loaded).
 export const MODEL_NAMES = [
   // tiles
   'tile', 'tile-straight', 'tile-corner-round', 'tile-spawn', 'tile-end',
   // scatter details
   'detail-tree', 'detail-tree-large', 'detail-rocks', 'detail-rocks-large',
   'detail-crystal', 'detail-crystal-large',
-  // modular tower parts
-  'tower-round-base',
-  'tower-round-bottom-a', 'tower-round-bottom-b', 'tower-round-bottom-c',
-  'tower-round-middle-a', 'tower-round-middle-b', 'tower-round-middle-c',
-  'tower-round-top-a', 'tower-round-top-b', 'tower-round-top-c',
-  'tower-round-crystals',
-  // weapons
-  'weapon-cannon', 'weapon-turret', 'weapon-ballista', 'weapon-catapult',
   // markers
-  'selection-a', 'selection-b',
+  'selection-a',
 ] as const
 
 export type ModelName = (typeof MODEL_NAMES)[number]
