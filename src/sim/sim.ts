@@ -30,8 +30,9 @@ import { COLS, ROWS, TILE, FIXED_DT, MAX_STEPS_PER_FRAME, cellCenter } from './l
 import { reactionFor, type AuraElement, type ReactionDef, type ReactionKey } from './reactions'
 import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
 import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
-import { heroStats, heroSpellScaled } from '../game/heroProgress'
+import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
 import { computeSynergies, neutralSynergy, type SynergyBonus, type SynergyEffects } from '../game/synergy'
+import { computeResonances, type ResonanceBonus } from '../game/resonance'
 
 // ---- tunables --------------------------------------------------------------
 const COMBO_WINDOW = 2.2 // seconds a combo lingers before it breaks
@@ -165,6 +166,11 @@ export interface SimHero {
   spell: HeroSpellDef
   spellCd: number
   spellMaxCd: number
+  // SIGNATURE mechanic state — pure counters, no RNG, dormant below the unlock level
+  sigAwake: boolean // level ≥ SIGNATURE_UNLOCK_LEVEL at deploy
+  sigCounter: number // rhythm kinds (cindernova/foreseen/wager) + tithe text pacing
+  sigRamp: number // deeproots: accumulated bonus aura from waves held
+  sigGuardUsed: boolean // intercession: spent for the current wave
 }
 
 export interface SimProjectile {
@@ -242,6 +248,13 @@ export class Sim {
   deployedHeroIds = new Set<string>()
   synergyEffects: SynergyEffects = neutralSynergy()
   synergyBonuses: SynergyBonus[] = []
+
+  // ELEMENT RESONANCE — awakened hero + 2/4+ towers of their resonant kind.
+  // Recomputed on every placement/deploy; folded into effDamage / heroDamage.
+  private resonances: ResonanceBonus[] = []
+  private resTowerMult = new Map<TowerKind, number>()
+  private resHeroMult = new Map<string, number>()
+  private resSeen = new Set<string>() // banner each resonance tier only ONCE per run
 
   gold = 0
   lives = 0
@@ -595,6 +608,8 @@ export class Sim {
       this.emit({ t: 'text', x: 360, y: 250, msg: `+${bonus} EARLY`, color: 0xffd54a, size: 24 })
     }
     this.state = 'active'
+    // fresh wave → Seraphine's once-per-wave intercession is available again
+    for (const h of this.heroes) if (h.active) h.sigGuardUsed = false
     this.buildSpawnQueue()
     // arm this wave's planned Morose moment (if any)
     const greyAt = this.greyWaves.get(this.waveIndex)
@@ -626,6 +641,17 @@ export class Sim {
     this.addGold(bonus)
     this.emit({ t: 'banner', msg: `WAVE CLEAR  +${bonus}`, color: 0x2ff7c3 })
     this.emit({ t: 'gold', x: 360, y: 250, amount: bonus })
+    // Give It a Minute (Thornwick's signature): each wave held grows his aura.
+    for (const h of this.heroes) {
+      if (!h.active || !h.sigAwake || h.def.signature.kind !== 'deeproots') continue
+      const sig = h.def.signature
+      const prev = h.sigRamp
+      h.sigRamp = Math.min(sig.rampMax ?? 0.18, h.sigRamp + (sig.ramp ?? 0.03))
+      if (h.sigRamp > prev) {
+        this.recomputeBuffs()
+        this.emit({ t: 'text', x: h.x, y: h.y - 40, msg: `🌳 ROOTS DEEPEN +${Math.round(h.sigRamp * 100)}%`, color: h.def.color, size: 15 })
+      }
+    }
     if (!this.config.endless && this.waveIndex >= this.config.level.waves.length - 1) {
       this.state = 'won'
       return
@@ -796,6 +822,19 @@ export class Sim {
   }
 
   private enemyReachedBase(e: SimEnemy): void {
+    // Hold the Line (Seraphine's signature): once per wave, the first enemy about
+    // to breach the gate is smitten by dawn. If it dies, the leak never happens.
+    for (const h of this.heroes) {
+      if (!h.active || !h.sigAwake || h.def.signature.kind !== 'intercession' || h.sigGuardUsed) continue
+      h.sigGuardUsed = true
+      const nuke = clamp(h.baseDamage * (h.def.signature.nukeMult ?? 8), 0, 1e7)
+      this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: e.x, ty: e.y, color: h.def.color })
+      this.emit({ t: 'aoe', x: e.x, y: e.y, radius: TILE * 1.1, color: h.def.color, alpha: 0.7 })
+      this.emit({ t: 'text', x: e.x, y: e.y - e.def.radius - 26, msg: '🛡 THE DAWN HOLDS!', color: h.def.color, size: 18 })
+      this.applyDirect(e, nuke)
+      if (!e.active) return // smitten at the gate — no leak, bounty paid
+      break // it survived the dawn: the leak stands (one intercession per wave)
+    }
     e.active = false
     const base = this.waypointFor('base')
     this.loseLife(e.def.boss ? 5 : 1)
@@ -838,6 +877,7 @@ export class Sim {
     t.greyUntil = 0
     this.occupied[row][col] = t
     this.recomputeBuffs()
+    this.recomputeResonances()
     this.emit({ t: 'place', x: cc.x, y: cc.y, color: def.color, radius: this.effRange(t) })
     return t
   }
@@ -911,7 +951,8 @@ export class Sim {
   effDamage(t: SimTower): number {
     const s = this.stats(t)
     const elem = t.def.element ? this.upgrades.elementDmg[t.def.element] : 1
-    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem
+    const res = this.resTowerMult.get(t.kind) ?? 1
+    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem * res
     return clamp(dmg, 0, 1e7)
   }
   // DPS shown in the UI (splash/chain not counted, single-target baseline).
@@ -961,16 +1002,19 @@ export class Sim {
         if (adjacentCell(a, n, reach)) n.adjBuff += bd
       }
     }
-    // support HEROES buff adjacent towers AND heroes (Sylvan/Pyra/Aurelia)
+    // support HEROES buff adjacent towers AND heroes (Sylvan/Pyra/Aurelia).
+    // sigRamp is Thornwick's Deep Roots growth (0 unless awakened + waves held).
     for (const a of this.heroes) {
-      if (!a.active || a.buffDamage <= 0) continue
+      if (!a.active) continue
+      const aura = a.buffDamage + a.sigRamp
+      if (aura <= 0) continue
       for (const n of this.towers) {
         if (!n.active) continue
-        if (adjacentCell(a, n)) n.buffDmg += a.buffDamage
+        if (adjacentCell(a, n)) n.buffDmg += aura
       }
       for (const n of this.heroes) {
         if (!n.active || n === a) continue
-        if (adjacentCell(a, n)) n.adjBuff += a.buffDamage
+        if (adjacentCell(a, n)) n.adjBuff += aura
       }
     }
   }
@@ -1540,6 +1584,7 @@ export class Sim {
         id: this.nextId++, active: false, heroId, def, role: def.role, level: pd.level, col, row, x: cc.x, y: cc.y,
         cd: 0, aimAngle: 0, fireFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
         slowDuration: 0, adjBuff: 1, buffMult: 1, buffUntil: 0, spell, spellCd: 0, spellMaxCd: 1,
+        sigAwake: false, sigCounter: 0, sigRamp: 0, sigGuardUsed: false,
       }
       this.heroes.push(h)
     }
@@ -1567,13 +1612,49 @@ export class Sim {
     h.spell = spell
     h.spellCd = 0
     h.spellMaxCd = clamp(spell.cooldown * this.config.mods.spellCooldownMult, 0.5, 60)
+    h.sigAwake = signatureAwake(pd.level)
+    h.sigCounter = 0
+    h.sigRamp = 0
+    h.sigGuardUsed = false
     this.occupiedHero[row][col] = h
     this.deployedHeroIds.add(heroId)
     this.recomputeSynergies()
     this.recomputeBuffs()
+    this.recomputeResonances()
     this.emit({ t: 'heroDeploy', x: cc.x, y: cc.y, color: def.color, radius: this.heroRange(h) })
     this.emit({ t: 'text', x: cc.x, y: cc.y - 44, msg: def.name.toUpperCase() + '!', color: def.color, size: 26 })
+    if (h.sigAwake) this.emit({ t: 'text', x: cc.x, y: cc.y - 70, msg: `✦ ${def.signature.name}`, color: def.color, size: 15 })
     return h
+  }
+
+  // ---- ELEMENT RESONANCE (hero + 2/4+ same-kind towers) --------------------
+  // Deterministic: pure function of live towers + fielded awakened heroes.
+  private recomputeResonances(): void {
+    const counts: Partial<Record<TowerKind, number>> = {}
+    for (const t of this.towers) if (t.active) counts[t.kind] = (counts[t.kind] ?? 0) + 1
+    const fielded: Array<{ heroId: string; awake: boolean }> = []
+    for (const h of this.heroes) if (h.active) fielded.push({ heroId: h.heroId, awake: h.sigAwake })
+    this.resonances = computeResonances(fielded, counts)
+    this.resTowerMult.clear()
+    this.resHeroMult.clear()
+    for (const r of this.resonances) {
+      this.resTowerMult.set(r.towerKind, Math.max(this.resTowerMult.get(r.towerKind) ?? 1, r.towerMult))
+      for (const id of r.heroIds) this.resHeroMult.set(id, Math.max(this.resHeroMult.get(id) ?? 1, r.heroMult))
+    }
+    // celebrate each newly-reached resonance tier once
+    for (const r of this.resonances) {
+      if (this.resSeen.has(r.id)) continue
+      this.resSeen.add(r.id)
+      this.emit({ t: 'banner', msg: `🔗 ${r.name.toUpperCase()}!`, color: r.color })
+      for (const h of this.heroes) {
+        if (h.active && r.heroIds.includes(h.heroId)) {
+          this.emit({ t: 'text', x: h.x, y: h.y - 46, msg: 'RESONANCE!', color: r.color, size: 22 })
+        }
+      }
+    }
+  }
+  activeResonances(): ResonanceBonus[] {
+    return this.resonances
   }
 
   // Live element-synergy recompute from the currently-fielded heroes.
@@ -1593,7 +1674,8 @@ export class Sim {
     const syn = this.synergyEffects
     const elem = syn.elementDmg[h.def.element] ?? 1
     const buff = h.buffUntil > this.clock ? h.buffMult : 1
-    const dmg = h.baseDamage * h.adjBuff * elem * syn.allDmgMult * syn.allStatMult * buff * this.config.mods.towerDamageMult
+    const res = this.resHeroMult.get(h.heroId) ?? 1
+    const dmg = h.baseDamage * h.adjBuff * elem * syn.allDmgMult * syn.allStatMult * buff * res * this.config.mods.towerDamageMult
     return clamp(dmg, 0, 1e7)
   }
   heroRange(h: SimHero): number {
@@ -1661,12 +1743,126 @@ export class Sim {
   private heroAttack(h: SimHero, target: SimEnemy): void {
     this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: target.x, ty: target.y, color: h.def.color })
     this.emit({ t: 'hit', x: target.x, y: target.y, color: h.def.color })
-    const atk: AttackStats = { damage: this.heroDamage(h), dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus, aura: h.def.element }
+    const sig = h.def.signature
+    let dmg = this.heroDamage(h)
+    const tx = target.x
+    const ty = target.y
+
+    // SIGNATURE pre-hit hooks (rhythm counters + conditionals — never RNG)
+    let foreseen = false
+    let nova = false
+    let wager = false
+    if (h.sigAwake) {
+      if (sig.kind === 'cindernova' || sig.kind === 'foreseen' || sig.kind === 'wager') {
+        h.sigCounter++
+        if (h.sigCounter >= (sig.every ?? 4)) {
+          h.sigCounter = 0
+          if (sig.kind === 'cindernova') nova = true
+          else if (sig.kind === 'foreseen') foreseen = true
+          else wager = true
+        }
+      } else if (sig.kind === 'overload') {
+        // The One Percent: exploit stasis — bonus vs slowed/stunned, extend the slow
+        if (target.slowUntil > this.clock || target.stunUntil > this.clock) {
+          dmg *= sig.mult ?? 1.5
+          if (target.slowUntil > this.clock) target.slowUntil += sig.slowExtend ?? 0.5
+          this.emit({ t: 'text', x: tx, y: ty - target.def.radius - 26, msg: 'OVERLOAD!', color: h.def.color, size: 15 })
+        }
+      }
+    }
+    if (foreseen) {
+      dmg *= sig.mult ?? 2
+      this.emit({ t: 'text', x: tx, y: ty - target.def.radius - 28, msg: '👁 FORESEEN', color: h.def.color, size: 16 })
+    }
+
+    const atk: AttackStats = { damage: dmg, dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus, aura: h.def.element }
     // heroes are synergy sources — striking an afflicted enemy ramps the combo meter
-    this.dealDamageWith(target, atk, true, target.x, target.y)
+    this.dealDamageWith(target, atk, true, tx, ty)
+
+    // SIGNATURE post-hit payoffs
+    if (foreseen && target.active) {
+      target.stunUntil = Math.max(target.stunUntil, this.clock + (sig.stun ?? 0.7))
+    }
+    if (nova) this.heroNova(h, tx, ty, dmg)
+    if (wager) this.heroSquall(h, tx, ty, dmg)
+    if (h.sigAwake && sig.kind === 'twinspark' && target.active) {
+      // Two of Us: the twin's echo strike (paints the element again → reactions)
+      const echo: AttackStats = { ...atk, damage: dmg * (sig.echo ?? 0.5) }
+      this.emit({ t: 'heroFire', x: h.x, y: h.y - 12, tx: target.x, ty: target.y, color: h.def.accent })
+      this.dealDamageWith(target, echo, true, tx, ty)
+    }
+    if (h.sigAwake && sig.kind === 'tithe' && !target.active) {
+      // Their Loss: pickpocket the kill for bonus gold
+      const bonus = Math.max(1, Math.round(target.def.reward * (sig.goldFrac ?? 0.4) * this.config.mods.goldGainMult * this.upgrades.goldGainMult))
+      this.addGold(bonus)
+      this.emit({ t: 'gold', x: tx, y: ty - 14, amount: bonus })
+      h.sigCounter++
+      if (h.sigCounter % 4 === 1) this.emit({ t: 'text', x: tx, y: ty - 34, msg: `PILFERED +${bonus}`, color: h.def.color, size: 15 })
+    }
+
     if (h.role === 'Control' && target.active && h.slowFactor < 1) {
       target.slowUntil = Math.max(target.slowUntil, this.clock + h.slowDuration)
       target.slowFactor = Math.min(target.slowFactor, h.slowFactor)
+    }
+  }
+
+  // Stay Lit: the 4th strike detonates — the target already took the full foreseen
+  // hit via dealDamageWith; the nova splashes everything AROUND it (burn included).
+  private heroNova(h: SimHero, cx: number, cy: number, baseDmg: number): void {
+    const sig = h.def.signature
+    const radius = (sig.radius ?? 1.4) * TILE
+    const burst = baseDmg * (sig.mult ?? 1.5)
+    const burnDps = clamp(baseDmg * 0.5, 0, 1e6)
+    const r2 = radius * radius
+    this.emit({ t: 'aoe', x: cx, y: cy, radius, color: h.def.color, alpha: 0.6 })
+    this.emit({ t: 'text', x: cx, y: cy - 30, msg: '💥 CINDERNOVA', color: h.def.color, size: 16 })
+    for (const e of this.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      if (dist2(cx, cy, e.x, e.y) > r2) continue
+      this.applyDirect(e, burst)
+      if (e.active) {
+        e.burnUntil = Math.max(e.burnUntil, this.clock + 2.5)
+        e.burnDps = Math.max(e.burnDps, burnDps)
+      }
+    }
+  }
+
+  // Wager's On: the 6th strike pays out — a squall arcs from the target through
+  // the pack. Builds the FULL chain first (never touch pool-freed enemies mid-loop).
+  private heroSquall(h: SimHero, cx: number, cy: number, baseDmg: number): void {
+    const sig = h.def.signature
+    const maxArcs = sig.chainCount ?? 4
+    const falloff = clamp(sig.chainFalloff ?? 0.85, 0.1, 1)
+    const arcRange = 2.6 * TILE
+    const r2 = arcRange * arcRange
+    const chain: SimEnemy[] = []
+    const used = new Set<number>()
+    let curX = cx
+    let curY = cy
+    while (chain.length < maxArcs) {
+      let best: SimEnemy | null = null
+      let bd = Infinity
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0 || used.has(e.id)) continue
+        const d2 = dist2(curX, curY, e.x, e.y)
+        if (d2 <= r2 && d2 < bd) { bd = d2; best = e }
+      }
+      if (!best) break
+      chain.push(best)
+      used.add(best.id)
+      curX = best.x
+      curY = best.y
+    }
+    if (chain.length === 0) return
+    const points: Array<[number, number]> = [[h.x, h.y]]
+    for (const e of chain) points.push([e.x, e.y])
+    this.emit({ t: 'chain', points, color: h.def.color, count: chain.length, supercharged: false })
+    this.emit({ t: 'text', x: cx, y: cy - 32, msg: '🎲 WAGER PAYS!', color: h.def.color, size: 16 })
+    let dmg = baseDmg * (sig.mult ?? 0.7)
+    for (const e of chain) {
+      if (!e.active) continue
+      this.applyDirect(e, dmg)
+      dmg *= falloff
     }
   }
 

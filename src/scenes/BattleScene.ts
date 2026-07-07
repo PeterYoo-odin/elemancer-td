@@ -520,6 +520,8 @@ export class BattleScene extends Phaser.Scene {
     if (h) {
       this.exitDeploy() // one deploy per hero → drop out of deploy mode
       if (unlockCodex('hero-' + h.heroId)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+      if (h.sigAwake && unlockCodex('field-signature')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+      if (this.sim.activeResonances().length > 0 && unlockCodex('field-resonance')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       this.tryBark('deploy', h.heroId)
       // party-composition banter: once a second hero stands on the field, the
       // squad might have something to say to each other (both must be fielded)
@@ -571,6 +573,9 @@ export class BattleScene extends Phaser.Scene {
     if (!this.sim.canPlace(col, row)) { this.floatAt(cc.x, cc.y, 'CANT BUILD', 0xff5b7a, 22); return }
     if (this.sim.gold < this.sim.placeCost(this.buildKind)) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
     const placed = this.sim.placeTower(this.buildKind, col, row)
+    if (placed && this.sim.activeResonances().length > 0 && unlockCodex('field-resonance')) {
+      this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+    }
     if (placed && this.sim.gold < this.sim.placeCost(this.buildKind)) this.exitBuild()
   }
 

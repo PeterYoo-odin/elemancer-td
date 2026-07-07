@@ -34,7 +34,17 @@ function finite(v: number): boolean {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-function makeSim(seed: number, levelIndex = 3): Sim {
+// Three rotating parties so EVERY hero's signature mechanic + resonance pairing is
+// exercised by the gate (all levels ≥ 3 → signatures awake): A = cindernova /
+// twinspark / tithe + Fire resonance; B = foreseen / intercession / wager;
+// C = deeproots / overload (+ a repeat Control for the slow-stack interplay).
+const PARTIES: Array<Array<{ heroId: string; level: number }>> = [
+  [{ heroId: 'ember', level: 20 }, { heroId: 'pyra', level: 12 }, { heroId: 'vex', level: 8 }],
+  [{ heroId: 'glacia', level: 12 }, { heroId: 'aurelia', level: 14 }, { heroId: 'zephyra', level: 10 }],
+  [{ heroId: 'sylvan', level: 10 }, { heroId: 'volt', level: 10 }, { heroId: 'glacia', level: 6 }],
+]
+
+function makeSim(seed: number, levelIndex = 3, party = 0): Sim {
   return new Sim({
     level: LEVELS[levelIndex],
     mods: { ...NEUTRAL },
@@ -42,13 +52,7 @@ function makeSim(seed: number, levelIndex = 3): Sim {
     endless: true,
     startGold: 5_000_000, // never gold-starved: keep placing/upgrading to stress DPS
     startLives: 10_000_000, // never lose: we want the full 60-wave stress run
-    // A full 3-hero party (varied levels + a same-element pair) so the hero deploy,
-    // synergy, attack and spell code paths are all exercised by the robustness gate.
-    party: [
-      { heroId: 'ember', level: 20 },
-      { heroId: 'pyra', level: 12 }, // Fire pair → same-element synergy
-      { heroId: 'vex', level: 8 },
-    ],
+    party: PARTIES[party % PARTIES.length],
   })
 }
 
@@ -167,9 +171,9 @@ function checkIds(sim: Sim, retired: Set<number>, tick: number): void {
   for (const p of sim.projectiles) if (!p.active) retired.add(p.id)
 }
 
-function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: number; wavesReached: number } {
+function runOne(seed: number, mode: 'max' | 'base' | 'flood', party = 0): { maxEntities: number; wavesReached: number } {
   // flood uses the longest 6-lane path (index 5) to maximise concurrency
-  const sim = makeSim(seed, mode === 'flood' ? 5 : 3)
+  const sim = makeSim(seed, mode === 'flood' ? 5 : 3, party)
   if (mode !== 'flood') deployParty(sim) // heroes before towers claim the build cells
   saturateTowers(sim, mode)
   let tick = 0
@@ -200,12 +204,17 @@ function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: nu
 console.log('simcheck — deterministic 60-wave stress with hundreds of entities…')
 let peak = 0
 let waves = 0
-const runs: Array<[number, 'max' | 'base' | 'flood']> = [[1, 'max'], [1337, 'base'], [424242, 'flood'], [999999, 'max']]
-for (const [seed, mode] of runs) {
-  const r = runOne(seed, mode)
+const runs: Array<[number, 'max' | 'base' | 'flood', number]> = [
+  [1, 'max', 0], [1337, 'base', 0], [424242, 'flood', 0], [999999, 'max', 0],
+  // parties B/C in 'base' (leaky, level-0 towers) so foreseen/intercession/wager/
+  // deeproots/overload signatures all fire — incl. Seraphine's gate smite on leaks
+  [7777, 'base', 1], [31337, 'base', 2],
+]
+for (const [seed, mode, party] of runs) {
+  const r = runOne(seed, mode, party)
   peak = Math.max(peak, r.maxEntities)
   waves = Math.max(waves, r.wavesReached)
-  console.log(`  seed ${seed} [${mode}]: reached wave ${r.wavesReached}, peak entities ${r.maxEntities}`)
+  console.log(`  seed ${seed} [${mode}·p${party}]: reached wave ${r.wavesReached}, peak entities ${r.maxEntities}`)
 }
 
 // determinism check: identical seeds must produce identical end-state

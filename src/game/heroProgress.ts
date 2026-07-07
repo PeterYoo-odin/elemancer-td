@@ -9,6 +9,16 @@ import { clamp } from '../sim/combat'
 
 export const MAX_HERO_LEVEL = 20
 
+// A hero's SIGNATURE mechanic (and Element Resonance participation) awakens at
+// this level. Below it the kit is dormant — levelling is how the cast grows into
+// itself. The scripted demo/attract heroes are Lv 2 BY DESIGN: signatures must
+// never touch the pinned, bit-identical trailer run.
+export const SIGNATURE_UNLOCK_LEVEL = 3
+
+export function signatureAwake(level: number): boolean {
+  return clampLevel(level) >= SIGNATURE_UNLOCK_LEVEL
+}
+
 // Per-level multiplicative growth for combat stats (+11% damage/level, etc.).
 const DMG_GROWTH = 0.11
 const SPELL_GROWTH = 0.10

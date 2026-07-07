@@ -80,6 +80,12 @@ export const CODEX: CodexEntry[] = [
   { id: 'field-intrusion', category: 'field', title: 'On the Hollow King\'s Mercy',
     text: 'He does not attack. He condoles. Mid-battle he will reach in and grant a tower "rest", or take one of your choices away so wanting can\'t hurt you. It passes. Everything he does passes — that is the flaw in his peace.',
     hint: 'Survive a Morose intrusion.' },
+  { id: 'field-signature', category: 'field', title: 'On Signatures',
+    text: 'Maddervane\'s note: every brush leaves a stroke nobody else can make. A cadet\'s companions are the same — season one past their third year and their signature wakes: Ashka\'s fourth strike ignites, Lumi\'s third is already foreseen, the twins simply refuse to hit once. Learn each stroke. Build around it.',
+    hint: 'Field a hero of level 3 or higher.' },
+  { id: 'field-resonance', category: 'field', title: 'On Resonance',
+    text: 'Fizz\'s marginalia, underlined thrice: a seasoned hero standing among towers of their own colour makes the colour LOUDER — two towers hum, four sing. The towers hit harder, the hero hits harder, and the grey backs away from the noise. Recommendation: commit to a colour. Cowards diversify.',
+    hint: 'Awaken an Element Resonance in battle.' },
 ]
 
 export function codexById(id: string): CodexEntry | undefined {

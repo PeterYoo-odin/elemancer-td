@@ -10,7 +10,8 @@
 
 import { economy } from '../game/economy'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
-import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL } from '../game/heroProgress'
+import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
+import { resonanceInfo } from '../game/resonance'
 
 function hex(c: number): string {
   return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
@@ -133,6 +134,53 @@ const CSS = `
   background:linear-gradient(180deg,#c06bff,#7b2ff7); box-shadow:0 4px 12px rgba(0,0,0,.45); }
 .hc-unlock.no { background:#4a4470; color:#b9b1d8; }
 .hc-unlock:active { transform:scale(.95); }
+
+/* signature row (the hero's one-of-a-kind mechanic) */
+.hc-sig { display:flex; align-items:center; gap:8px; border-radius:10px; padding:6px 8px; z-index:1;
+  background:linear-gradient(90deg, rgba(255,255,255,.07), rgba(0,0,0,.28)); border:1px dashed rgba(255,255,255,.18); }
+.hc-sig.awake { border-style:solid; border-color:var(--elem); box-shadow:0 0 10px -2px var(--elem); }
+.hc-sig .sg { width:30px; height:30px; flex:0 0 auto; border-radius:8px; display:grid; place-items:center; font-size:16px;
+  background:rgba(0,0,0,.35); border:1px solid var(--elem); }
+.hc-sig.awake .sg { background:var(--elem); box-shadow:0 0 8px var(--elem); }
+.hc-sig .sn2 { font-size:12px; font-weight:900; }
+.hc-sig .sb2 { font-size:10px; color:#c9b6ff; }
+.hc-sig .slock { margin-left:auto; font-size:9px; font-weight:900; color:#9d8fc5; white-space:nowrap; }
+.hc-sig.awake .slock { color:#8dff4a; }
+
+/* detail modal — the hero's full page: story, signature, spell, resonance, stats */
+.hcd-veil { position:fixed; inset:0; z-index:60; background:rgba(8,5,18,.72); backdrop-filter:blur(4px);
+  display:grid; place-items:center; padding:14px; animation:hcdfade .22s ease-out; }
+@keyframes hcdfade { from { opacity:0; } to { opacity:1; } }
+.hcd { position:relative; width:min(420px, 96vw); max-height:min(86vh, 780px); overflow-y:auto; -webkit-overflow-scrolling:touch;
+  border-radius:20px; padding:3px; background:linear-gradient(160deg, var(--rar), rgba(0,0,0,.3));
+  box-shadow:0 18px 50px rgba(0,0,0,.65), 0 0 30px -6px var(--elem); animation:hcdin .3s cubic-bezier(.2,1.4,.4,1); }
+@keyframes hcdin { from { opacity:0; transform:translateY(26px) scale(.94); } to { opacity:1; transform:none; } }
+.hcd-frame { border-radius:17px; background:linear-gradient(180deg,#241743,#130a28); padding:14px 14px 16px; display:flex; flex-direction:column; gap:10px; position:relative; overflow:hidden; }
+.hcd-frame::before { content:''; position:absolute; inset:0; background:radial-gradient(90% 40% at 50% 0%, var(--elem) 0%, transparent 62%); opacity:.25; pointer-events:none; }
+.hcd-x { position:absolute; top:10px; right:10px; z-index:5; width:34px; height:34px; border:0; border-radius:50%; font:inherit; font-weight:900; font-size:16px;
+  color:#fff; background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.25); cursor:pointer; }
+.hcd-x:active { transform:scale(.9); }
+.hcd-head { display:flex; gap:12px; align-items:center; z-index:1; }
+.hcd-port { width:84px; height:84px; flex:0 0 auto; border-radius:16px; display:grid; place-items:center; font-size:44px;
+  background:linear-gradient(160deg, var(--elem), var(--accent)); box-shadow:inset 0 3px 10px rgba(255,255,255,.28), inset 0 -6px 14px rgba(0,0,0,.4), 0 0 16px -4px var(--elem); }
+.hcd-hn { font-size:24px; font-weight:900; line-height:1.05; }
+.hcd-ht { font-size:12px; font-weight:700; color:#c9b6ff; }
+.hcd-tags { display:flex; gap:5px; flex-wrap:wrap; margin-top:5px; }
+.hcd-tag { font-size:9px; font-weight:900; letter-spacing:.6px; padding:2px 7px; border-radius:8px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.2); }
+.hcd-quote { z-index:1; font-size:13px; font-style:italic; color:#ffe27a; text-align:center; padding:2px 6px; }
+.hcd-story { z-index:1; font-size:12.5px; line-height:1.5; color:#e6dcff; background:rgba(0,0,0,.24); border-radius:12px; padding:10px 12px; }
+.hcd-sec { z-index:1; display:flex; flex-direction:column; gap:4px; background:rgba(0,0,0,.24); border-radius:12px; padding:9px 11px; border-left:3px solid var(--elem); }
+.hcd-sec .h { font-size:10px; font-weight:900; letter-spacing:1.2px; color:#9d8fc5; }
+.hcd-sec .t { font-size:14px; font-weight:900; }
+.hcd-sec .d { font-size:11.5px; line-height:1.45; color:#cfc2f2; }
+.hcd-sec .lock { font-size:10px; font-weight:900; color:#ffd54a; }
+.hcd-stats { z-index:1; display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; }
+.hcd-stat { background:rgba(0,0,0,.3); border-radius:10px; padding:7px 4px; text-align:center; }
+.hcd-stat .v { font-size:15px; font-weight:900; font-variant-numeric:tabular-nums; }
+.hcd-stat .v .delta { font-size:10px; color:#8dff4a; }
+.hcd-stat .k { font-size:9px; font-weight:900; letter-spacing:.8px; color:#9d8fc5; }
+.hcd-actions { z-index:1; display:flex; gap:8px; }
+.hcd-actions .hc-btn { font-size:14px; padding:12px 6px; }
 
 /* toast */
 .hc-toast { position:fixed; left:50%; bottom:14%; transform:translateX(-50%); z-index:50; padding:12px 22px; border-radius:14px;
@@ -262,6 +310,8 @@ export class HeroCollection {
     const portrait = el('div', 'hc-portrait')
     portrait.append(el('div', 'hc-glyph', def.glyph))
     portrait.append(el('div', 'hc-lvl', `Lv ${st.level}`))
+    portrait.style.cursor = 'pointer'
+    portrait.onclick = () => this.openDetail(def)
     frame.append(portrait)
 
     frame.append(el('div', 'hc-name', def.name))
@@ -304,6 +354,16 @@ export class HeroCollection {
     spellEl.append(sg, sinfo)
     frame.append(spellEl)
 
+    // SIGNATURE — the one mechanic nobody else has (awakens at Lv 3)
+    const awake = signatureAwake(st.level)
+    const sigEl = el('div', `hc-sig${awake ? ' awake' : ''}`)
+    sigEl.append(el('div', 'sg', def.signature.glyph))
+    const siginfo = el('div')
+    siginfo.append(el('div', 'sn2', def.signature.name), el('div', 'sb2', def.signature.blurb))
+    sigEl.append(siginfo)
+    sigEl.append(el('div', 'slock', awake ? 'AWAKE' : `Lv ${SIGNATURE_UNLOCK_LEVEL}`))
+    frame.append(sigEl)
+
     // actions
     const actions = el('div', 'hc-actions')
     actions.append(this.levelUpButton(def, st.level, st.xp))
@@ -330,8 +390,14 @@ export class HeroCollection {
     b.innerHTML = free ? 'LEVEL UP<br>FREE ★' : `LEVEL UP<br>${cost} 🔹`
     b.onclick = () => {
       const res = economy.levelUpHero(def.id)
-      if (res) { this.burstHeroId = def.id; this.toast(`${def.name} → Lv ${economy.heroState(def.id).level}!`, def.color); this.render() }
-      else this.toast('Not enough shards', 0xff5b7a)
+      if (res) {
+        this.burstHeroId = def.id
+        const newLevel = economy.heroState(def.id).level
+        // crossing the awaken threshold is a MOMENT — celebrate the signature
+        if (newLevel === SIGNATURE_UNLOCK_LEVEL) this.toast(`${def.signature.glyph} ${def.signature.name.toUpperCase()} AWAKENED!`, def.color)
+        else this.toast(`${def.name} → Lv ${newLevel}!`, def.color)
+        this.render()
+      } else this.toast('Not enough shards', 0xff5b7a)
     }
     return b
   }
@@ -361,6 +427,124 @@ export class HeroCollection {
     return ov
   }
 
+  // ------------------------------------------------------------- hero detail
+  // The hero's full page: story, catchphrase, signature, spell, resonance and a
+  // level-up path — the collection card answers "what", this answers "who & why".
+  private openDetail(def: HeroDef): void {
+    this.closeDetail()
+    const st = economy.heroState(def.id)
+    const awake = signatureAwake(st.level)
+
+    const veil = el('div', 'hcd-veil')
+    veil.onclick = (ev) => { if (ev.target === veil) this.closeDetail() }
+    const box = el('div', 'hcd')
+    box.style.setProperty('--elem', hex(def.color))
+    box.style.setProperty('--accent', hex(def.accent))
+    box.style.setProperty('--rar', hex(RARITY_COLOR[def.rarity]))
+    const frame = el('div', 'hcd-frame')
+
+    const x = el('button', 'hcd-x', '✕')
+    x.onclick = () => this.closeDetail()
+    frame.append(x)
+
+    // header
+    const head = el('div', 'hcd-head')
+    const port = el('div', 'hcd-port', def.glyph)
+    const hh = el('div')
+    hh.append(el('div', 'hcd-hn', def.name), el('div', 'hcd-ht', `${def.title} · Lv ${st.level}`))
+    const tags = el('div', 'hcd-tags')
+    for (const t of [def.element, def.role, def.damageType, RARITY_LABEL[def.rarity]]) {
+      const tag = el('div', 'hcd-tag', String(t))
+      tag.style.color = hex(def.color)
+      tags.append(tag)
+    }
+    hh.append(tags)
+    head.append(port, hh)
+    frame.append(head)
+
+    frame.append(el('div', 'hcd-quote', `“${def.catchphrase}”`))
+    frame.append(el('div', 'hcd-story', def.story))
+
+    // signature
+    const sig = el('div', 'hcd-sec')
+    sig.append(el('div', 'h', 'SIGNATURE'))
+    sig.append(el('div', 't', `${def.signature.glyph} ${def.signature.name}`))
+    sig.append(el('div', 'd', def.signature.detail))
+    if (!awake) sig.append(el('div', 'lock', `🔒 Dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}. Level ${def.name} up to unleash it.`))
+    frame.append(sig)
+
+    // spell (level-scaled)
+    const sp = heroSpellScaled(def.spell, st.level)
+    const spellSec = el('div', 'hcd-sec')
+    spellSec.append(el('div', 'h', 'ACTIVE SPELL'))
+    spellSec.append(el('div', 't', `${sp.glyph} ${sp.name}`))
+    const bits: string[] = []
+    if (sp.damage) bits.push(`${Math.round(sp.damage)} dmg`)
+    if (sp.radius) bits.push(`${sp.radius} tile radius`)
+    if (sp.stunDuration) bits.push(`${sp.stunDuration}s freeze`)
+    if (sp.burnDps) bits.push(`${Math.round(sp.burnDps)}/s burn`)
+    if (sp.heal) bits.push(`restores ${sp.heal} lives`)
+    if (sp.chainCount) bits.push(`arcs ×${sp.chainCount}`)
+    if (sp.buffMult) bits.push(`×${sp.buffMult} team damage`)
+    if (sp.executeMult) bits.push(`×${sp.executeMult} vs weakened foes`)
+    spellSec.append(el('div', 'd', `${sp.blurb} — ${bits.join(' · ')} · ${sp.cooldown}s cooldown.`))
+    frame.append(spellSec)
+
+    // resonance
+    const rInfo = resonanceInfo(def.resonantTower)
+    const pc = (m: number): string => `+${Math.round((m - 1) * 100)}%`
+    const resSec = el('div', 'hcd-sec')
+    resSec.append(el('div', 'h', 'ELEMENT RESONANCE'))
+    resSec.append(el('div', 't', `🔗 ${rInfo.towerName} Resonance`))
+    resSec.append(el('div', 'd',
+      `Field ${def.name} beside 2+ ${rInfo.towerName} towers: ${pc(rInfo.t1Tower)} tower damage & ${pc(rInfo.t1Hero)} hero damage. ` +
+      `At ${rInfo.t2Count}+ towers it deepens to ${pc(rInfo.t2Tower)} / ${pc(rInfo.t2Hero)}.`))
+    if (!awake) resSec.append(el('div', 'lock', `🔒 Requires the signature awake (Lv ${SIGNATURE_UNLOCK_LEVEL}).`))
+    frame.append(resSec)
+
+    // stats grid (current → next level delta)
+    const cur = heroStats(def, st.level)
+    const nxt = st.level < MAX_HERO_LEVEL ? heroStats(def, st.level + 1) : null
+    const stats = el('div', 'hcd-stats')
+    const stat = (k: string, v: string, delta?: string): void => {
+      const s = el('div', 'hcd-stat')
+      const vv = el('div', 'v', v)
+      if (delta) {
+        const d = el('span', 'delta', ` ${delta}`)
+        vv.append(d)
+      }
+      s.append(vv, el('div', 'k', k))
+      stats.append(s)
+    }
+    stat('DAMAGE', String(Math.round(cur.damage)), nxt ? `▲${Math.round(nxt.damage - cur.damage)}` : undefined)
+    stat('DPS', String(Math.round(cur.dps)), nxt ? `▲${Math.round(nxt.dps - cur.dps)}` : undefined)
+    stat('RANGE', cur.range.toFixed(1), undefined)
+    stat('RATE', `${cur.cooldown.toFixed(2)}s`, undefined)
+    frame.append(stats)
+
+    // actions
+    const actions = el('div', 'hcd-actions')
+    if (st.unlocked) {
+      const lvlBtn = this.levelUpButton(def, st.level, st.xp)
+      const prevClick = lvlBtn.onclick
+      lvlBtn.onclick = (ev) => {
+        prevClick?.call(lvlBtn, ev)
+        // re-open on the fresh state so numbers/awaken state update live
+        if (document.querySelector('.hcd-veil')) this.openDetail(def)
+      }
+      actions.append(lvlBtn)
+    }
+    frame.append(actions)
+
+    box.append(frame)
+    veil.append(box)
+    document.body.appendChild(veil)
+  }
+
+  private closeDetail(): void {
+    document.querySelectorAll('.hcd-veil').forEach((n) => n.remove())
+  }
+
   private toast(msg: string, color: number): void {
     const t = el('div', 'hc-toast', msg)
     t.style.borderColor = hex(color)
@@ -370,6 +554,7 @@ export class HeroCollection {
   }
 
   dispose(): void {
+    this.closeDetail()
     this.root.remove()
     this.styleEl.remove()
     document.querySelectorAll('.hc-toast').forEach((n) => n.remove())

@@ -9,7 +9,8 @@ import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/t
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
 import { RARITY_COLOR } from '../game/heroes'
-import { heroStats, heroSpellScaled } from '../game/heroProgress'
+import { heroStats, heroSpellScaled, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
+import { resonanceInfo } from '../game/resonance'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 
@@ -703,11 +704,12 @@ export class BattleHud {
 
   private updateSynergy(sim: Sim): void {
     const bonuses = sim.activeSynergies()
-    const key = bonuses.map((b) => b.id).join(',')
+    const resonances = sim.activeResonances()
+    const key = bonuses.map((b) => b.id).join(',') + '|' + resonances.map((r) => r.id + r.count).join(',')
     if (key === this.lastSynKey) return
     this.lastSynKey = key
     this.synList.innerHTML = ''
-    if (bonuses.length === 0) { this.synPanel.classList.add('hidden'); return }
+    if (bonuses.length === 0 && resonances.length === 0) { this.synPanel.classList.add('hidden'); return }
     this.synPanel.classList.remove('hidden')
     for (const b of bonuses) {
       const chip = el('div', 'syn-chip pe')
@@ -721,6 +723,22 @@ export class BattleHud {
       attachTip(chip, () => ({
         tag: 'ACTIVE SYNERGY', title: b.name, accent: hex(b.color), body: b.desc,
         foot: 'Awakened by fielding allies that share an element. It fades if they leave the board.',
+      }))
+    }
+    // ELEMENT RESONANCE chips (hero ↔ tower bonds)
+    for (const r of resonances) {
+      const chip = el('div', 'syn-chip pe')
+      chip.style.borderColor = hex(r.color)
+      chip.style.color = hex(r.color)
+      chip.append(el('span', 'si', r.icon))
+      const st = el('div', 'st')
+      st.append(el('div', 'sn', r.name), el('div', 'sd', r.desc))
+      chip.append(st)
+      this.synList.append(chip)
+      attachTip(chip, () => ({
+        tag: 'ELEMENT RESONANCE', title: r.name, accent: hex(r.color),
+        body: `${r.heroNames.join(' & ')} resonates with your ${r.count} ${r.towerName} towers — ${r.desc}.`,
+        foot: r.tier === 1 ? `Build ${4 - r.count} more ${r.towerName} tower${4 - r.count === 1 ? '' : 's'} for tier II.` : 'Tier II — fully resonant.',
       }))
     }
   }
@@ -803,6 +821,22 @@ export class BattleHud {
     if (sp.buffMult) bits.push(`×${sp.buffMult} hero dmg`)
     if (sp.executeMult) bits.push(`×${sp.executeMult} vs weakened`)
     rows.push({ k: `✦ ${sp.name}`, v: bits.join(' · ') || sp.blurb, c: hex(def.color) })
+    // SIGNATURE — the hero's one-of-a-kind mechanic (awakens at Lv 3)
+    const sig = def.signature
+    const awake = signatureAwake(entry.level)
+    rows.push({
+      k: `${sig.glyph} ${sig.name}`,
+      v: awake ? sig.blurb : `dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}`,
+      c: awake ? hex(def.color) : '#9d8fc5',
+    })
+    // RESONANCE — hero + 2/4+ towers of their resonant kind
+    const res = sim.activeResonances().find((r) => r.heroIds.includes(heroId))
+    const rInfo = resonanceInfo(def.resonantTower)
+    rows.push(
+      res
+        ? { k: '🔗 Resonance', v: `${res.name} · ${res.desc}`, c: '#8dff4a' }
+        : { k: '🔗 Resonance', v: awake ? `build 2+ ${rInfo.towerName} towers to awaken` : `needs Lv ${SIGNATURE_UNLOCK_LEVEL} + 2 ${rInfo.towerName} towers`, c: '#9d8fc5' },
+    )
     rows.push(
       fielded
         ? fielded.spellCd > 0
@@ -816,7 +850,7 @@ export class BattleHud {
       accent: hex(def.color),
       body: def.blurb,
       rows,
-      foot: sp.blurb,
+      foot: awake ? sig.detail : sp.blurb,
     }
   }
 
