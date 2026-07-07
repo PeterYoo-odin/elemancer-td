@@ -10,6 +10,13 @@
 // asked). Pure strings — no runtime, no dependency, crisp at any size. Anything
 // used as a *pictogram inside text* (barks, tokens) can call `iconMarkup()`; the
 // element-tinted helpers below cover the common cases.
+//
+// ACCESSIBILITY: element hues route through elementHex() (src/ui/a11y.ts) so the
+// colourblind palette re-tints every element icon at once. The distinct per-element
+// SHAPE (fire/water/nature/… silhouettes) is what makes elements readable WITHOUT
+// colour — the palette is the second line of defence.
+
+import { elementHex } from './a11y'
 
 export type IconName =
   // elements (the wheel + the Arcane wildcard)
@@ -131,15 +138,26 @@ const ELEMENT_ICON: Record<ElementName, IconName> = {
   Light: 'light', Dark: 'dark', Arcane: 'arcane',
 }
 
+// The DEFAULT (colour-vision-typical) element hues. Colour-vision-deficient players
+// get a remapped palette — always read the live colour via elementColor() below so
+// the colourblind setting re-tints every element icon in one place.
 export const ELEMENT_HEX: Record<ElementName, string> = {
   Fire: '#ff6a3c', Water: '#4ad9ff', Nature: '#8dff4a', Storm: '#9ad0ff',
   Light: '#ffe14a', Dark: '#c06bff', Arcane: '#8fbfff',
 }
 
-/** Element icon, pre-tinted to its wheel hue (pass a colour to override). */
+/** Live element hue, honouring the active colourblind palette (a11y setting). */
+export function elementColor(el: string): string {
+  return isElementName(el) ? elementHex(el) : (ELEMENT_HEX as Record<string, string>)[el] ?? '#8fbfff'
+}
+function isElementName(el: string): el is ElementName {
+  return el === 'Fire' || el === 'Water' || el === 'Nature' || el === 'Storm' || el === 'Light' || el === 'Dark' || el === 'Arcane'
+}
+
+/** Element icon, pre-tinted to its (colourblind-aware) hue (pass a colour to override). */
 export function elementIcon(el: string, opts: IconOpts = {}): string {
   const name = (ELEMENT_ICON as Record<string, IconName>)[el] ?? 'sparkle'
-  const color = opts.color ?? ELEMENT_HEX[el as ElementName] ?? undefined
+  const color = opts.color ?? elementColor(el)
   return iconMarkup(name, { ...opts, color })
 }
 

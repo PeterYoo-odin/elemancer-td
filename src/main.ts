@@ -15,6 +15,8 @@ import { playCutscene } from './ui/Cutscene'
 import { captureAttribution, reportAttribution, getReferrer } from './game/attribution'
 import { economy } from './game/economy'
 import { registerServiceWorker } from './ui/pwa'
+import { analytics } from './game/analytics'
+import { applyAccessibility } from './ui/a11y'
 
 // GROWTH FUNNEL: a shared/ad/social link drops the player straight into playable
 // game. Snapshot the marketing params (?ref= · ?utm_* · ?campaign= · ?src= · ?c=)
@@ -25,6 +27,12 @@ captureAttribution()
 economy.setReferredBy(getReferrer())
 reportAttribution()
 registerServiceWorker()
+
+// Apply the saved accessibility preferences (colorblind palette + glyphs, text
+// scale, high contrast) to the document root BEFORE the first frame paints.
+applyAccessibility()
+// Opt-in analytics: a no-op unless the player has granted consent. Counts a session.
+analytics.recordSession()
 
 // The Odin Platforms boot splash goes up first (a DOM overlay above the canvas)
 // and is gated behind a tap so the thunderclap is allowed to play. Phaser boots

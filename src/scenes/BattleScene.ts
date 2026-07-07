@@ -30,6 +30,7 @@ import { recordDailyResult } from '../game/daily'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
 import { ftue, LEVEL_LESSONS, deathLesson } from '../game/onboarding'
+import { analytics } from '../game/analytics'
 import { Coach } from '../ui/coach'
 import { showWelcomeReward } from '../ui/WelcomeReward'
 import { showInstallCard } from '../ui/pwa'
@@ -238,6 +239,7 @@ export class BattleScene extends Phaser.Scene {
     this.towersBuilt = 0
     this.leakKinds = {}
     this.firstWowDone = false
+    if (!this.attract && !this.demoMode) analytics.recordBattleStart(this.levelId) // opt-in funnel: level drop-off
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -984,6 +986,8 @@ export class BattleScene extends Phaser.Scene {
     this.deselect()
     this.coach?.clear() // the coach never talks over a result screen
     const win = this.sim.state === 'won'
+    // opt-in funnel: records the battle outcome + deaths-by-level (no-op without consent)
+    if (!this.attract && !this.demoMode) analytics.recordBattleEnd(this.levelId, { win, wave: this.sim.waveIndex })
     // hands-free reel: bloom, then its own end card (prove-it + PLAY CTA)
     if (this.attract) {
       if (win && !appSettings.reducedMotion()) this.greyBloomT = 1.4
