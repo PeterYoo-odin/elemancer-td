@@ -1,0 +1,38 @@
+# Continuous integration for Chromancer / Elemancer TD.
+#   · build    — tsc (strict) + vite production build
+#   · simcheck — deterministic 60-wave stress + demo + min-resource beatability proof
+#   · balance  — the auto-tuning harness: runs a seeded sweep and uploads the
+#                BALANCE_REPORT.md + balance-report.json as build artifacts so every
+#                push carries a fresh, reviewable balance snapshot. It is ADVISORY by
+#                default (exit 0); flip to a hard gate with `-- --fail-on-degenerate`.
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build (tsc strict + vite)
+        run: npm run build
+      - name: Sim gate (determinism + beatability)
+        run: npm run simcheck
+      - name: Balance harness (seeded sweep → report)
+        # Advisory sweep. Set BALANCE_RUNS higher for a deeper (slower) sweep, or add
+        # `-- --fail-on-degenerate` to make a flagged combo fail the build.
+        run: BALANCE_RUNS=6 npm run balance
+      - name: Upload balance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: balance-report
+          path: |
+            BALANCE_REPORT.md
+            balance-report.json

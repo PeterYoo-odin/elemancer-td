@@ -5,7 +5,7 @@
 // the battle board itself is real 3D on a full-window canvas above Phaser's.
 
 import Phaser from 'phaser'
-import { TOWERS, type TowerKind } from '../game/towers'
+import { TOWERS, TOWER_ORDER, type TowerKind } from '../game/towers'
 import { LEVELS, levelById, pathCellsFor, starsForClear, DEMO_LEVEL, type LevelDef } from '../game/levels'
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
@@ -111,6 +111,9 @@ export class BattleScene extends Phaser.Scene {
 
   private camCtl: CameraControls | null = null
   private onResize = () => this.view?.resize()
+  // Keyboard operability (accessibility): remappable hotkeys drive the core loop so
+  // the game is playable without a pointer. Bindings live in appSettings.keybinds.
+  private onKeyDown = (e: KeyboardEvent) => this.handleKey(e)
   private lastTime = 0
   private hitstopT = 0 // brief slow-mo on big kills (view pacing only)
   private lastSimState = ''
@@ -286,6 +289,7 @@ export class BattleScene extends Phaser.Scene {
       onHover: (x, y) => this.handleHover(x, y),
     })
     window.addEventListener('resize', this.onResize)
+    if (!this.attract) window.addEventListener('keydown', this.onKeyDown)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.teardown())
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.teardown())
 
@@ -912,6 +916,29 @@ export class BattleScene extends Phaser.Scene {
     this.hud.setSpeed(this.gameSpeed)
   }
 
+  // Remappable keyboard controls (accessibility). Ignored while a DOM dialog is up
+  // (settings/rebind capture) or while typing, so it never fights the overlay.
+  private handleKey(e: KeyboardEvent): void {
+    if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return
+    if (document.querySelector('.settings-overlay')) return
+    const tag = (document.activeElement?.tagName ?? '').toLowerCase()
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+    const k = appSettings.data.keybinds
+    const code = e.code
+    if (code === k.startWave) {
+      if (this.sim.state === 'prep' && !this.paused) { e.preventDefault(); this.sim.startWave() }
+      return
+    }
+    if (code === k.pause) { e.preventDefault(); this.togglePause(); return }
+    if (code === k.toggleSpeed) { e.preventDefault(); this.toggleSpeed(); return }
+    if (code === k.cancel) { e.preventDefault(); this.exitBuild(); this.exitAiming(); this.exitDeploy(); this.deselect(); return }
+    const towerIdx = [k.tower1, k.tower2, k.tower3, k.tower4, k.tower5].indexOf(code)
+    if (towerIdx >= 0 && this.sim.state !== 'won' && this.sim.state !== 'lost' && !this.paused) {
+      const kind = TOWER_ORDER[towerIdx]
+      if (kind) { e.preventDefault(); this.onTowerButton(kind) }
+    }
+  }
+
   private quitBattle(): void {
     if (this.endless) {
       economy.awardEndless(this.sim.waveIndex)
@@ -1333,6 +1360,7 @@ export class BattleScene extends Phaser.Scene {
     this.camCtl?.dispose()
     this.camCtl = null
     window.removeEventListener('resize', this.onResize)
+    window.removeEventListener('keydown', this.onKeyDown)
     window.clearTimeout(this.pairTimer)
     for (const t of this.keeperTimers) window.clearTimeout(t)
     this.keeperTimers = []

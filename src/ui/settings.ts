@@ -9,7 +9,7 @@ export type AssistMode = 'off' | 'relaxed' | 'cozy'
 
 // Remappable gameplay actions. Values are KeyboardEvent.code strings ('Space',
 // 'KeyR', 'Digit1'…). Defaults give the game full keyboard operability.
-export type BindableAction = 'startWave' | 'tower1' | 'tower2' | 'tower3' | 'tower4' | 'tower5' | 'sellTower' | 'toggleSpeed' | 'pause'
+export type BindableAction = 'startWave' | 'tower1' | 'tower2' | 'tower3' | 'tower4' | 'tower5' | 'cancel' | 'toggleSpeed' | 'pause'
 export const DEFAULT_KEYBINDS: Record<BindableAction, string> = {
   startWave: 'Space',
   tower1: 'Digit1',
@@ -17,7 +17,7 @@ export const DEFAULT_KEYBINDS: Record<BindableAction, string> = {
   tower3: 'Digit3',
   tower4: 'Digit4',
   tower5: 'Digit5',
-  sellTower: 'KeyX',
+  cancel: 'KeyX',
   toggleSpeed: 'KeyF',
   pause: 'Escape',
 }

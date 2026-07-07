@@ -34,7 +34,7 @@ const ASSIST_DESC: Record<AssistMode, string> = {
 const KEY_LABELS: Record<BindableAction, string> = {
   startWave: 'Start / early wave', tower1: 'Select tower 1', tower2: 'Select tower 2',
   tower3: 'Select tower 3', tower4: 'Select tower 4', tower5: 'Select tower 5',
-  sellTower: 'Sell selected', toggleSpeed: 'Toggle speed', pause: 'Pause / back',
+  cancel: 'Cancel / deselect', toggleSpeed: 'Toggle speed', pause: 'Pause / back',
 }
 
 /** Human-friendly label for a KeyboardEvent.code. */
