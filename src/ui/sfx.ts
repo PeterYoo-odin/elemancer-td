@@ -160,6 +160,98 @@ export function playShimmer(): void {
   })
 }
 
+/** Morose's hush: a dark, downward-sighing filtered noise — the sound of grey. */
+export function playMoroseHush(): void {
+  if (!appSettings.data.sound) return
+  const ac = ensure()
+  if (!ac) return
+  const t0 = ac.currentTime + 0.02
+  const out = ac.createGain()
+  out.gain.value = 0.5
+  out.connect(ac.destination)
+
+  const n = ac.createBufferSource()
+  n.buffer = noiseBuffer(ac, 2.0)
+  const lp = ac.createBiquadFilter()
+  lp.type = 'lowpass'
+  lp.frequency.setValueAtTime(1200, t0)
+  lp.frequency.exponentialRampToValueAtTime(120, t0 + 1.6)
+  const g = ac.createGain()
+  g.gain.setValueAtTime(0, t0)
+  g.gain.linearRampToValueAtTime(0.5, t0 + 0.35)
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 1.8)
+  n.connect(lp)
+  lp.connect(g)
+  g.connect(out)
+  n.start(t0)
+
+  // a low sighing tone underneath, sagging a minor third
+  const o = ac.createOscillator()
+  o.type = 'sine'
+  o.frequency.setValueAtTime(196, t0) // G3…
+  o.frequency.exponentialRampToValueAtTime(164.8, t0 + 1.2) // …to E3
+  const og = ac.createGain()
+  og.gain.setValueAtTime(0, t0)
+  og.gain.linearRampToValueAtTime(0.16, t0 + 0.25)
+  og.gain.exponentialRampToValueAtTime(0.001, t0 + 1.6)
+  o.connect(og)
+  og.connect(out)
+  o.start(t0)
+  o.stop(t0 + 1.7)
+}
+
+/** Node-arrival stinger: two bright plucked notes, a tiny "you made it". */
+export function playNodeStinger(): void {
+  if (!appSettings.data.sound) return
+  const ac = ensure()
+  if (!ac) return
+  const t0 = ac.currentTime + 0.02
+  const out = ac.createGain()
+  out.gain.value = 0.22
+  out.connect(ac.destination)
+  const notes = [523.25, 784] // C5 → G5
+  notes.forEach((hz, i) => {
+    const o = ac.createOscillator()
+    o.type = 'triangle'
+    o.frequency.value = hz
+    const g = ac.createGain()
+    const s = t0 + i * 0.12
+    g.gain.setValueAtTime(0, s)
+    g.gain.linearRampToValueAtTime(0.7, s + 0.012)
+    g.gain.exponentialRampToValueAtTime(0.001, s + 0.55)
+    o.connect(g)
+    g.connect(out)
+    o.start(s)
+    o.stop(s + 0.6)
+  })
+}
+
+/** Discovery chime: a small ascending arpeggio for road finds / codex pages. */
+export function playDiscovery(): void {
+  if (!appSettings.data.sound) return
+  const ac = ensure()
+  if (!ac) return
+  const t0 = ac.currentTime + 0.02
+  const out = ac.createGain()
+  out.gain.value = 0.18
+  out.connect(ac.destination)
+  const notes = [659.25, 830.6, 987.77, 1318.5] // E5 G#5 B5 E6
+  notes.forEach((hz, i) => {
+    const o = ac.createOscillator()
+    o.type = 'sine'
+    o.frequency.value = hz
+    const g = ac.createGain()
+    const s = t0 + i * 0.09
+    g.gain.setValueAtTime(0, s)
+    g.gain.linearRampToValueAtTime(0.5, s + 0.015)
+    g.gain.exponentialRampToValueAtTime(0.001, s + 0.9)
+    o.connect(g)
+    g.connect(out)
+    o.start(s)
+    o.stop(s + 1)
+  })
+}
+
 /** Tiny click for menu buttons. */
 export function playUiTick(): void {
   if (!appSettings.data.sound) return

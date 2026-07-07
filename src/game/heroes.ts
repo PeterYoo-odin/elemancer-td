@@ -76,11 +76,14 @@ const DARK = (c: number): number => {
   return ((r * 0.32) << 16) | ((g * 0.32) << 8) | (b * 0.32)
 }
 
+// NOTE (Chromancer canon): display names/titles/blurbs follow the narrative
+// bible cast (Ashka, Lumi, Galea, …). The ids are UNCHANGED — saves, party
+// loadouts and the sim key on ids, so renaming display fields is free.
 export const HEROES: Record<string, HeroDef> = {
   ember: {
-    id: 'ember', name: 'Ember', title: 'Embercaller', element: 'Fire', role: 'DPS', rarity: 'rare',
+    id: 'ember', name: 'Ashka', title: 'the Cinderblade', element: 'Fire', role: 'DPS', rarity: 'rare',
     damageType: 'Magic', glyph: '🔥', color: ELEMENT_COLOR.Fire, accent: DARK(ELEMENT_COLOR.Fire),
-    blurb: 'A pyromancer who rains ember bolts and ignites the horde.',
+    blurb: 'Foundling of the first greyed town. Fire has a second job, and it is warmth. Stay lit.',
     baseDamage: 26, range: 3.0, cooldown: 0.7, deployCost: 110, unlockShards: 0,
     spell: {
       id: 'fireball', name: 'Fireball', blurb: 'Tap an area · fiery burst + burn', glyph: '☄',
@@ -88,9 +91,9 @@ export const HEROES: Record<string, HeroDef> = {
     },
   },
   glacia: {
-    id: 'glacia', name: 'Glacia', title: 'Frost Warden', element: 'Water', role: 'Control', rarity: 'rare',
+    id: 'glacia', name: 'Lumi', title: 'the Glacier Oracle', element: 'Water', role: 'Control', rarity: 'rare',
     damageType: 'Magic', glyph: '❄', color: ELEMENT_COLOR.Water, accent: DARK(ELEMENT_COLOR.Water),
-    blurb: 'A warden of ice whose every strike chills enemies to a crawl.',
+    blurb: 'Youngest ever to read the Deep Ice. She has seen this battle. It goes well.',
     baseDamage: 15, range: 2.8, cooldown: 0.85, slowFactor: 0.55, slowDuration: 1.4, deployCost: 100, unlockShards: 0,
     spell: {
       id: 'frostnova', name: 'Frost Nova', blurb: 'Tap an area · freeze everything', glyph: '❆',
@@ -98,9 +101,9 @@ export const HEROES: Record<string, HeroDef> = {
     },
   },
   sylvan: {
-    id: 'sylvan', name: 'Sylvan', title: 'Verdant Druid', element: 'Nature', role: 'Support', rarity: 'common',
+    id: 'sylvan', name: 'Thornwick', title: 'the Grovewarden', element: 'Nature', role: 'Support', rarity: 'common',
     damageType: 'Physical', glyph: '🌿', color: ELEMENT_COLOR.Nature, accent: DARK(ELEMENT_COLOR.Nature),
-    blurb: 'A druid-healer who empowers nearby allies and mends the crystal.',
+    blurb: 'Ancient warden of the Wilds. Everything grey was green once — give it a minute.',
     baseDamage: 9, range: 2.2, cooldown: 1.1, buffDamage: 0.24, deployCost: 90, unlockShards: 0,
     spell: {
       id: 'healcircle', name: 'Healing Circle', blurb: 'Restore lives · ensnare foes', glyph: '✚',
@@ -108,29 +111,29 @@ export const HEROES: Record<string, HeroDef> = {
     },
   },
   pyra: {
-    id: 'pyra', name: 'Pyra', title: 'Cinder Priestess', element: 'Fire', role: 'Support', rarity: 'common',
-    damageType: 'Magic', glyph: '🕯', color: 0xff9a4a, accent: DARK(0xff9a4a),
-    blurb: 'A flame-priestess who stokes allied firepower and scorches a wide area.',
+    id: 'pyra', name: 'Bramble', title: 'Bramble & Bloom', element: 'Fire', role: 'Support', rarity: 'common',
+    damageType: 'Magic', glyph: '🌱', color: 0xff9a4a, accent: DARK(0xff9a4a),
+    blurb: 'Twin sprouts who finish each other\'s sentences — and each other\'s sparks. Two of them. Too bad for you.',
     baseDamage: 12, range: 2.4, cooldown: 1.0, buffDamage: 0.2, deployCost: 95, unlockShards: 40,
     spell: {
-      id: 'cinderstorm', name: 'Cinderstorm', blurb: 'Tap an area · lingering embers', glyph: '🔥',
+      id: 'cinderstorm', name: 'Sparkseed Storm', blurb: 'Tap an area · lingering embers', glyph: '🔥',
       effect: 'aoeBurn', targeted: true, cooldown: 13, damage: 80, radius: 2.8, burnDps: 46, burnDuration: 3.5,
     },
   },
   zephyra: {
-    id: 'zephyra', name: 'Zephyra', title: 'Storm Archer', element: 'Storm', role: 'DPS', rarity: 'epic',
+    id: 'zephyra', name: 'Galea', title: 'Capt. Stormwright', element: 'Storm', role: 'DPS', rarity: 'epic',
     damageType: 'Magic', glyph: '⚡', color: ELEMENT_COLOR.Storm, accent: DARK(ELEMENT_COLOR.Storm),
-    blurb: 'A sky-archer loosing arrows that leap between foes as forked lightning.',
+    blurb: 'Sky-clipper captain who lost her crew to the dead calm. Wind\'s up, sails full — wager\'s on.',
     baseDamage: 30, range: 3.4, cooldown: 0.8, deployCost: 130, unlockShards: 120,
     spell: {
-      id: 'chainlightning', name: 'Chain Lightning', blurb: 'Tap a foe · arcs through the pack', glyph: '🌩',
+      id: 'chainlightning', name: 'Chain Squall', blurb: 'Tap a foe · arcs through the pack', glyph: '🌩',
       effect: 'chain', targeted: true, cooldown: 11, damage: 90, chainCount: 6, chainRange: 3.0, chainFalloff: 0.88,
     },
   },
   volt: {
-    id: 'volt', name: 'Volt', title: 'Tempest Rider', element: 'Storm', role: 'Control', rarity: 'rare',
-    damageType: 'Magic', glyph: '🜍', color: 0x8fbfff, accent: DARK(0x8fbfff),
-    blurb: 'A stormrider who calls a static field, stunning and slowing all it touches.',
+    id: 'volt', name: 'Fizz', title: 'Arcwhistle', element: 'Storm', role: 'Control', rarity: 'rare',
+    damageType: 'Magic', glyph: '⚗', color: 0x8fbfff, accent: DARK(0x8fbfff),
+    blurb: 'Prism maintenance-corps gnome. Ninety-nine percent sure the stasis coils are calibrated.',
     baseDamage: 18, range: 3.0, cooldown: 0.9, slowFactor: 0.6, slowDuration: 1.2, deployCost: 115, unlockShards: 80,
     spell: {
       id: 'staticfield', name: 'Static Field', blurb: 'Tap an area · stun + slow', glyph: '⚡',
@@ -138,22 +141,22 @@ export const HEROES: Record<string, HeroDef> = {
     },
   },
   aurelia: {
-    id: 'aurelia', name: 'Aurelia', title: 'Dawn Paladin', element: 'Light', role: 'Support', rarity: 'epic',
+    id: 'aurelia', name: 'Seraphine', title: 'Dawnhalo', element: 'Light', role: 'Support', rarity: 'epic',
     damageType: 'Magic', glyph: '☀', color: ELEMENT_COLOR.Light, accent: DARK(ELEMENT_COLOR.Light),
-    blurb: 'A radiant paladin whose holy nova smites foes and blesses her allies.',
+    blurb: 'Youngest Lightwarden, never failed — yet. Hold the line; the dawn is already coming.',
     baseDamage: 20, range: 2.8, cooldown: 0.95, buffDamage: 0.3, deployCost: 125, unlockShards: 120,
     spell: {
-      id: 'holynova', name: 'Holy Nova', blurb: 'Burst of light · empowers heroes', glyph: '✦',
+      id: 'holynova', name: 'Aegis of Dawn', blurb: 'Burst of light · empowers heroes', glyph: '✦',
       effect: 'novaBuff', targeted: false, cooldown: 16, damage: 110, radius: 3.0, buffMult: 1.6, buffDuration: 6,
     },
   },
   vex: {
-    id: 'vex', name: 'Vex', title: 'Shadow Assassin', element: 'Dark', role: 'DPS', rarity: 'epic',
+    id: 'vex', name: 'Nyx', title: 'the Umbral Trickster', element: 'Dark', role: 'DPS', rarity: 'epic',
     damageType: 'Pierce', glyph: '🗡', color: ELEMENT_COLOR.Dark, accent: DARK(ELEMENT_COLOR.Dark),
-    blurb: 'A shadowblade who executes the wounded and the strong alike.',
+    blurb: 'From the Twilight Margins. You won\'t see her coming — nobody ever does. Their loss.',
     baseDamage: 34, range: 3.0, cooldown: 0.75, deployCost: 135, unlockShards: 150,
     spell: {
-      id: 'shadowstrike', name: 'Shadow Strike', blurb: 'Tap a foe · executes the weak', glyph: '☠',
+      id: 'shadowstrike', name: 'Umbral Pounce', blurb: 'Tap a foe · executes the weak', glyph: '☠',
       effect: 'execute', targeted: true, cooldown: 10, damage: 200, executeThreshold: 0.35, executeMult: 3,
     },
   },

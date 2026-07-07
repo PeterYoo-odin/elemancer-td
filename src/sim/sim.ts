@@ -40,6 +40,11 @@ const COMBO_MAX = 6 // hard cap (also a simcheck range bound)
 const DRAFT_EVERY = 3 // offer a draft after every N cleared waves
 const PROJECTILE_SPEED = 760
 
+// ---- Morose intrusions (campaign only, deterministic, telegraphed) ----------
+const INTRUSION_WARN = 1.4 // seconds between the whisper and the grey landing
+const INTRUSION_GREY_DUR = 6 // seconds a greyed tower sleeps
+const INTRUSION_MIN_LEVEL = 1 // no intrusions on the tutorial level
+
 // ---- elemental reactions (see reactions.ts for the pair table) -------------
 const AURA_WINDOW = 4 // seconds an element tag lingers on an enemy
 const REACT_LOCK = 1.1 // per-enemy cooldown after a reaction (paces the fireworks)
@@ -126,6 +131,7 @@ export interface SimTower {
   aimAngle: number
   targeting: TargetMode
   fireFlash: number
+  greyUntil: number // Morose intrusion: while clock < greyUntil the tower sleeps
 }
 
 // A deployed hero: a CHARACTER on a build tile. Auto-attacks through the same
@@ -202,6 +208,7 @@ export type SimEvent =
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
   | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
+  | { t: 'morose'; kind: 'warn' | 'greyTower' | 'stealDraft'; towerId: number; x: number; y: number; duration: number }
 
 interface SpawnItem {
   kind: EnemyKind
@@ -258,6 +265,15 @@ export class Sim {
   draftOffer: DraftCard[] = []
   draftsTaken = 0
 
+  // Morose intrusions — planned up-front from a SEPARATE rng stream (the main
+  // rng's draw order is untouched, so pre-intrusion seeds replay identically).
+  // greyWaves: wave indices that get a mid-wave grey-a-tower moment.
+  // stealDraftOrdinal: which draft (by draftsTaken) offers 2 cards instead of 3.
+  private greyWaves = new Map<number, number>() // waveIndex -> seconds into the wave
+  private stealDraftOrdinal = -1
+  private greyPendingAt = -1 // clock time the pending grey lands (-1 = none)
+  private greyWarned = false
+
   // spells
   spellCd: Record<SpellKey, number> = { meteor: 0, freeze: 0, goldrush: 0 }
   spellMaxCd: Record<SpellKey, number> = { meteor: 0, freeze: 0, goldrush: 0 }
@@ -286,8 +302,28 @@ export class Sim {
       seenHeroes.add(p.heroId)
       this.partyDefs.push({ heroId: p.heroId, level: Math.max(1, Math.floor(p.level || 1)) })
     }
+    this.planIntrusions()
     this.buildGrid()
     this.enterPrep()
+  }
+
+  // Decide, deterministically, where Morose intrudes on this run. Balanced:
+  // never the tutorial, never more than two grey moments, the steal always
+  // leaves the player a real choice (2 cards).
+  private planIntrusions(): void {
+    if (this.config.endless) return // Ranked stays pure (and simcheck untouched)
+    const idx = this.config.level.index
+    if (idx < INTRUSION_MIN_LEVEL) return
+    const waves = this.config.level.waves.length
+    if (waves < 3) return
+    const irng = new RNG((this.seed ^ 0x51edc0de) >>> 0)
+    // one grey moment mid-level…
+    const mid = Math.min(waves - 1, 1 + Math.floor(waves / 2) + irng.int(-1, 0))
+    this.greyWaves.set(mid, irng.range(4, 9))
+    // …a second one on the harder back half of the campaign
+    if (idx >= 3) this.greyWaves.set(waves - 1, irng.range(5, 10))
+    // and from level 3 on, he takes a draft option once per run
+    if (idx >= 2) this.stealDraftOrdinal = irng.int(0, 1)
   }
 
   // ---- events -------------------------------------------------------------
@@ -430,12 +466,44 @@ export class Sim {
     }
 
     this.updateCombo(dt)
+    this.updateIntrusion()
     this.updateEnemies(dt)
     this.updateZones(dt)
     this.updateTowers(dt)
     this.updateHeroes(dt)
     this.updateProjectiles(dt)
     this.updateSpellCooldowns(dt)
+  }
+
+  // ---- Morose intrusion driver (telegraph → grey the proudest tower) -------
+  private updateIntrusion(): void {
+    if (this.greyPendingAt < 0 || this.state !== 'active') return
+    if (!this.greyWarned) {
+      if (this.clock >= this.greyPendingAt - INTRUSION_WARN) {
+        this.greyWarned = true
+        this.emit({ t: 'morose', kind: 'warn', towerId: -1, x: 360, y: 400, duration: INTRUSION_WARN })
+      }
+      return
+    }
+    if (this.clock < this.greyPendingAt) return
+    this.greyPendingAt = -1
+    this.greyWarned = false
+    // target the strongest awake tower — the one the player is proudest of
+    let best: SimTower | null = null
+    let bestDps = -1
+    for (const t of this.towers) {
+      if (!t.active || t.greyUntil > this.clock) continue
+      const dps = this.effDps(t)
+      if (dps > bestDps) { bestDps = dps; best = t }
+    }
+    if (!best) return // nothing to grey — mercy by vacancy
+    best.greyUntil = this.clock + INTRUSION_GREY_DUR
+    this.emit({ t: 'morose', kind: 'greyTower', towerId: best.id, x: best.x, y: best.y, duration: INTRUSION_GREY_DUR })
+  }
+
+  /** view helper: is this tower currently greyed by a Morose intrusion? */
+  towerGreyed(t: SimTower): boolean {
+    return t.greyUntil > this.clock
   }
 
   // How much of the level's colour the player has painted back (0 = fully Greyed,
@@ -512,6 +580,13 @@ export class Sim {
     }
     this.state = 'active'
     this.buildSpawnQueue()
+    // arm this wave's planned Morose moment (if any)
+    const greyAt = this.greyWaves.get(this.waveIndex)
+    if (greyAt !== undefined) {
+      this.greyWaves.delete(this.waveIndex)
+      this.greyPendingAt = this.clock + greyAt
+      this.greyWarned = false
+    }
     return bonus
   }
 
@@ -549,6 +624,12 @@ export class Sim {
   private enterDraft(): void {
     this.state = 'draft'
     this.draftOffer = this.rng.sample(DRAFT_POOL, 3)
+    // Morose steals one option from the planned draft — a choice still remains.
+    if (!this.config.endless && this.draftsTaken === this.stealDraftOrdinal && this.draftOffer.length === 3) {
+      this.stealDraftOrdinal = -2 // spent
+      this.draftOffer = this.draftOffer.slice(0, 2)
+      this.emit({ t: 'morose', kind: 'stealDraft', towerId: -1, x: 360, y: 400, duration: 0 })
+    }
     this.emit({ t: 'banner', msg: 'CHOOSE A POWER', color: 0xc06bff })
   }
 
@@ -719,6 +800,7 @@ export class Sim {
       t = {
         id: this.nextId++, active: false, def, kind, level: 0, branch: -1, col, row,
         x: cc.x, y: cc.y, cd: 0, buffDmg: 1, buffRng: 1, aimAngle: 0, targeting: def.defaultTargeting, fireFlash: 0,
+        greyUntil: 0,
       }
       this.towers.push(t)
     }
@@ -737,6 +819,7 @@ export class Sim {
     t.aimAngle = 0
     t.targeting = def.defaultTargeting
     t.fireFlash = 0
+    t.greyUntil = 0
     this.occupied[row][col] = t
     this.recomputeBuffs()
     this.emit({ t: 'place', x: cc.x, y: cc.y, color: def.color, radius: this.effRange(t) })
@@ -924,6 +1007,7 @@ export class Sim {
     for (const t of this.towers) {
       if (!t.active) continue
       if (t.fireFlash > 0) t.fireFlash = Math.max(0, t.fireFlash - dt)
+      if (t.greyUntil > this.clock) continue // Morose greyed it: no aura, no shots
       const range = this.effRange(t)
       t.cd -= dt
 

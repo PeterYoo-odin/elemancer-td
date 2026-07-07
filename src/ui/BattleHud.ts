@@ -271,6 +271,12 @@ const CSS = `
   22%{ opacity:1; transform:translateX(-50%) scale(1); letter-spacing:6px; }
   78%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-24px) scale(.96); } }
 
+/* Morose intrusion veil: the world's edges drain grey for a beat */
+.eld-morose { position:absolute; inset:0; pointer-events:none; z-index:29; opacity:0;
+  background: radial-gradient(115% 95% at 50% 45%, transparent 42%, rgba(128,124,146,.52) 100%);
+  transition: opacity .5s ease; }
+.eld-morose.on { opacity:1; }
+
 /* flying coins (world kill → gold counter) */
 .eld-coin { position:absolute; width:16px; height:16px; border-radius:50%; z-index:31; pointer-events:none;
   background:radial-gradient(circle at 35% 30%, #fff2b0, #ffd54a 60%, #c89600); box-shadow:0 0 8px rgba(255,213,74,.9); }
@@ -844,6 +850,20 @@ export class BattleHud {
     this.fxLayer.append(d)
     this.reactEl = d
     window.setTimeout(() => { if (this.reactEl === d) this.reactEl = null; d.remove() }, 1050)
+  }
+
+  // Morose intrusion: a grey vignette breathes in and back out (telegraph + landing)
+  private moroseEl: HTMLElement | null = null
+  moroseVeil(seconds: number): void {
+    if (!this.moroseEl) {
+      this.moroseEl = el('div', 'eld-morose')
+      this.fxLayer.append(this.moroseEl)
+    }
+    const d = this.moroseEl
+    d.classList.remove('on')
+    void d.offsetWidth
+    d.classList.add('on')
+    window.setTimeout(() => d.classList.remove('on'), Math.max(400, seconds * 1000))
   }
 
   flash(color: number, alpha = 0.45, dur = 240): void {

@@ -90,6 +90,8 @@ interface TowerSlot {
   phase: number // per-tower idle sway phase
   turretY0: number // turret rest height (recoil/bob offsets from here)
   baseRange: number
+  greyed: boolean // Morose intrusion: frozen mid-gesture under a grey veil
+  greyVeil: THREE.Mesh | null // lazily created shroud (shared geo/mat)
 }
 
 interface ProjSlot {
@@ -997,10 +999,31 @@ export class BattleView3D {
       group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
       aimYaw: -t.aimAngle, targetYaw: -t.aimAngle, recoilT: 0, lastFireFlash: 0,
       dropT: 0.0001, dropDone: false, pulseT: 0, phase: (t.x * 13.37 + t.y * 7.77) % (Math.PI * 2), turretY0: 0, baseRange: 0,
+      greyed: false, greyVeil: null,
     }
     this.assembleTower(slot, t)
     this.scene.add(g)
     return slot
+  }
+
+  // Morose grey veil: a translucent grey shroud (shared geo/mat) that drops
+  // over a greyed tower — it reads as "asleep", not destroyed.
+  private greyVeilGeo: THREE.SphereGeometry | null = null
+  private greyVeilMat: THREE.MeshBasicMaterial | null = null
+  private setTowerVeil(s: TowerSlot, on: boolean): void {
+    if (on && !s.greyVeil) {
+      if (!this.greyVeilGeo || !this.greyVeilMat) {
+        this.greyVeilGeo = new THREE.SphereGeometry(0.85, 12, 10)
+        this.greyVeilMat = new THREE.MeshBasicMaterial({ color: 0x8b8698, transparent: true, opacity: 0.32, depthWrite: false })
+        this.disposables.push(this.greyVeilGeo, this.greyVeilMat)
+      }
+      const m = new THREE.Mesh(this.greyVeilGeo, this.greyVeilMat)
+      m.position.y = 0.95
+      m.scale.set(1, 1.4, 1)
+      s.group.add(m)
+      s.greyVeil = m
+    }
+    if (s.greyVeil) s.greyVeil.visible = on
   }
 
   private rebuildTurret(slot: TowerSlot, t: SimTower): void {
@@ -1198,7 +1221,20 @@ export class BattleView3D {
       // fresh shot → recoil kick + light pop (fireFlash rising edge)
       if (t.fireFlash > s.lastFireFlash) s.recoilT = 0.16
       s.lastFireFlash = t.fireFlash
-      s.glow.intensity = 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
+      // Morose intrusion: grey veil drops over the tower, its glow dies; on
+      // release the colour pops back with a spark of its element.
+      const greyed = this.sim.towerGreyed(t)
+      if (greyed !== s.greyed) {
+        s.greyed = greyed
+        this.setTowerVeil(s, greyed)
+        if (greyed) {
+          this.pushRing(t.x, t.y, 60, 0x9a94b8, 0.9)
+        } else {
+          this.pushRing(t.x, t.y, 70, t.def.color, 0.9)
+          this.emitParticles(wx(t.x), GROUND + 1.0, wz(t.y), t.def.color, 14, 2.2)
+        }
+      }
+      s.glow.intensity = greyed ? 0.05 : 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
     }
     for (const [id, s] of this.towerViews) {
       if (!active.has(id)) {
@@ -1747,7 +1783,8 @@ export class BattleView3D {
       } else {
         s.turret.position.x = 0
         s.turret.position.z = 0
-        s.turret.position.y = s.turretY0 + Math.sin(this.clockT * 1.8 + s.phase) * 0.015 // idle hum
+        // greyed towers freeze mid-gesture — no idle hum under the veil
+        s.turret.position.y = s.turretY0 + (s.greyed ? 0 : Math.sin(this.clockT * 1.8 + s.phase) * 0.015)
       }
       // upgrade flourish scale-punch (decays)
       if (s.pulseT > 0) {
@@ -1762,10 +1799,12 @@ export class BattleView3D {
         s.ring.scale.setScalar(s.baseRange * (1 + Math.sin(this.clockT * 4) * 0.015))
         s.ringMat.opacity = 0.62 + Math.sin(this.clockT * 4) * 0.22
       }
-      for (const o of s.orbs) {
-        const y0 = o.userData.y0 as number
-        o.position.y = y0 + Math.sin(this.clockT * 2.2 + (o.userData.phase as number)) * 0.07
-        o.rotation.y += dt * 1.5
+      if (!s.greyed) {
+        for (const o of s.orbs) {
+          const y0 = o.userData.y0 as number
+          o.position.y = y0 + Math.sin(this.clockT * 2.2 + (o.userData.phase as number)) * 0.07
+          o.rotation.y += dt * 1.5
+        }
       }
     }
 

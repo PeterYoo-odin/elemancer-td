@@ -14,6 +14,11 @@ import { BattleView3D } from '../three/BattleView3D'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
+import { barkEngine } from '../game/barks'
+import { showBark, dismissBark } from '../ui/barkUi'
+import { unlockCodex } from '../game/codex'
+import { realmForLevel } from '../game/levels'
+import { playMoroseHush } from '../ui/sfx'
 
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
@@ -52,6 +57,12 @@ export class BattleScene extends Phaser.Scene {
   // as the player clears it (CSS saturate filter on the 3D canvas — cheap, GPU-composited).
   private greySat = -1 // current smoothed saturation (-1 = uninitialised)
   private greyBloomT = 0 // victory colour-bloom timer
+
+  // barks: character voice on semantic events (engine handles all rate limits)
+  private partyIds: string[] = []
+  private lowLivesBarked = false
+  private pairTimer = 0
+  private barkNow(): number { return performance.now() / 1000 }
 
   constructor() { super('Battle') }
 
@@ -92,6 +103,10 @@ export class BattleScene extends Phaser.Scene {
     this.reactCalloutCd = 0
     this.greySat = -1
     this.greyBloomT = 0
+    this.partyIds = party.map((p) => p.heroId)
+    this.lowLivesBarked = false
+    window.clearTimeout(this.pairTimer)
+    barkEngine.resetBattle()
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -160,6 +175,12 @@ export class BattleScene extends Phaser.Scene {
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
     this.updateGreying(dt)
+
+    // danger line: one in-voice rally when lives first dip below 35%
+    if (!this.lowLivesBarked && this.sim.lives > 0 && this.sim.lives < this.sim.startLives * 0.35) {
+      this.lowLivesBarked = true
+      this.tryBark('lowLives')
+    }
 
     this.view.syncFrom(this.selectedId)
     this.view.render(dt)
@@ -314,7 +335,29 @@ export class BattleScene extends Phaser.Scene {
     const cost = this.sim.heroDeployCost(this.buildHeroId)
     if (this.sim.gold < cost) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
     const h = this.sim.deployHero(this.buildHeroId, col, row)
-    if (h) this.exitDeploy() // one deploy per hero → drop out of deploy mode
+    if (h) {
+      this.exitDeploy() // one deploy per hero → drop out of deploy mode
+      if (unlockCodex('hero-' + h.heroId)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+      this.tryBark('deploy', h.heroId)
+      // party-composition banter: once a second hero stands on the field, the
+      // squad might have something to say to each other (both must be fielded)
+      const fielded = this.sim.deployedHeroes().map((d) => d.heroId)
+      if (fielded.length >= 2) {
+        window.clearTimeout(this.pairTimer)
+        this.pairTimer = window.setTimeout(() => {
+          if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
+          const bark = barkEngine.pick('pair', { party: fielded }, this.barkNow())
+          if (bark) showBark(bark)
+        }, 2600)
+      }
+    }
+  }
+
+  // ask the engine for a line; it may say "not now" (rate limits) — that's fine
+  private tryBark(trigger: Parameters<typeof barkEngine.pick>[0], heroId?: string): void {
+    const realmId = this.endless ? undefined : realmForLevel(this.levelId).id
+    const bark = barkEngine.pick(trigger, { party: this.partyIds, heroId, realmId }, this.barkNow())
+    if (bark) showBark(bark)
   }
 
   private onSpellButton(key: SpellKey): void {
@@ -444,6 +487,7 @@ export class BattleScene extends Phaser.Scene {
       }
       this.hud.flash(0x2ff7c3, 0.4)
       this.hud.showResult({ win: true, title: 'VICTORY!', color: 0x2ff7c3, stars, coins: result.coins, diamonds: result.diamonds, shards, unlocked, endless: this.endless })
+      this.tryBark('victory') // post-victory beat: Color Bloom + one line over the card
     } else {
       this.hud.flash(0xff3b6b, 0.5)
       if (this.endless) {
@@ -452,6 +496,7 @@ export class BattleScene extends Phaser.Scene {
         this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true })
       } else {
         this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false })
+        this.tryBark('defeat') // Morose condoles — he always does
       }
     }
   }
@@ -476,7 +521,7 @@ export class BattleScene extends Phaser.Scene {
       }
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22 }
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.tryBark('kill') }
         break
       case 'shieldBreak':
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
@@ -506,6 +551,7 @@ export class BattleScene extends Phaser.Scene {
       case 'combo':
         this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), true, 1.1)
         if (ev.milestone) this.hud.flash(comboHue(ev.count), 0.25)
+        if (ev.milestone && ev.count >= 10) this.tryBark('kill')
         break
       case 'heal':
         if (ev.radius > 0) this.view.fxAoe(ev.x, ev.y, ev.radius, 0x6bffb0, 0.5)
@@ -551,6 +597,22 @@ export class BattleScene extends Phaser.Scene {
           this.reactCalloutCd = 0.55
           this.hitstopT = Math.max(this.hitstopT, 0.06)
         }
+        if (unlockCodex('field-reactions')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+        this.tryBark('reaction')
+        break
+      case 'morose':
+        // THE signature moment: Morose reaches into the battle and condoles.
+        if (ev.kind === 'warn') {
+          this.hud.moroseVeil(ev.duration + 0.6)
+          playMoroseHush()
+        } else if (ev.kind === 'greyTower') {
+          this.hud.moroseVeil(ev.duration * 0.6)
+          this.tryBark('moroseGrey')
+          if (unlockCodex('field-intrusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+        } else {
+          playMoroseHush()
+          this.tryBark('moroseSteal')
+        }
         break
       case 'banner':
         this.hud.banner(ev.msg, ev.color)
@@ -568,6 +630,8 @@ export class BattleScene extends Phaser.Scene {
     this.view?.canvas.removeEventListener('pointerdown', this.onDown)
     this.view?.canvas.removeEventListener('pointermove', this.onMove)
     window.removeEventListener('resize', this.onResize)
+    window.clearTimeout(this.pairTimer)
+    dismissBark()
     this.hud?.dispose()
     this.view?.dispose()
   }

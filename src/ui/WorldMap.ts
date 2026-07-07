@@ -10,7 +10,13 @@
 import { LEVELS, REALMS, isLevelUnlocked, realmForLevel, type LevelDef, type RealmDef } from '../game/levels'
 import { economy } from '../game/economy'
 import { appSettings } from './settings'
-import { playUiTick } from './sfx'
+import { playUiTick, playNodeStinger, playDiscovery } from './sfx'
+import { barkEngine } from '../game/barks'
+import { showBark, dismissBark, speakerInfo } from './barkUi'
+import { REALM_ENTRY, LEVEL_STORY } from '../game/story'
+import { unlockCodex, lockedMoroseFragments, codexFreshCount } from '../game/codex'
+import { CodexPanel } from './CodexPanel'
+import { heroById } from '../game/heroes'
 
 export interface WorldMapHandlers {
   onPlay(levelId: string): void
@@ -26,6 +32,8 @@ const START_H = 190 // the Haven pad where the journey begins
 
 const REACH_KEY = 'elemancer_map_reach_v1' // realms coloured at last visit
 const SEEN_KEY = 'elemancer_realms_seen_v1' // realm banners already shown
+const CARAVAN_KEY = 'chromancer_caravan_v1' // node the caravan last stood on
+const DISC_KEY = 'chromancer_discoveries_v1' // road discoveries already claimed
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII']
 
@@ -242,6 +250,73 @@ const CSS = `
 .ewm-btap { margin-top: 18px; font-size: 10.5px; font-weight: 800; letter-spacing: .32em; margin-right: -.32em;
   color: #9fe8ff; animation: ewmTapPulse 1.5s ease-in-out infinite; }
 @keyframes ewmTapPulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* ---- realm-entry story lines (3 speakers, on the banner card) ---- */
+.ewm-blines { margin-top: 14px; display: flex; flex-direction: column; gap: 9px; text-align: left; }
+.ewm-bline { font-size: 13px; line-height: 1.4; color: #d9cff5; }
+.ewm-bline .sp { font-weight: 900; font-size: 10.5px; letter-spacing: .1em; margin-right: 6px; }
+
+/* ---- hero caravan (the squad walks the road between levels) ---- */
+.ewm-cara { position: absolute; z-index: 2; transform: translate(-50%, -50%); display: flex; align-items: center;
+  pointer-events: none; filter: drop-shadow(0 3px 4px rgba(0,0,0,.55)); }
+.ewm-cara .cc { width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; font-size: 13px;
+  background: radial-gradient(circle at 35% 28%, #fff8ea, var(--c, #b06bff) 72%);
+  border: 2px solid rgba(255,255,255,.75); margin-left: -8px; }
+.ewm-cara .cc:first-child { margin-left: 0; }
+.ewm-cara .cc.trail { margin-left: 3px; transform: translateY(3px) scale(.9); }
+.ewm-cara.walking .cc { animation: ewmCaraBob .42s ease-in-out infinite alternate; }
+.ewm-cara.walking .cc:nth-child(2) { animation-delay: .1s; }
+.ewm-cara.walking .cc:nth-child(3) { animation-delay: .2s; }
+@keyframes ewmCaraBob { from { transform: translateY(0); } to { transform: translateY(-5px); } }
+.ewm.ewm-reduced .ewm-cara.walking .cc { animation: none; }
+
+/* ---- pre-level card (name + flavor + one bark; one tap to battle) ---- */
+.ewm-pre { position: absolute; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center;
+  padding: 26px; background: rgba(4,2,12,.72); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  animation: ewmFade .25s ease both; cursor: pointer; }
+.ewm-pre.hide { opacity: 0; transition: opacity .22s ease; pointer-events: none; }
+.ewm-pcard { position: relative; width: min(400px, 94vw); border-radius: 22px; text-align: center; padding: 22px 22px 20px;
+  background: linear-gradient(180deg, #1d1338 0%, #130c28 100%);
+  border: 1px solid color-mix(in srgb, var(--a) 55%, rgba(255,255,255,.1));
+  box-shadow: 0 30px 80px rgba(0,0,0,.7), 0 0 40px color-mix(in srgb, var(--a) 22%, transparent);
+  animation: ewmCard .4s cubic-bezier(.22,1.4,.36,1) both; }
+.ewm-px { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: #cfc2f0;
+  font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+.ewm-pord { font-size: 10px; font-weight: 700; letter-spacing: .4em; margin-right: -.4em;
+  color: color-mix(in srgb, var(--a) 60%, #9a8fc0); }
+.ewm-pname { margin-top: 6px; font-family: 'Cinzel', Georgia, serif; font-weight: 900;
+  font-size: clamp(23px, 6.4vw, 30px); letter-spacing: .06em; color: var(--a);
+  text-shadow: 0 0 20px color-mix(in srgb, var(--a) 45%, transparent), 0 3px 10px rgba(0,0,0,.6); }
+.ewm-pflavor { margin-top: 10px; font-size: 13.5px; line-height: 1.5; color: #d9cff5; font-style: italic; }
+.ewm-pbark { margin-top: 12px; font-size: 13px; line-height: 1.45; color: #cfc2f0; text-align: left;
+  padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); }
+.ewm-pbark .sp { font-weight: 900; font-size: 10.5px; letter-spacing: .1em; margin-right: 6px; }
+.ewm-pgo { margin-top: 16px; display: inline-block; padding: 13px 38px; border-radius: 16px; border: 1px solid rgba(255,255,255,.28);
+  font: inherit; font-size: 17px; font-weight: 900; letter-spacing: .06em; color: #fff; cursor: pointer;
+  background: linear-gradient(180deg, #3ad07a, #1f9a54); box-shadow: 0 8px 22px rgba(31,154,84,.45); }
+.ewm-pgo:active { transform: scale(.95); }
+
+/* ---- small discovery (a find on the road) ---- */
+.ewm-disc { position: absolute; left: 50%; bottom: calc(120px + env(safe-area-inset-bottom)); z-index: 10;
+  transform: translateX(-50%) translateY(10px); opacity: 0; width: min(380px, 90vw);
+  display: flex; gap: 12px; align-items: flex-start; padding: 13px 16px; border-radius: 16px; cursor: pointer;
+  background: linear-gradient(180deg, rgba(46,34,80,.97), rgba(24,15,48,.97));
+  border: 1px solid rgba(255,213,106,.45); box-shadow: 0 10px 30px rgba(0,0,0,.6), 0 0 24px rgba(255,213,106,.15);
+  transition: opacity .25s ease, transform .25s ease; }
+.ewm-disc.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ewm-disc .di { flex: 0 0 auto; font-size: 26px; filter: drop-shadow(0 0 8px rgba(255,213,106,.6)); }
+.ewm-disc .dt { font-size: 11px; font-weight: 900; letter-spacing: .16em; color: #ffe08a; }
+.ewm-disc .dx { margin-top: 3px; font-size: 13px; line-height: 1.4; color: #d9cff5; }
+
+/* ---- codex button (top bar) ---- */
+.ewm-codex { position: relative; display: flex; align-items: center; justify-content: center; width: 42px; height: 38px;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,.16); font-size: 17px; cursor: pointer;
+  background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.03)); box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.ewm-codex:active { transform: scale(.94); }
+.ewm-codex .bdg { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; border-radius: 9px;
+  display: grid; place-items: center; padding: 0 4px; font-size: 10px; font-weight: 900; color: #2a1500;
+  background: linear-gradient(180deg, #ffe08a, #ffb02f); border: 1px solid rgba(255,255,255,.6); }
 `
 
 let cssInjected = false
@@ -278,6 +353,10 @@ export class WorldMap {
   private trackH: number
   private leaving = false
   private timers: number[] = []
+  private caravanEl: HTMLElement | null = null
+  private walkRaf = 0
+  private walkSkipFn: (() => void) | null = null
+  private codexOpen = false
 
   constructor(private handlers: WorldMapHandlers) {
     injectCss()
@@ -296,12 +375,14 @@ export class WorldMap {
           ${this.trailSvg()}
           ${this.nodesHtml()}
           ${this.markerHtml()}
+          ${this.caravanHtml()}
         </div>
       </div>
       <div class="ewm-vig"></div>
       <div class="ewm-top">
         <button class="ewm-back" data-nav="menu">‹ MENU</button>
         <div class="ewm-title">WORLD MAP</div>
+        <button class="ewm-codex" data-codex aria-label="The Cadet's Sketchbook">📖${codexFreshCount() > 0 ? `<span class="bdg">${codexFreshCount()}</span>` : ''}</button>
         <div class="ewm-starchip">★ ${economy.totalStars()}/${LEVELS.length * 3}</div>
       </div>
       <div class="ewm-toast" data-toast></div>
@@ -311,17 +392,39 @@ export class WorldMap {
 
     this.root.addEventListener('click', (e) => {
       if (this.leaving) return
+      // a tap while the caravan walks = "get on with it" (skip to arrival)
+      if (this.walkSkipFn) {
+        this.walkSkipFn()
+        return
+      }
       const target = e.target as HTMLElement
       if (target.closest('[data-nav]')) {
         playUiTick()
         this.leave(() => this.handlers.onBack())
         return
       }
+      if (target.closest('[data-codex]')) {
+        this.openCodex()
+        return
+      }
       const nodeEl = target.closest<HTMLElement>('.ewm-node')
       if (nodeEl) this.onNodeTap(nodeEl)
     })
+    this.caravanEl = this.root.querySelector<HTMLElement>('[data-caravan]')
 
     this.reveal()
+  }
+
+  private openCodex(): void {
+    if (this.codexOpen) return
+    playUiTick()
+    this.codexOpen = true
+    new CodexPanel(() => {
+      this.codexOpen = false
+      // clear the "new pages" badge once the book has been opened
+      const btn = this.root.querySelector<HTMLElement>('[data-codex] .bdg')
+      btn?.remove()
+    })
   }
 
   // ---- model -------------------------------------------------------------
@@ -448,6 +551,131 @@ export class WorldMap {
       </div>`
   }
 
+  // ---- hero caravan --------------------------------------------------------
+  // The squad as tiny stacked chibi heads. Nyx (if in the party) trails behind —
+  // she insists she was never with the group in the first place.
+  private caravanHtml(): string {
+    const party = economy.party()
+    const lead = party.filter((id) => id !== 'vex')
+    const chips = lead
+      .map((id) => {
+        const def = heroById(id)
+        if (!def) return ''
+        return `<span class="cc" style="--c:#${(def.color & 0xffffff).toString(16).padStart(6, '0')}">${def.glyph}</span>`
+      })
+      .join('')
+    const nyx = party.includes('vex')
+      ? `<span class="cc trail" style="--c:#${(heroById('vex')!.color & 0xffffff).toString(16).padStart(6, '0')}">${heroById('vex')!.glyph}</span>`
+      : ''
+    const fallback = party.length === 0 ? '<span class="cc" style="--c:#ffd76a">⚑</span>' : ''
+    const cur = this.nodes[this.currentIdx]
+    return `<div class="ewm-cara" data-caravan style="left:${cur.x}%;top:${cur.y + 46}px">${chips}${nyx}${fallback}</div>`
+  }
+
+  private placeCaravan(xPct: number, yPx: number): void {
+    if (!this.caravanEl) return
+    this.caravanEl.style.left = `${xPct}%`
+    this.caravanEl.style.top = `${yPx}px`
+  }
+
+  // Walk the caravan along the road curve from one node to the next. ONE bark
+  // fires mid-walk; arrival gets a stinger (and maybe a Small Discovery).
+  // Tapping anywhere skips straight to the arrival beat.
+  private caravanWalk(fromIdx: number, toIdx: number, onDone: () => void): void {
+    const a = this.nodes[fromIdx]
+    const b = this.nodes[toIdx]
+    if (!a || !b || !this.caravanEl) { onDone(); return }
+    const el = this.caravanEl
+    el.classList.add('walking')
+    const dy = (a.y - b.y) * 0.45 // same control points as the drawn trail
+    const dur = appSettings.reducedMotion() ? 10 : 1900
+    const start = performance.now()
+    let barked = false
+    const party = economy.party()
+
+    const sample = (t: number): { x: number; y: number } => {
+      const u = 1 - t
+      const x = u * u * u * a.x + 3 * u * u * t * a.x + 3 * u * t * t * b.x + t * t * t * b.x
+      const y = u * u * u * a.y + 3 * u * u * t * (a.y - dy) + 3 * u * t * t * (b.y + dy) + t * t * t * b.y
+      return { x, y }
+    }
+
+    const finish = (): void => {
+      this.walkSkipFn = null
+      window.cancelAnimationFrame(this.walkRaf)
+      el.classList.remove('walking')
+      this.placeCaravan(b.x, b.y + 46)
+      playNodeStinger()
+      onDone()
+    }
+    this.walkSkipFn = () => {
+      dismissBark()
+      finish()
+    }
+
+    const tick = (now: number): void => {
+      const t = Math.min(1, (now - start) / dur)
+      const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2 // easeInOutQuad
+      const p = sample(e)
+      this.placeCaravan(p.x, p.y + 26)
+      if (!barked && t >= 0.32) {
+        barked = true
+        // one voice on the road: banter if a pair travels together, else the walk pool
+        const bark =
+          barkEngine.pick('pair', { party }, performance.now() / 1000) ??
+          barkEngine.pick('walk', { party }, performance.now() / 1000)
+        if (bark) showBark(bark, { layout: 'map' })
+      }
+      if (t >= 1) { finish(); return }
+      this.walkRaf = window.requestAnimationFrame(tick)
+    }
+    this.walkRaf = window.requestAnimationFrame(tick)
+  }
+
+  // ---- small discoveries on the road (1-in-4 walks, deterministic per node) --
+  private discoveryFor(nodeIdx: number): { icon: string; title: string; text: string } | null {
+    const node = this.nodes[nodeIdx]
+    if (!node) return null
+    if ((node.lvl.index * 7 + 5) % 4 !== 0) return null // ~1 walk in 4
+    const claimed = readJson<string[]>(DISC_KEY, [])
+    const key = `walk-${node.lvl.id}`
+    if (claimed.includes(key)) return null
+    writeJson(DISC_KEY, [...claimed, key])
+
+    // a torn page of Morose's story first; once those run dry, a coin cache
+    const frag = lockedMoroseFragments()[0]
+    if (frag) {
+      const entry = unlockCodex(frag)
+      if (entry) {
+        playDiscovery()
+        return { icon: '📜', title: 'A TORN PAGE', text: `“${entry.title}” added to the Sketchbook.` }
+      }
+    }
+    const coins = 20 + node.lvl.index * 6
+    economy.addCoins(coins)
+    playDiscovery()
+    return { icon: '🪙', title: 'A HIDDEN CACHE', text: `Someone buried hope here. +${coins} coins.` }
+  }
+
+  private showDiscovery(d: { icon: string; title: string; text: string }, onDone: () => void): void {
+    const el = document.createElement('div')
+    el.className = 'ewm-disc'
+    el.innerHTML = `<span class="di">${d.icon}</span><span><div class="dt">${d.title}</div><div class="dx"></div></span>`
+    el.querySelector('.dx')!.textContent = d.text
+    this.root.appendChild(el)
+    requestAnimationFrame(() => el.classList.add('show'))
+    let closed = false
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      el.classList.remove('show')
+      window.setTimeout(() => el.remove(), 260)
+      onDone()
+    }
+    el.addEventListener('click', (e) => { e.stopPropagation(); close() })
+    this.at(4200, close)
+  }
+
   // ---- reveal: centering, the recolor moment, realm banner ----------------
 
   private at(ms: number, fn: () => void): void {
@@ -478,23 +706,54 @@ export class WorldMap {
 
     const cur = this.nodes[this.currentIdx]
     const bloomed = prev !== null && colored > prev
-    if (bloomed && this.currentIdx > 0) {
-      // Arrive at the node just cleared, watch the colour return, then travel on.
-      this.centerOn(this.nodes[this.currentIdx - 1].y, false)
-      this.at(900, () => this.centerOn(cur.y, true))
-    } else {
-      this.centerOn(cur.y, false)
+
+    // Caravan journey: if the squad advanced a node since the last visit, it
+    // WALKS the road there (skippable) — the map is the story, not a menu.
+    const prevNode = readJson<number | null>(CARAVAN_KEY, null)
+    writeJson(CARAVAN_KEY, this.currentIdx)
+    const fromIdx = this.currentIdx - 1
+    const walk = prevNode !== null && prevNode < this.currentIdx && fromIdx >= 0
+
+    const seen = readJson<string[]>(SEEN_KEY, [])
+    const wantBanner = !seen.includes(cur.realm.id)
+    const arrival = (): void => {
+      // 1-in-4 walks: a Small Discovery waits at the roadside
+      const disc = walk ? this.discoveryFor(this.currentIdx) : null
+      if (disc) this.showDiscovery(disc, () => { if (wantBanner) this.at(250, () => this.showBanner(cur.realm, cur.realmIdx)) })
+      else if (wantBanner) this.at(400, () => this.showBanner(cur.realm, cur.realmIdx))
     }
 
-    // First visit to a realm → its story banner (skippable flavor).
-    const seen = readJson<string[]>(SEEN_KEY, [])
-    if (!seen.includes(cur.realm.id)) {
-      this.at(bloomed ? 1900 : 450, () => this.showBanner(cur.realm, cur.realmIdx))
+    if (walk) {
+      // arrive at the cleared node, watch the colour return, then travel on foot
+      this.placeCaravan(this.nodes[fromIdx].x, this.nodes[fromIdx].y + 46)
+      this.centerOn(this.nodes[fromIdx].y, false)
+      this.at(bloomed ? 900 : 450, () => this.centerOn(cur.y, true))
+      this.at(bloomed ? 1000 : 550, () => this.caravanWalk(fromIdx, this.currentIdx, arrival))
+    } else {
+      this.centerOn(cur.y, false)
+      if (wantBanner) this.at(450, () => this.showBanner(cur.realm, cur.realmIdx))
     }
   }
 
   private showBanner(realm: RealmDef, realmIdx: number): void {
     if (this.leaving) return
+    // realm-entry codex pages (the Sketchbook fills in as the journey deepens)
+    unlockCodex('world-greying')
+    if (realmIdx >= 1) unlockCodex('world-maddervane')
+    if (realmIdx >= 2) unlockCodex('world-keepers')
+
+    // the realm-entry moment: Maddervane names the wound, Morose taunts,
+    // the realm's hero answers (3 lines, one tap, never gates anything)
+    const story = REALM_ENTRY[realm.id]
+    const linesHtml = story
+      ? `<div class="ewm-blines">${story
+          .map((l) => {
+            const s = speakerInfo(l.speaker)
+            return `<div class="ewm-bline"><span class="sp" style="color:${s.color}">${s.glyph} ${s.name}</span>${l.text}</div>`
+          })
+          .join('')}</div>`
+      : `<div class="ewm-bintro">“${realm.intro}”</div>`
+
     const el = document.createElement('div')
     el.className = 'ewm-banner'
     el.style.setProperty('--a', realm.ui.accent)
@@ -505,7 +764,7 @@ export class WorldMap {
           <div class="ewm-bemoji">${realm.emoji}</div>
           <div class="ewm-bord">REALM ${ROMAN[realmIdx]} · ${realm.element.toUpperCase()}</div>
           <div class="ewm-bname">${realm.name}</div>
-          <div class="ewm-bintro">“${realm.intro}”</div>
+          ${linesHtml}
           <div class="ewm-btap">TAP TO CONTINUE</div>
         </div>
       </div>`
@@ -534,7 +793,48 @@ export class WorldMap {
       return
     }
     playUiTick()
-    this.leave(() => this.handlers.onPlay(levelId))
+    this.showPreLevel(levelId)
+  }
+
+  // Pre-level card: name + one flavor line + one contextual bark. ANY tap on it
+  // goes to battle (✕ backs out) — story never stands between you and Play.
+  private showPreLevel(levelId: string): void {
+    const node = this.nodes.find((n) => n.lvl.id === levelId)
+    if (!node) {
+      this.leave(() => this.handlers.onPlay(levelId))
+      return
+    }
+    const story = LEVEL_STORY[levelId]
+    const sp = story ? speakerInfo(story.bark.speaker) : null
+    const el = document.createElement('div')
+    el.className = 'ewm-pre'
+    el.innerHTML = `
+      <div class="ewm-pcard" style="--a:${node.realm.ui.accent}">
+        <button class="ewm-px" data-x aria-label="Back">✕</button>
+        <div class="ewm-pord">LEVEL ${node.lvl.index + 1} · ${node.realm.name.toUpperCase()}</div>
+        <div class="ewm-pname">${node.lvl.name}</div>
+        ${story ? `<div class="ewm-pflavor">“${story.flavor}”</div>` : ''}
+        ${story && sp ? `<div class="ewm-pbark"><span class="sp" style="color:${sp.color}">${sp.glyph} ${sp.name}</span><span data-bark></span></div>` : ''}
+        <button class="ewm-pgo">⚔ TO BATTLE</button>
+      </div>`
+    if (story) {
+      const t = el.querySelector('[data-bark]')
+      if (t) t.textContent = story.bark.text
+    }
+    el.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const target = e.target as HTMLElement
+      if (target.closest('[data-x]')) {
+        playUiTick()
+        el.classList.add('hide')
+        window.setTimeout(() => el.remove(), 220)
+        return
+      }
+      playUiTick()
+      el.classList.add('hide')
+      this.leave(() => this.handlers.onPlay(levelId))
+    })
+    this.root.appendChild(el)
   }
 
   private toastTimer = 0
@@ -557,6 +857,9 @@ export class WorldMap {
   destroy(): void {
     for (const id of this.timers) window.clearTimeout(id)
     window.clearTimeout(this.toastTimer)
+    window.cancelAnimationFrame(this.walkRaf)
+    this.walkSkipFn = null
+    dismissBark()
     this.root.remove()
   }
 }
