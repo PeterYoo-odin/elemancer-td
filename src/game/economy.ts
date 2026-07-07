@@ -7,7 +7,7 @@
 //   DIAMONDS = premium but fully EARNABLE FREE, only slowly (first-clears, new
 //              stars, a daily bonus). No real-money purchase this slice.
 
-import { loadSave, writeSave, type SaveData } from './save'
+import { loadSave, writeSave, type SaveData, type SavedHero } from './save'
 import {
   aggregateMetaModifiers,
   aggregateRunModifiers,
@@ -16,6 +16,8 @@ import {
   type RunModifiers,
   type Currency,
 } from './workshop'
+import { STARTER_HEROES, MAX_PARTY, heroById } from './heroes'
+import { MAX_HERO_LEVEL, clampLevel, xpForLevel, shardCostForLevel } from './heroProgress'
 
 const IDLE_CAP_MS = 8 * 60 * 60 * 1000 // 8 hours
 const DAILY_DIAMONDS = 2
@@ -179,6 +181,110 @@ class Economy {
     this.data.diamonds += DAILY_DIAMONDS
     this.save()
     return DAILY_DIAMONDS
+  }
+
+  // ======================================================================
+  //  HEROES — free-currency progression (shards + XP), loadout, unlocks.
+  //  No real-money input: shards come only from play; XP from fielding heroes.
+  // ======================================================================
+  get heroShards(): number {
+    return this.data.heroShards
+  }
+  addShards(n: number): void {
+    if (n <= 0) return
+    this.data.heroShards += Math.round(n)
+    this.save()
+  }
+
+  // Persisted state for a hero, defaulting to a locked level-1 for unknown ids.
+  heroState(id: string): SavedHero {
+    const s = this.data.heroes[id]
+    if (s) return { level: clampLevel(s.level), xp: Math.max(0, s.xp), unlocked: s.unlocked }
+    return { level: 1, xp: 0, unlocked: STARTER_HEROES.includes(id) }
+  }
+  isHeroUnlocked(id: string): boolean {
+    return this.heroState(id).unlocked
+  }
+
+  private writeHero(id: string, s: SavedHero): void {
+    this.data.heroes[id] = { level: clampLevel(s.level), xp: Math.max(0, Math.floor(s.xp)), unlocked: s.unlocked }
+    this.save()
+  }
+
+  // Spend shards to unlock a locked hero. Returns true on success.
+  unlockHero(id: string): boolean {
+    const def = heroById(id)
+    if (!def) return false
+    if (this.isHeroUnlocked(id)) return false
+    if (this.data.heroShards < def.unlockShards) return false
+    this.data.heroShards -= def.unlockShards
+    this.writeHero(id, { level: 1, xp: 0, unlocked: true })
+    return true
+  }
+
+  // Level a hero up. Prefers the FREE xp path (a full bar); otherwise spends shards.
+  // Returns 'xp' | 'shards' on success, or null if it can't (maxed / not enough).
+  levelUpHero(id: string): 'xp' | 'shards' | null {
+    if (!this.isHeroUnlocked(id)) return null
+    const s = this.heroState(id)
+    if (s.level >= MAX_HERO_LEVEL) return null
+    const need = xpForLevel(s.level)
+    if (s.xp >= need) {
+      this.writeHero(id, { level: s.level + 1, xp: s.xp - need, unlocked: true })
+      return 'xp'
+    }
+    const cost = shardCostForLevel(s.level)
+    if (this.data.heroShards >= cost) {
+      this.data.heroShards -= cost
+      this.writeHero(id, { level: s.level + 1, xp: s.xp, unlocked: true })
+      return 'shards'
+    }
+    return null
+  }
+
+  // Award XP to every fielded party hero + shards to the wallet (after a battle).
+  awardHeroProgress(partyIds: string[], xpEach: number, shards: number): void {
+    if (shards > 0) this.data.heroShards += Math.round(shards)
+    const gain = Math.max(0, Math.round(xpEach))
+    if (gain > 0) {
+      for (const id of partyIds) {
+        if (!this.isHeroUnlocked(id)) continue
+        const s = this.heroState(id)
+        if (s.level >= MAX_HERO_LEVEL) continue
+        this.data.heroes[id] = { level: s.level, xp: s.xp + gain, unlocked: true }
+      }
+    }
+    this.save()
+  }
+
+  // ---- loadout ----
+  // Validated party: only unlocked, known heroes, deduped, capped at MAX_PARTY.
+  party(): string[] {
+    const out: string[] = []
+    for (const id of this.data.party) {
+      if (out.length >= MAX_PARTY) break
+      if (out.includes(id)) continue
+      if (heroById(id) && this.isHeroUnlocked(id)) out.push(id)
+    }
+    return out
+  }
+  setParty(ids: string[]): void {
+    const clean: string[] = []
+    for (const id of ids) {
+      if (clean.length >= MAX_PARTY) break
+      if (!clean.includes(id) && heroById(id) && this.isHeroUnlocked(id)) clean.push(id)
+    }
+    this.data.party = clean
+    this.save()
+  }
+  // Toggle a hero in/out of the party (respecting the cap). Returns the new party.
+  toggleParty(id: string): string[] {
+    const cur = this.party()
+    const idx = cur.indexOf(id)
+    if (idx >= 0) cur.splice(idx, 1)
+    else if (cur.length < MAX_PARTY && this.isHeroUnlocked(id)) cur.push(id)
+    this.setParty(cur)
+    return this.party()
   }
 
   // ---- tower unlocks ----

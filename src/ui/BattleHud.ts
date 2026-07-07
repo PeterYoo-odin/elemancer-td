@@ -3,10 +3,11 @@
 // forwards taps back through callbacks. The root is pointer-events:none so board
 // taps fall through to the canvas; only real controls opt back in (.pe).
 
-import type { Sim } from '../sim'
+import type { Sim, SimHero } from '../sim'
 import { TOWERS, TOWER_ORDER, type TowerKind } from '../game/towers'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
+import { RARITY_COLOR } from '../game/heroes'
 
 export interface HudCallbacks {
   onStart(): void
@@ -14,6 +15,7 @@ export interface HudCallbacks {
   onSpeed(): void
   onTowerButton(kind: TowerKind): void
   onSpellButton(key: SpellKey): void
+  onHeroButton(heroId: string): void // deploy a party hero, or cast its spell if fielded
   onSelectDeselect(): void // tap the "close panel" affordance
   onUpgrade(id: number): void
   onBranch(id: number, idx: number): void
@@ -30,6 +32,7 @@ export interface HudContext {
   totalWaves: number
   towerUnlocked(kind: TowerKind): boolean
   buildKind: TowerKind | null
+  buildHeroId: string | null
   selectedId: number | null
 }
 
@@ -181,6 +184,38 @@ const CSS = `
 @keyframes eldbanner { 0%{ opacity:0; transform:translateX(-50%) scale(.6);} 15%{ opacity:1; transform:translateX(-50%) scale(1);}
   80%{ opacity:1;} 100%{ opacity:0; transform:translateX(-50%) scale(1) translateY(-30px);} }
 @media (min-width:900px){ .eld-dock{ max-width:560px; left:50%; transform:translateX(-50%); border-radius:20px 20px 0 0;} }
+
+/* ---- hero bar (deploy party heroes / cast their spells) ---- */
+.eld-heroes { display:flex; gap:10px; justify-content:center; align-items:flex-end; min-height:0; }
+.eld-heroes:empty { display:none; }
+.eld-hero { position:relative; width:60px; display:flex; flex-direction:column; align-items:center; gap:3px; transition:transform .08s; }
+.eld-hero:active { transform:scale(.93); }
+.eld-hero.dim { opacity:.45; }
+.eld-hero .hport { position:relative; width:50px; height:50px; border-radius:50%; display:grid; place-items:center;
+  font-size:23px; border:3px solid; box-shadow:0 3px 10px rgba(0,0,0,.45), inset 0 2px 6px rgba(255,255,255,.28); }
+.eld-hero.sel .hport { box-shadow:0 0 0 3px rgba(255,255,255,.5), 0 4px 14px rgba(0,0,0,.5); }
+.eld-hero.ready .hport { animation:eldheropulse 1.3s ease-in-out infinite; }
+@keyframes eldheropulse { 0%,100%{ box-shadow:0 3px 10px rgba(0,0,0,.45), inset 0 2px 6px rgba(255,255,255,.28), 0 0 4px currentColor; }
+  50%{ box-shadow:0 3px 10px rgba(0,0,0,.45), inset 0 2px 6px rgba(255,255,255,.28), 0 0 16px currentColor; } }
+.eld-hero .hlvl { position:absolute; top:-5px; left:-5px; background:#160c2e; border:1px solid rgba(255,255,255,.35);
+  border-radius:9px; font-size:10px; font-weight:900; line-height:1; padding:2px 4px; color:#ffe27a; z-index:2; }
+.eld-hero .hcd { position:absolute; inset:-3px; border-radius:50%; pointer-events:none; }
+.eld-hero .hcdtxt { position:absolute; inset:0; display:grid; place-items:center; font-size:15px; font-weight:900; text-shadow:0 1px 2px #000; pointer-events:none; }
+.eld-hero .hbadge { font-size:11px; font-weight:900; line-height:1; }
+.eld-hero .hname { font-size:10px; font-weight:800; color:#e6dcff; letter-spacing:.3px; }
+
+/* ---- synergy panel (active element team bonuses) ---- */
+.eld-syn { position:absolute; left:10px; top:132px; display:flex; flex-direction:column; gap:5px; max-width:190px; z-index:21; }
+.eld-syn.hidden { display:none; }
+.eld-syn .syn-h { font-size:11px; font-weight:900; letter-spacing:1.5px; color:#c9b6ff; opacity:.9; text-shadow:0 1px 2px #000; }
+.eld-syn .syn-chip { display:flex; align-items:center; gap:6px; border:1px solid; border-radius:11px; padding:4px 9px 4px 7px;
+  background:linear-gradient(180deg, rgba(42,30,84,.94), rgba(22,14,46,.94)); box-shadow:0 3px 10px rgba(0,0,0,.4);
+  animation:eldsynin .3s cubic-bezier(.2,1.3,.5,1); }
+.eld-syn .syn-chip .si { font-size:15px; }
+.eld-syn .syn-chip .st { display:flex; flex-direction:column; line-height:1.15; }
+.eld-syn .syn-chip .sn { font-size:12px; font-weight:900; }
+.eld-syn .syn-chip .sd { font-size:10px; font-weight:700; color:#d8d0ff; opacity:.9; }
+@keyframes eldsynin { from { transform:translateX(-14px); opacity:0; } to { transform:translateX(0); opacity:1; } }
 `
 
 export class BattleHud {
@@ -202,6 +237,12 @@ export class BattleHud {
   // dock
   private towerBtns = new Map<TowerKind, { root: HTMLElement; cost: HTMLElement; lock: HTMLElement }>()
   private spellBtns = new Map<SpellKey, { root: HTMLElement; mask: HTMLElement; txt: HTMLElement }>()
+  private heroRow: HTMLElement
+  private heroBtns = new Map<string, { root: HTMLElement; port: HTMLElement; lvl: HTMLElement; mask: HTMLElement; cdtxt: HTMLElement; badge: HTMLElement }>()
+  private heroBarBuilt = false
+  private synPanel: HTMLElement
+  private synList: HTMLElement
+  private lastSynKey = ''
 
   // panels
   private upgradeEl: HTMLElement | null = null
@@ -287,8 +328,18 @@ export class BattleHud {
       towers.append(b)
       this.towerBtns.set(kind, { root: b, cost, lock })
     }
-    dock.append(spells, towers)
+    // hero bar sits between the global spells and the towers (built lazily once the
+    // party is known). Empty → CSS hides it, so a no-hero run looks unchanged.
+    this.heroRow = el('div', 'eld-heroes pe')
+    dock.append(spells, this.heroRow, towers)
     this.root.append(dock)
+
+    // synergy panel (element team bonuses) — hidden until a synergy is active
+    this.synPanel = el('div', 'eld-syn hidden')
+    this.synPanel.append(el('div', 'syn-h', 'SYNERGIES'))
+    this.synList = el('div', 'syn-list')
+    this.synPanel.append(this.synList)
+    this.root.append(this.synPanel)
 
     // fx layer
     this.fxLayer = el('div', 'eld-fx')
@@ -375,6 +426,95 @@ export class BattleHud {
         ref.mask.style.background = 'transparent'
         ref.root.classList.add('ready')
       }
+    }
+
+    this.updateHeroBar(sim, ctx)
+    this.updateSynergy(sim)
+  }
+
+  // ------------------------------------------------------------- hero bar + synergy
+  private buildHeroBar(sim: Sim): void {
+    for (const entry of sim.partyLoadout()) {
+      const def = entry.def
+      const b = el('div', 'eld-hero pe')
+      const lvl = el('div', 'hlvl', 'L' + entry.level)
+      const port = el('div', 'hport')
+      port.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+      port.style.borderColor = hex(RARITY_COLOR[def.rarity])
+      port.style.color = hex(def.color)
+      port.append(el('span', 'hglyph', def.glyph))
+      const mask = el('div', 'hcd')
+      const cdtxt = el('div', 'hcdtxt', '')
+      port.append(mask, cdtxt)
+      const badge = el('div', 'hbadge', `$${entry.cost}`)
+      badge.style.color = '#ffe27a'
+      const name = el('div', 'hname', def.name)
+      b.append(lvl, port, badge, name)
+      b.onclick = () => this.cb.onHeroButton(entry.heroId)
+      this.heroRow.append(b)
+      this.heroBtns.set(entry.heroId, { root: b, port, lvl, mask, cdtxt, badge })
+    }
+    this.heroBarBuilt = true
+  }
+
+  private updateHeroBar(sim: Sim, ctx: HudContext): void {
+    if (!this.heroBarBuilt) this.buildHeroBar(sim)
+    if (this.heroBtns.size === 0) return
+    const deployed = new Map<string, SimHero>()
+    for (const h of sim.deployedHeroes()) deployed.set(h.heroId, h)
+    for (const entry of sim.partyLoadout()) {
+      const ref = this.heroBtns.get(entry.heroId)
+      if (!ref) continue
+      const h = deployed.get(entry.heroId)
+      if (h) {
+        // fielded → the button becomes an ability icon with a cooldown ring
+        const cd = h.spellCd
+        const maxCd = h.spellMaxCd
+        if (cd > 0 && maxCd > 0) {
+          const deg = Math.max(0, Math.min(1, cd / maxCd)) * 360
+          ref.mask.style.background = `conic-gradient(rgba(6,4,16,.8) ${deg}deg, transparent ${deg}deg)`
+          ref.cdtxt.textContent = String(Math.ceil(cd))
+          ref.root.classList.remove('ready')
+          ref.badge.textContent = h.spell.glyph
+        } else {
+          ref.mask.style.background = 'transparent'
+          ref.cdtxt.textContent = ''
+          ref.root.classList.add('ready')
+          ref.badge.textContent = `${h.spell.glyph} CAST`
+        }
+        ref.badge.style.color = hex(entry.def.color)
+        ref.port.style.borderColor = hex(entry.def.color)
+        ref.root.classList.remove('dim', 'sel')
+      } else {
+        ref.mask.style.background = 'transparent'
+        ref.cdtxt.textContent = ''
+        ref.root.classList.remove('ready')
+        ref.badge.textContent = `$${entry.cost}`
+        ref.badge.style.color = '#ffe27a'
+        ref.port.style.borderColor = hex(RARITY_COLOR[entry.def.rarity])
+        ref.root.classList.toggle('dim', sim.gold < entry.cost)
+        ref.root.classList.toggle('sel', ctx.buildHeroId === entry.heroId)
+      }
+    }
+  }
+
+  private updateSynergy(sim: Sim): void {
+    const bonuses = sim.activeSynergies()
+    const key = bonuses.map((b) => b.id).join(',')
+    if (key === this.lastSynKey) return
+    this.lastSynKey = key
+    this.synList.innerHTML = ''
+    if (bonuses.length === 0) { this.synPanel.classList.add('hidden'); return }
+    this.synPanel.classList.remove('hidden')
+    for (const b of bonuses) {
+      const chip = el('div', 'syn-chip')
+      chip.style.borderColor = hex(b.color)
+      chip.style.color = hex(b.color)
+      chip.append(el('span', 'si', b.icon))
+      const st = el('div', 'st')
+      st.append(el('div', 'sn', b.name), el('div', 'sd', b.desc))
+      chip.append(st)
+      this.synList.append(chip)
     }
   }
 
@@ -476,7 +616,7 @@ export class BattleHud {
   hideDraft(): void { this.clearOverlay() }
 
   // ------------------------------------------------------------- result
-  showResult(opts: { win: boolean; title: string; color: number; stars: number; coins: number; diamonds: number; unlocked: string | null; sub?: string; endless: boolean }): void {
+  showResult(opts: { win: boolean; title: string; color: number; stars: number; coins: number; diamonds: number; shards?: number; unlocked: string | null; sub?: string; endless: boolean }): void {
     this.clearOverlay()
     this.startBtn.classList.add('hidden')
     const ov = el('div', 'eld-ov pe')
@@ -495,6 +635,7 @@ export class BattleHud {
     const lines: string[] = []
     if (opts.coins > 0) lines.push(`+${opts.coins} 🪙`)
     if (opts.diamonds > 0) lines.push(`+${opts.diamonds} 💎`)
+    if (opts.shards && opts.shards > 0) lines.push(`+${opts.shards} 🔹`)
     rewards.innerHTML = lines.join('<br>')
     if (lines.length) ov.append(rewards)
     if (opts.unlocked) {

@@ -28,14 +28,16 @@ export class MenuScene extends Phaser.Scene {
     this.bar = currencyBar(this, 340)
 
     const cx = width / 2
-    let y = 560
-    makeButton(this, cx, y, '▶  PLAY', () => this.go('Map'), { color: UI.green, w: 420, h: 92, fontSize: 40 })
-    y += 116
-    makeButton(this, cx, y, '⚒  WORKSHOP', () => this.go('Workshop'), { color: 0x4a7bff, w: 420, h: 78 })
-    y += 100
-    makeButton(this, cx, y, '💎  SHOP', () => this.go('Shop'), { color: 0xc06bff, w: 420, h: 78 })
-    y += 100
-    makeButton(this, cx, y, '🏆  ENDLESS — RANKED', () => this.startEndless(), { color: 0xff6a3c, w: 420, h: 78, fontSize: 26 })
+    let y = 540
+    makeButton(this, cx, y, '▶  PLAY', () => this.go('Map'), { color: UI.green, w: 420, h: 88, fontSize: 40 })
+    y += 108
+    makeButton(this, cx, y, '🦸  HEROES', () => this.go('Heroes'), { color: 0xffb43c, w: 420, h: 76, fontSize: 30 })
+    y += 92
+    makeButton(this, cx, y, '⚒  WORKSHOP', () => this.go('Workshop'), { color: 0x4a7bff, w: 420, h: 72 })
+    y += 88
+    makeButton(this, cx, y, '💎  SHOP', () => this.go('Shop'), { color: 0xc06bff, w: 420, h: 72 })
+    y += 88
+    makeButton(this, cx, y, '🏆  ENDLESS — RANKED', () => this.startEndless(), { color: 0xff6a3c, w: 420, h: 72, fontSize: 26 })
 
     this.add
       .text(width / 2, height - 90, 'Ranked is fair: purchases never affect it', { fontFamily: 'Arial', fontSize: '20px', color: '#8f7fc0' })

@@ -16,7 +16,7 @@ import { BattleHud, type HudContext } from '../ui/BattleHud'
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
 
-type InputMode = 'idle' | 'building' | 'aiming'
+type InputMode = 'idle' | 'building' | 'deploying' | 'aiming'
 
 export class BattleScene extends Phaser.Scene {
   private levelId = 'l1'
@@ -33,7 +33,9 @@ export class BattleScene extends Phaser.Scene {
 
   private mode: InputMode = 'idle'
   private buildKind: TowerKind | null = null
+  private buildHeroId: string | null = null
   private aimingSpell: SpellKey | null = null
+  private aimingHeroSlot: number | null = null
   private selectedId: number | null = null
 
   private onDown = (e: PointerEvent) => this.handleDown(e)
@@ -57,7 +59,10 @@ export class BattleScene extends Phaser.Scene {
     const seed = this.endless
       ? (0xE9D1E55 ^ (economy.data.endlessBest * 2654435761)) >>> 0
       : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234) >>> 0
-    this.sim = new Sim({ level: this.level, mods, seed, endless: this.endless, startGold, startLives })
+    // resolve the chosen loadout into (heroId, level) pairs — economy.party() is
+    // already filtered to unlocked, valid heroes, so no bad id reaches the sim.
+    const party = economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
+    this.sim = new Sim({ level: this.level, mods, seed, endless: this.endless, startGold, startLives, party })
 
     // reset transient state (scene instance is reused across restarts)
     this.gameSpeed = 1
@@ -66,7 +71,9 @@ export class BattleScene extends Phaser.Scene {
     this.draftShown = false
     this.mode = 'idle'
     this.buildKind = null
+    this.buildHeroId = null
     this.aimingSpell = null
+    this.aimingHeroSlot = null
     this.selectedId = null
     this.lastTime = 0
 
@@ -83,6 +90,7 @@ export class BattleScene extends Phaser.Scene {
       onSpeed: () => this.toggleSpeed(),
       onTowerButton: (k) => this.onTowerButton(k),
       onSpellButton: (k) => this.onSpellButton(k),
+      onHeroButton: (id) => this.onHeroButton(id),
       onSelectDeselect: () => this.deselect(),
       onUpgrade: (id) => { if (this.sim.upgradeTower(id)) this.hud.showUpgrade(this.sim, id) },
       onBranch: (id, idx) => { if (this.sim.chooseBranch(id, idx)) this.hud.showUpgrade(this.sim, id) },
@@ -141,6 +149,7 @@ export class BattleScene extends Phaser.Scene {
       totalWaves: this.endless ? Infinity : this.level.waves.length,
       towerUnlocked: (k) => this.towerUnlocked(k),
       buildKind: this.buildKind,
+      buildHeroId: this.buildHeroId,
       selectedId: this.selectedId,
     }
   }
@@ -157,7 +166,10 @@ export class BattleScene extends Phaser.Scene {
       // The spell button is a DOM click (never a canvas pointerdown), so the FIRST
       // canvas tap here is the intended aim — no "just entered" tap to swallow.
       const p = this.view.pickPoint(e.clientX, e.clientY)
-      if (p && this.aimingSpell && this.inMap(p.x, p.y)) this.sim.castSpell(this.aimingSpell, p.x, p.y)
+      if (p && this.inMap(p.x, p.y)) {
+        if (this.aimingHeroSlot != null) this.sim.castHeroSpell(this.aimingHeroSlot, p.x, p.y)
+        else if (this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
+      }
       this.exitAiming()
       return
     }
@@ -166,6 +178,7 @@ export class BattleScene extends Phaser.Scene {
     if (!cell) { if (this.mode === 'idle') this.deselect(); return }
 
     if (this.mode === 'building') { this.tryPlace(cell.col, cell.row); return }
+    if (this.mode === 'deploying') { this.tryDeploy(cell.col, cell.row); return }
 
     const t = this.sim.towerAt(cell.col, cell.row)
     if (t) this.selectTower(t.id)
@@ -174,7 +187,7 @@ export class BattleScene extends Phaser.Scene {
 
   private handleMove(e: PointerEvent): void {
     if (!this.sim) return
-    if (this.mode === 'building') {
+    if (this.mode === 'building' || this.mode === 'deploying') {
       const cell = this.view.pickCell(e.clientX, e.clientY)
       this.view.setHover(cell, cell ? this.sim.canPlace(cell.col, cell.row) : false)
     } else if (this.mode === 'aiming') {
@@ -191,6 +204,7 @@ export class BattleScene extends Phaser.Scene {
     if (this.sim.state === 'won' || this.sim.state === 'lost' || this.sim.state === 'draft') return
     if (!this.towerUnlocked(kind)) { this.hud.banner('LOCKED — clear levels to unlock', 0xff5b7a); return }
     this.exitAiming()
+    this.exitDeploy()
     this.deselect()
     if (this.buildKind === kind) { this.exitBuild(); return }
     this.buildKind = kind
@@ -206,15 +220,64 @@ export class BattleScene extends Phaser.Scene {
     this.view.setBuildHighlight(false)
   }
 
+  // A party-hero button: DEPLOY it if not yet fielded, else CAST its spell.
+  private onHeroButton(heroId: string): void {
+    if (this.sim.state === 'won' || this.sim.state === 'lost' || this.sim.state === 'draft') return
+    const deployed = this.sim.deployedHeroes().find((h) => h.heroId === heroId)
+    if (deployed) {
+      if (deployed.spellCd > 0) return
+      this.exitBuild()
+      this.exitDeploy()
+      this.deselect()
+      if (deployed.spell.targeted) {
+        this.mode = 'aiming'
+        this.aimingSpell = null
+        this.aimingHeroSlot = deployed.id
+      } else {
+        this.sim.castHeroSpell(deployed.id, deployed.x, deployed.y)
+      }
+      return
+    }
+    // not yet on the field → enter deploy mode
+    if (!this.sim.partyLoadout().some((p) => p.heroId === heroId)) return
+    this.exitAiming()
+    this.exitBuild()
+    this.deselect()
+    if (this.buildHeroId === heroId) { this.exitDeploy(); return }
+    this.buildHeroId = heroId
+    this.mode = 'deploying'
+    this.view.setHover(null, false)
+    this.view.setBuildHighlight(true)
+  }
+
+  private exitDeploy(): void {
+    this.buildHeroId = null
+    if (this.mode === 'deploying') this.mode = 'idle'
+    this.view.setHover(null, false)
+    this.view.setBuildHighlight(false)
+  }
+
+  private tryDeploy(col: number, row: number): void {
+    if (!this.buildHeroId) return
+    const cc = cellCenter(col, row)
+    if (!this.sim.canPlace(col, row)) { this.floatAt(cc.x, cc.y, 'CANT DEPLOY', 0xff5b7a, 22); return }
+    const cost = this.sim.heroDeployCost(this.buildHeroId)
+    if (this.sim.gold < cost) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
+    const h = this.sim.deployHero(this.buildHeroId, col, row)
+    if (h) this.exitDeploy() // one deploy per hero → drop out of deploy mode
+  }
+
   private onSpellButton(key: SpellKey): void {
     if (this.sim.state === 'won' || this.sim.state === 'lost' || this.sim.state === 'draft') return
     if (this.sim.spellCd[key] > 0) return
     const def = SPELLS[key]
     if (def.targeted) {
       this.exitBuild()
+      this.exitDeploy()
       this.deselect()
       this.mode = 'aiming'
       this.aimingSpell = key
+      this.aimingHeroSlot = null
     } else {
       this.sim.castSpell(key, 360, MAP_Y + MAP_H / 2)
     }
@@ -222,6 +285,7 @@ export class BattleScene extends Phaser.Scene {
 
   private exitAiming(): void {
     this.aimingSpell = null
+    this.aimingHeroSlot = null
     if (this.mode === 'aiming') this.mode = 'idle'
     this.view.setHover(null, false)
   }
@@ -262,6 +326,7 @@ export class BattleScene extends Phaser.Scene {
   private enterDraftUi(): void {
     this.exitBuild()
     this.exitAiming()
+    this.exitDeploy()
     this.deselect()
     this.hud.showDraft(this.sim)
   }
@@ -281,6 +346,7 @@ export class BattleScene extends Phaser.Scene {
     if (this.paused) {
       this.exitBuild()
       this.exitAiming()
+      this.exitDeploy()
       this.hud.showPause(this.endless)
     } else {
       this.hud.hidePause()
@@ -293,32 +359,46 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private quitBattle(): void {
-    if (this.endless) economy.awardEndless(this.sim.waveIndex)
+    if (this.endless) {
+      economy.awardEndless(this.sim.waveIndex)
+      this.awardHeroes(this.endlessShards(), this.endlessXp())
+    }
     this.scene.start(this.endless ? 'Menu' : 'Map')
   }
+
+  // Free hero currency + XP earned by playing (the provably-fair progression path).
+  private awardHeroes(shards: number, xpEach: number): number {
+    economy.awardHeroProgress(economy.party(), xpEach, shards)
+    return shards
+  }
+  private endlessShards(): number { return 8 + Math.round(this.sim.waveIndex * 2.5) }
+  private endlessXp(): number { return 30 + this.sim.waveIndex * 8 }
 
   private showResult(): void {
     this.resultShown = true
     this.exitBuild()
     this.exitAiming()
+    this.exitDeploy()
     this.deselect()
     if (this.sim.state === 'won') {
       const stars = starsForClear(this.sim.lives, this.sim.startLives)
       const result = economy.awardCampaign(this.level.id, stars, this.level.baseCoins)
+      const shards = this.awardHeroes(20 + stars * 12, 55 + stars * 30)
       let unlocked: string | null = null
       if (result.firstClear && this.level.unlockTower && !economy.isTowerUnlocked(this.level.unlockTower)) {
         economy.unlockTower(this.level.unlockTower)
         unlocked = TOWERS[this.level.unlockTower].name
       }
       this.hud.flash(0x2ff7c3, 0.4)
-      this.hud.showResult({ win: true, title: 'VICTORY!', color: 0x2ff7c3, stars, coins: result.coins, diamonds: result.diamonds, unlocked, endless: this.endless })
+      this.hud.showResult({ win: true, title: 'VICTORY!', color: 0x2ff7c3, stars, coins: result.coins, diamonds: result.diamonds, shards, unlocked, endless: this.endless })
     } else {
       this.hud.flash(0xff3b6b, 0.5)
       if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true })
+        const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true })
       } else {
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false })
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false })
       }
     }
   }
@@ -392,6 +472,18 @@ export class BattleScene extends Phaser.Scene {
         if (ev.key === 'meteor') this.hud.flash(0xffb15c, 0.35)
         else if (ev.key === 'freeze') { this.hud.flash(0x9fdcff, 0.4); if (ev.count > 0) this.hud.banner(`FROZEN ×${ev.count}!`, ev.color) }
         else this.floatAt(ev.x, ev.y, `+${ev.count} GOLD!`, 0xffd54a, 30)
+        break
+      case 'heroDeploy':
+        this.view.fxHeroDeploy(ev.x, ev.y, ev.color, ev.radius)
+        this.hud.flash(ev.color, 0.25)
+        break
+      case 'heroFire':
+        this.view.fxHeroFire(ev.x, ev.y, ev.tx, ev.ty, ev.color)
+        break
+      case 'heroSpell':
+        this.view.fxHeroSpell(ev.effect, ev.x, ev.y, ev.radius, ev.color)
+        this.hud.flash(ev.color, 0.4)
+        this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
         break
       case 'banner':
         this.hud.banner(ev.msg, ev.color)

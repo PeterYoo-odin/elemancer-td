@@ -28,6 +28,9 @@ import {
 } from './combat'
 import { COLS, ROWS, TILE, FIXED_DT, MAX_STEPS_PER_FRAME, cellCenter } from './layout'
 import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
+import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
+import { heroStats, heroSpellScaled } from '../game/heroProgress'
+import { computeSynergies, neutralSynergy, type SynergyBonus, type SynergyEffects } from '../game/synergy'
 
 // ---- tunables --------------------------------------------------------------
 const COMBO_WINDOW = 2.2 // seconds a combo lingers before it breaks
@@ -45,6 +48,7 @@ export interface SimConfig {
   endless: boolean
   startGold: number
   startLives: number
+  party?: Array<{ heroId: string; level: number }> // slice-6 hero loadout (optional)
 }
 
 export interface SimEnemy {
@@ -94,6 +98,39 @@ export interface SimTower {
   fireFlash: number
 }
 
+// A deployed hero: a CHARACTER on a build tile. Auto-attacks through the same
+// element wheel as towers, contributes to team synergy, and owns one active spell.
+export interface SimHero {
+  id: number
+  active: boolean
+  heroId: string
+  def: HeroDef
+  role: HeroRole
+  level: number
+  col: number
+  row: number
+  x: number
+  y: number
+  cd: number // auto-attack cooldown
+  aimAngle: number
+  fireFlash: number
+  // scaled base combat (pre-synergy)
+  baseDamage: number
+  baseRange: number // tiles
+  attackCd: number
+  buffDamage: number // support: adjacency buff this hero GRANTS
+  slowFactor: number // control: on-hit slow (1 = none)
+  slowDuration: number
+  // buffs received / temporary
+  adjBuff: number // adjacency buff RECEIVED (from support neighbours), 1 = none
+  buffMult: number // temporary self-buff (Holy Nova), 1 = none
+  buffUntil: number
+  // spell (level-scaled at deploy)
+  spell: HeroSpellDef
+  spellCd: number
+  spellMaxCd: number
+}
+
 export interface SimProjectile {
   id: number
   active: boolean
@@ -126,6 +163,9 @@ export type SimEvent =
   | { t: 'place'; x: number; y: number; color: number; radius: number }
   | { t: 'upgrade'; x: number; y: number; color: number; radius: number; label: string }
   | { t: 'spell'; key: SpellKey; x: number; y: number; radius: number; color: number; count: number }
+  | { t: 'heroDeploy'; x: number; y: number; color: number; radius: number }
+  | { t: 'heroFire'; x: number; y: number; tx: number; ty: number; color: number }
+  | { t: 'heroSpell'; effect: SpellEffect; name: string; glyph: string; x: number; y: number; radius: number; color: number; count: number }
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
 
@@ -151,6 +191,15 @@ export class Sim {
   enemies: SimEnemy[] = []
   towers: SimTower[] = []
   projectiles: SimProjectile[] = []
+  heroes: SimHero[] = []
+
+  // heroes: the loadout available to deploy, which ids are already fielded, and the
+  // live element-synergy state (recomputed whenever the field changes).
+  private occupiedHero: (SimHero | null)[][] = []
+  private partyDefs: Array<{ heroId: string; level: number }> = []
+  deployedHeroIds = new Set<string>()
+  synergyEffects: SynergyEffects = neutralSynergy()
+  synergyBonuses: SynergyBonus[] = []
 
   gold = 0
   lives = 0
@@ -189,6 +238,15 @@ export class Sim {
     for (const k of SPELL_ORDER) {
       this.spellMaxCd[k] = Math.max(0.5, SPELLS[k].cooldown * config.mods.spellCooldownMult)
     }
+    // Validate the loadout: only known heroes, deduped, capped at 3. A bad id never
+    // reaches deployHero — the scene should pre-filter too, but the sim self-defends.
+    const seenHeroes = new Set<string>()
+    for (const p of config.party ?? []) {
+      if (this.partyDefs.length >= 3) break
+      if (!p || seenHeroes.has(p.heroId) || !heroById(p.heroId)) continue
+      seenHeroes.add(p.heroId)
+      this.partyDefs.push({ heroId: p.heroId, level: Math.max(1, Math.floor(p.level || 1)) })
+    }
     this.buildGrid()
     this.enterPrep()
   }
@@ -210,15 +268,19 @@ export class Sim {
     const pathCells = serpentine(this.config.level.lanes)
     this.grid = []
     this.occupied = []
+    this.occupiedHero = []
     for (let r = 0; r < ROWS; r++) {
       const gr: string[] = []
       const orow: (SimTower | null)[] = []
+      const hrow: (SimHero | null)[] = []
       for (let c = 0; c < COLS; c++) {
         gr.push('blocked')
         orow.push(null)
+        hrow.push(null)
       }
       this.grid.push(gr)
       this.occupied.push(orow)
+      this.occupiedHero.push(hrow)
     }
     const onPath = new Set<string>()
     for (const [c, r] of pathCells) {
@@ -289,12 +351,17 @@ export class Sim {
 
   canPlace(col: number, row: number): boolean {
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return false
-    return this.grid[row][col] === 'build' && this.occupied[row][col] === null
+    return this.grid[row][col] === 'build' && this.occupied[row][col] === null && this.occupiedHero[row][col] === null
   }
 
   towerAt(col: number, row: number): SimTower | null {
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null
     return this.occupied[row][col]
+  }
+
+  heroAt(col: number, row: number): SimHero | null {
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null
+    return this.occupiedHero[row][col]
   }
 
   // ---- fixed-timestep driver ---------------------------------------------
@@ -326,6 +393,7 @@ export class Sim {
     this.updateCombo(dt)
     this.updateEnemies(dt)
     this.updateTowers(dt)
+    this.updateHeroes(dt)
     this.updateProjectiles(dt)
     this.updateSpellCooldowns(dt)
   }
@@ -713,6 +781,10 @@ export class Sim {
       t.buffDmg = 1
       t.buffRng = 1
     }
+    for (const h of this.heroes) {
+      if (!h.active) continue
+      h.adjBuff = 1
+    }
     for (const a of this.towers) {
       if (!a.active || !a.def.support) continue
       const s = this.stats(a)
@@ -720,10 +792,27 @@ export class Sim {
       const br = s.buffRange ?? 0
       for (const n of this.towers) {
         if (!n.active || n === a) continue
-        if (Math.abs(n.col - a.col) <= 1 && Math.abs(n.row - a.row) <= 1) {
+        if (adjacentCell(a, n)) {
           n.buffDmg += bd
           n.buffRng += br
         }
+      }
+      // support towers also empower adjacent heroes
+      for (const n of this.heroes) {
+        if (!n.active) continue
+        if (adjacentCell(a, n)) n.adjBuff += bd
+      }
+    }
+    // support HEROES buff adjacent towers AND heroes (Sylvan/Pyra/Aurelia)
+    for (const a of this.heroes) {
+      if (!a.active || a.buffDamage <= 0) continue
+      for (const n of this.towers) {
+        if (!n.active) continue
+        if (adjacentCell(a, n)) n.buffDmg += a.buffDamage
+      }
+      for (const n of this.heroes) {
+        if (!n.active || n === a) continue
+        if (adjacentCell(a, n)) n.adjBuff += a.buffDamage
       }
     }
   }
@@ -735,8 +824,36 @@ export class Sim {
       if (!a.active || !a.def.support) continue
       for (const n of this.towers) {
         if (!n.active || n === a) continue
-        if (Math.abs(n.col - a.col) <= 1 && Math.abs(n.row - a.row) <= 1) {
+        if (adjacentCell(a, n)) {
           out.push({ ax: a.x, ay: a.y, bx: n.x, by: n.y, color: a.def.color })
+        }
+      }
+    }
+    // support-hero buff links (hero → adjacent tower/hero)
+    for (const a of this.heroes) {
+      if (!a.active || a.buffDamage <= 0) continue
+      for (const n of this.towers) {
+        if (!n.active) continue
+        if (adjacentCell(a, n)) out.push({ ax: a.x, ay: a.y, bx: n.x, by: n.y, color: a.def.color })
+      }
+      for (const n of this.heroes) {
+        if (!n.active || n === a) continue
+        if (adjacentCell(a, n)) out.push({ ax: a.x, ay: a.y, bx: n.x, by: n.y, color: a.def.color })
+      }
+    }
+    return out
+  }
+
+  // Glow links between deployed heroes that share an active synergy (for the view).
+  synergyLinks(): Array<{ ax: number; ay: number; bx: number; by: number; color: number }> {
+    const out: Array<{ ax: number; ay: number; bx: number; by: number; color: number }> = []
+    const active = this.deployedHeroes()
+    if (active.length < 2) return out
+    for (const b of this.synergyBonuses) {
+      const members = active.filter((h) => b.members.includes(h.def.element))
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          out.push({ ax: members[i].x, ay: members[i].y, bx: members[j].x, by: members[j].y, color: b.color })
         }
       }
     }
@@ -1014,6 +1131,310 @@ export class Sim {
     this.emit({ t: 'death', x: e.x, y: e.y, kind: e.kind, color: e.def.color, boss: !!e.def.boss })
   }
 
+  // ======================================================================
+  //  HEROES — deployable characters. Deploy on a build tile (costs gold, once per
+  //  party hero), auto-attack through the element wheel, and cast one spell.
+  // ======================================================================
+  heroDeployCost(heroId: string): number {
+    const def = heroById(heroId)
+    if (!def) return 0
+    return Math.max(1, Math.round(def.deployCost * this.config.mods.towerCostMult * this.upgrades.towerCostMult))
+  }
+
+  canDeployHero(heroId: string): boolean {
+    if (this.state === 'won' || this.state === 'lost' || this.state === 'draft') return false
+    if (this.deployedHeroIds.has(heroId)) return false
+    return this.partyDefs.some((p) => p.heroId === heroId)
+  }
+
+  deployHero(heroId: string, col: number, row: number): SimHero | null {
+    if (!this.canDeployHero(heroId)) return null
+    if (!this.canPlace(col, row)) return null
+    const pd = this.partyDefs.find((p) => p.heroId === heroId)
+    const def = heroById(heroId)
+    if (!pd || !def) return null
+    const cost = this.heroDeployCost(heroId)
+    if (this.gold < cost) return null
+    this.spendGold(cost)
+    const cc = cellCenter(col, row)
+    const stats = heroStats(def, pd.level)
+    const spell = heroSpellScaled(def.spell, pd.level)
+    let h: SimHero | null = null
+    for (const cand of this.heroes) if (!cand.active) { h = cand; h.id = this.nextId++; break }
+    if (!h) {
+      h = {
+        id: this.nextId++, active: false, heroId, def, role: def.role, level: pd.level, col, row, x: cc.x, y: cc.y,
+        cd: 0, aimAngle: 0, fireFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
+        slowDuration: 0, adjBuff: 1, buffMult: 1, buffUntil: 0, spell, spellCd: 0, spellMaxCd: 1,
+      }
+      this.heroes.push(h)
+    }
+    h.active = true
+    h.heroId = heroId
+    h.def = def
+    h.role = def.role
+    h.level = pd.level
+    h.col = col
+    h.row = row
+    h.x = cc.x
+    h.y = cc.y
+    h.cd = 0
+    h.aimAngle = 0
+    h.fireFlash = 0
+    h.baseDamage = stats.damage
+    h.baseRange = stats.range
+    h.attackCd = stats.cooldown
+    h.buffDamage = stats.buffDamage
+    h.slowFactor = stats.slowFactor
+    h.slowDuration = stats.slowDuration
+    h.adjBuff = 1
+    h.buffMult = 1
+    h.buffUntil = 0
+    h.spell = spell
+    h.spellCd = 0
+    h.spellMaxCd = clamp(spell.cooldown * this.config.mods.spellCooldownMult, 0.5, 60)
+    this.occupiedHero[row][col] = h
+    this.deployedHeroIds.add(heroId)
+    this.recomputeSynergies()
+    this.recomputeBuffs()
+    this.emit({ t: 'heroDeploy', x: cc.x, y: cc.y, color: def.color, radius: this.heroRange(h) })
+    this.emit({ t: 'text', x: cc.x, y: cc.y - 44, msg: def.name.toUpperCase() + '!', color: def.color, size: 26 })
+    return h
+  }
+
+  // Live element-synergy recompute from the currently-fielded heroes.
+  recomputeSynergies(): void {
+    const elements: Element[] = []
+    for (const h of this.heroes) if (h.active) elements.push(h.def.element)
+    const { bonuses, effects } = computeSynergies(elements)
+    this.synergyBonuses = bonuses
+    this.synergyEffects = effects
+  }
+  activeSynergies(): SynergyBonus[] {
+    return this.synergyBonuses
+  }
+
+  // effective hero stats (base × adjacency × synergy × temp buff × run mods)
+  heroDamage(h: SimHero): number {
+    const syn = this.synergyEffects
+    const elem = syn.elementDmg[h.def.element] ?? 1
+    const buff = h.buffUntil > this.clock ? h.buffMult : 1
+    const dmg = h.baseDamage * h.adjBuff * elem * syn.allDmgMult * syn.allStatMult * buff * this.config.mods.towerDamageMult
+    return clamp(dmg, 0, 1e7)
+  }
+  heroRange(h: SimHero): number {
+    return clamp(h.baseRange * TILE * this.synergyEffects.allStatMult * this.config.mods.rangeMult, TILE * 0.5, TILE * 12)
+  }
+  heroCooldown(h: SimHero): number {
+    const syn = this.synergyEffects
+    return clamp((h.attackCd * syn.atkSpeedMult) / Math.max(0.5, syn.allStatMult), 0.05, 10)
+  }
+  heroDps(h: SimHero): number {
+    return clamp(this.heroDamage(h) / Math.max(0.05, this.heroCooldown(h)), 0, 1e7)
+  }
+
+  // loadout view for the HUD (party order, deploy state + cost)
+  partyLoadout(): Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number }> {
+    const out: Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number }> = []
+    for (const p of this.partyDefs) {
+      const def = heroById(p.heroId)
+      if (!def) continue
+      out.push({ heroId: p.heroId, def, level: p.level, deployed: this.deployedHeroIds.has(p.heroId), cost: this.heroDeployCost(p.heroId) })
+    }
+    return out
+  }
+  deployedHeroes(): SimHero[] {
+    const out: SimHero[] = []
+    for (const h of this.heroes) if (h.active) out.push(h)
+    return out
+  }
+  heroBySlot(id: number): SimHero | null {
+    for (const h of this.heroes) if (h.active && h.id === id) return h
+    return null
+  }
+
+  private updateHeroes(dt: number): void {
+    for (const h of this.heroes) {
+      if (!h.active) continue
+      if (h.fireFlash > 0) h.fireFlash = Math.max(0, h.fireFlash - dt)
+      if (h.spellCd > 0) h.spellCd = Math.max(0, h.spellCd - dt)
+      h.cd -= dt
+      if (h.cd > 0) continue
+      const range = this.heroRange(h)
+      const target = this.acquireForHero(h, range)
+      if (!target) continue
+      h.cd = this.heroCooldown(h)
+      h.aimAngle = angleBetween(h.x, h.y, target.x, target.y)
+      h.fireFlash = 0.12
+      this.heroAttack(h, target)
+    }
+  }
+
+  // heroes always fire at the FIRST enemy in range, and CAN hit air (they are mages).
+  private acquireForHero(h: SimHero, range: number): SimEnemy | null {
+    const r2 = range * range
+    let best: SimEnemy | null = null
+    let bestScore = -Infinity
+    for (const e of this.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      const d2 = dist2(h.x, h.y, e.x, e.y)
+      if (d2 > r2) continue
+      if (e.dist > bestScore) { bestScore = e.dist; best = e }
+    }
+    return best
+  }
+
+  private heroAttack(h: SimHero, target: SimEnemy): void {
+    this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: target.x, ty: target.y, color: h.def.color })
+    this.emit({ t: 'hit', x: target.x, y: target.y, color: h.def.color })
+    const atk: AttackStats = { damage: this.heroDamage(h), dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus }
+    // heroes are synergy sources — striking an afflicted enemy ramps the combo meter
+    this.dealDamageWith(target, atk, true, target.x, target.y)
+    if (h.role === 'Control' && target.active && h.slowFactor < 1) {
+      target.slowUntil = Math.max(target.slowUntil, this.clock + h.slowDuration)
+      target.slowFactor = Math.min(target.slowFactor, h.slowFactor)
+    }
+  }
+
+  private nearestEnemyTo(x: number, y: number): SimEnemy | null {
+    let best: SimEnemy | null = null
+    let bd = Infinity
+    for (const e of this.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      const d = dist2(x, y, e.x, e.y)
+      if (d < bd) { bd = d; best = e }
+    }
+    return best
+  }
+
+  // Cast a deployed hero's signature spell. slotId is the SimHero.id.
+  castHeroSpell(slotId: number, x: number, y: number): boolean {
+    if (this.state === 'won' || this.state === 'lost' || this.state === 'draft') return false
+    const h = this.heroBySlot(slotId)
+    if (!h || h.spellCd > 0) return false
+    const sp = h.spell
+    const power = this.config.mods.spellPowerMult
+    const color = h.def.color
+    h.spellCd = h.spellMaxCd
+    const cx = sp.targeted ? x : h.x
+    const cy = sp.targeted ? y : h.y
+
+    if (sp.effect === 'aoeBurn') {
+      const radius = (sp.radius ?? 2) * TILE
+      const dmg = (sp.damage ?? 100) * power
+      const r2 = radius * radius
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0) continue
+        if (dist2(cx, cy, e.x, e.y) > r2) continue
+        this.applyDirect(e, dmg)
+        if (e.active) {
+          e.burnUntil = this.clock + (sp.burnDuration ?? 2)
+          e.burnDps = Math.max(e.burnDps, (sp.burnDps ?? 20) * power)
+        }
+      }
+      this.emit({ t: 'heroSpell', effect: 'aoeBurn', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: 0 })
+    } else if (sp.effect === 'freeze') {
+      const radius = (sp.radius ?? 2) * TILE
+      const r2 = radius * radius
+      const dur = sp.stunDuration ?? 1.5
+      let n = 0
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0) continue
+        if (dist2(cx, cy, e.x, e.y) > r2) continue
+        e.stunUntil = Math.max(e.stunUntil, this.clock + dur)
+        if (sp.slowFactor) {
+          e.slowUntil = Math.max(e.slowUntil, this.clock + (sp.slowDuration ?? dur))
+          e.slowFactor = Math.min(e.slowFactor, clamp(sp.slowFactor, 0.1, 1))
+        }
+        n++
+      }
+      this.emit({ t: 'heroSpell', effect: 'freeze', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: n })
+    } else if (sp.effect === 'chain') {
+      const first = this.nearestEnemyTo(cx, cy)
+      if (first) this.castHeroChain(h, first)
+      else this.emit({ t: 'heroSpell', effect: 'chain', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius: 0, color, count: 0 })
+    } else if (sp.effect === 'heal') {
+      const heal = Math.max(0, Math.round(sp.heal ?? 0))
+      if (heal > 0) this.lives = clamp(this.lives + heal, 0, this.startLives)
+      const radius = (sp.radius ?? 2) * TILE
+      const r2 = radius * radius
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0) continue
+        if (dist2(cx, cy, e.x, e.y) > r2) continue
+        if (sp.slowFactor) {
+          e.slowUntil = Math.max(e.slowUntil, this.clock + (sp.slowDuration ?? 2))
+          e.slowFactor = Math.min(e.slowFactor, clamp(sp.slowFactor, 0.1, 1))
+        }
+      }
+      this.emit({ t: 'heroSpell', effect: 'heal', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: heal })
+      if (heal > 0) this.emit({ t: 'heal', x: cx, y: cy, amount: heal, radius })
+    } else if (sp.effect === 'novaBuff') {
+      const radius = (sp.radius ?? 2) * TILE
+      const dmg = (sp.damage ?? 80) * power
+      const r2 = radius * radius
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0) continue
+        if (dist2(cx, cy, e.x, e.y) > r2) continue
+        this.applyDirect(e, dmg)
+      }
+      const dur = sp.buffDuration ?? 5
+      const mult = sp.buffMult ?? 1.4
+      for (const o of this.heroes) {
+        if (!o.active) continue
+        o.buffMult = Math.max(o.buffMult, mult)
+        o.buffUntil = this.clock + dur
+      }
+      this.emit({ t: 'heroSpell', effect: 'novaBuff', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: 0 })
+    } else {
+      // execute
+      const target = this.nearestEnemyTo(cx, cy)
+      if (target) {
+        let dmg = (sp.damage ?? 150) * power
+        const thr = sp.executeThreshold ?? 0.3
+        if (target.maxHp > 0 && target.hp / target.maxHp <= thr) dmg *= sp.executeMult ?? 2
+        this.applyDirect(target, dmg)
+        this.emit({ t: 'heroSpell', effect: 'execute', name: sp.name, glyph: sp.glyph, x: target.x, y: target.y, radius: 0, color, count: 0 })
+      } else {
+        this.emit({ t: 'heroSpell', effect: 'execute', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius: 0, color, count: 0 })
+      }
+    }
+    return true
+  }
+
+  private castHeroChain(h: SimHero, first: SimEnemy): void {
+    const sp = h.spell
+    const chainCount = sp.chainCount ?? 5
+    const chainRange = (sp.chainRange ?? 2.5) * TILE
+    const falloff = clamp(sp.chainFalloff ?? 0.85, 0.1, 1)
+    const chain: SimEnemy[] = [first]
+    const used = new Set<number>([first.id])
+    let cursor = first
+    const r2 = chainRange * chainRange
+    while (chain.length <= chainCount) {
+      let bestNode: SimEnemy | null = null
+      let bestD = Infinity
+      for (const e of this.enemies) {
+        if (!e.active || e.hp <= 0 || used.has(e.id)) continue
+        const d2 = dist2(cursor.x, cursor.y, e.x, e.y)
+        if (d2 <= r2 && d2 < bestD) { bestD = d2; bestNode = e }
+      }
+      if (!bestNode) break
+      chain.push(bestNode)
+      used.add(bestNode.id)
+      cursor = bestNode
+    }
+    const points: Array<[number, number]> = [[h.x, h.y]]
+    for (const e of chain) points.push([e.x, e.y])
+    this.emit({ t: 'chain', points, color: h.def.color, count: chain.length, supercharged: false })
+    let dmg = (sp.damage ?? 90) * this.config.mods.spellPowerMult
+    for (const e of chain) {
+      if (!e.active) continue
+      this.applyDirect(e, dmg)
+      dmg *= falloff
+    }
+    this.emit({ t: 'heroSpell', effect: 'chain', name: sp.name, glyph: sp.glyph, x: first.x, y: first.y, radius: 0, color: h.def.color, count: chain.length })
+  }
+
   // ---- spells -------------------------------------------------------------
   castSpell(key: SpellKey, x: number, y: number): boolean {
     if (this.state === 'won' || this.state === 'lost') return false
@@ -1134,3 +1555,8 @@ export class Sim {
 }
 
 const EMPTY_EVENTS: SimEvent[] = []
+
+// 3×3 grid adjacency (shared by tower + hero support-buff passes).
+function adjacentCell(a: { col: number; row: number }, b: { col: number; row: number }): boolean {
+  return Math.abs(a.col - b.col) <= 1 && Math.abs(a.row - b.row) <= 1
+}

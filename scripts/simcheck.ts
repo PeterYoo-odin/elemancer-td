@@ -39,7 +39,33 @@ function makeSim(seed: number, levelIndex = 3): Sim {
     endless: true,
     startGold: 5_000_000, // never gold-starved: keep placing/upgrading to stress DPS
     startLives: 10_000_000, // never lose: we want the full 60-wave stress run
+    // A full 3-hero party (varied levels + a same-element pair) so the hero deploy,
+    // synergy, attack and spell code paths are all exercised by the robustness gate.
+    party: [
+      { heroId: 'ember', level: 20 },
+      { heroId: 'pyra', level: 12 }, // Fire pair → same-element synergy
+      { heroId: 'vex', level: 8 },
+    ],
   })
+}
+
+// Deploy the whole party onto the first free build cells (exercises deploy + synergy).
+function deployParty(sim: Sim): void {
+  const cells = sim.buildCells()
+  let ci = 0
+  for (const p of sim.partyLoadout()) {
+    while (ci < cells.length && !sim.canPlace(cells[ci].col, cells[ci].row)) ci++
+    if (ci >= cells.length) break
+    sim.deployHero(p.heroId, cells[ci].col, cells[ci].row)
+    ci++
+  }
+}
+
+// Fire every ready hero spell at the front of the pack (exercises all spell effects).
+function castHeroSpells(sim: Sim): void {
+  for (const h of sim.deployedHeroes()) {
+    if (h.spellCd <= 0) sim.castHeroSpell(h.id, h.x, h.y - 40)
+  }
 }
 
 // Fill build cells with a rotating tower kind. mode 'max' pushes them to a maxed
@@ -99,6 +125,15 @@ function validate(sim: Sim, tick: number): void {
     if (!finite(p.x) || !finite(p.y) || !finite(p.tx) || !finite(p.ty)) fail(`projectile pos non-finite @${tick}`)
     if (!finite(p.atk.damage) || p.atk.damage < 0) fail(`projectile damage bad: ${p.atk.damage} @${tick}`)
   }
+  for (const h of sim.heroes) {
+    if (!h.active) continue
+    if (!finite(h.x) || !finite(h.y) || !finite(h.cd) || !finite(h.aimAngle) || !finite(h.spellCd)) fail(`hero field non-finite @${tick}`)
+    const dmg = sim.heroDamage(h)
+    if (!finite(dmg) || dmg < 0 || dmg > 1e7 + 1) fail(`hero damage out of range: ${dmg} @${tick}`)
+    if (!finite(sim.heroDps(h)) || sim.heroDps(h) < 0) fail(`hero DPS bad: ${sim.heroDps(h)} @${tick}`)
+    const rng = sim.heroRange(h)
+    if (!finite(rng) || rng < 0) fail(`hero range bad: ${rng} @${tick}`)
+  }
   // damage numbers emitted this step must all be finite & non-negative
   for (const ev of sim.drainEvents()) {
     if (ev.t === 'damage' && (!finite(ev.amount) || ev.amount < 0)) fail(`damage event bad: ${ev.amount} @${tick}`)
@@ -122,6 +157,7 @@ function checkIds(sim: Sim, retired: Set<number>, tick: number): void {
 function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: number; wavesReached: number } {
   // flood uses the longest 6-lane path (index 5) to maximise concurrency
   const sim = makeSim(seed, mode === 'flood' ? 5 : 3)
+  if (mode !== 'flood') deployParty(sim) // heroes before towers claim the build cells
   saturateTowers(sim, mode)
   let tick = 0
   let maxEntities = 0
@@ -133,6 +169,7 @@ function runOne(seed: number, mode: 'max' | 'base' | 'flood'): { maxEntities: nu
     if (sim.state === 'prep') sim.startWave() // skip the prep countdown for speed
     if (sim.state === 'won' || sim.state === 'lost') break
     if (mode === 'max' && tick % 600 === 0) saturateTowers(sim, mode)
+    if (mode !== 'flood' && tick % 120 === 0) castHeroSpells(sim) // fire every ready hero spell
     sim.step()
     tick++
     let ents = sim.liveEnemyCount()

@@ -13,9 +13,11 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
-import type { Sim, SimEnemy, SimTower } from '../sim'
+import type { Sim, SimEnemy, SimHero, SimTower } from '../sim'
 import { COLS, ROWS, MAP_X, MAP_Y, MAP_W, MAP_H, worldToCell } from '../sim'
 import { TOWERS, type TowerKind } from '../game/towers'
+import { RARITY_COLOR } from '../game/heroes'
+import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import { models } from './models'
@@ -75,6 +77,22 @@ interface ProjSlot {
   light: THREE.PointLight | null
 }
 
+// A deployed hero: an element-tinted robed figure with a floating element crystal,
+// a rarity-coloured ground ring, a glow light and a billboard level badge.
+interface HeroSlot {
+  group: THREE.Group
+  figure: THREE.Group // yaw toward the current target
+  bodyMat: THREE.MeshStandardMaterial
+  orb: THREE.Mesh
+  orbMat: THREE.MeshStandardMaterial
+  ringMat: THREE.MeshBasicMaterial
+  glow: THREE.PointLight
+  badgeTex: THREE.CanvasTexture
+  badgeMat: THREE.SpriteMaterial
+  color: number
+  heroId: string
+}
+
 interface Transient {
   obj: THREE.Object3D
   mat: THREE.Material | THREE.Material[]
@@ -131,6 +149,11 @@ export class BattleView3D {
   private enemyPools = new Map<EnemyKind, EnemySlot[]>()
   private enemyViews = new Map<number, EnemySlot>()
   private towerViews = new Map<number, TowerSlot>()
+  private heroViews = new Map<number, HeroSlot>()
+  private heroBodyGeo!: THREE.ConeGeometry
+  private heroHeadGeo!: THREE.SphereGeometry
+  private heroOrbGeo!: THREE.IcosahedronGeometry
+  private heroRingGeo!: THREE.RingGeometry
   private projViews = new Map<number, ProjSlot>()
   private projPool: ProjSlot[] = []
   private activeScratch = new Set<number>()
@@ -881,6 +904,7 @@ export class BattleView3D {
     if (!this.shadowGeo) return
     this.syncEnemies()
     this.syncTowers(selectedId)
+    this.syncHeroes()
     this.syncProjectiles()
     if (this.buffDirty) { this.syncBuffLinks(); this.buffDirty = false }
   }
@@ -975,6 +999,114 @@ export class BattleView3D {
     }
   }
 
+  // ---------------------------------------------------------------- heroes
+  private syncHeroes(): void {
+    const active = this.activeScratch
+    active.clear()
+    for (const h of this.sim.heroes) {
+      if (!h.active) continue
+      active.add(h.id)
+      let s = this.heroViews.get(h.id)
+      if (!s) { s = this.createHeroSlot(h); this.heroViews.set(h.id, s); this.buffDirty = true }
+      this.updateHeroSlot(s, h)
+    }
+    for (const [id, s] of this.heroViews) {
+      if (!active.has(id)) {
+        this.scene.remove(s.group)
+        this.disposeHeroSlot(s)
+        this.heroViews.delete(id)
+        this.buffDirty = true
+      }
+    }
+  }
+
+  private makeLevelBadge(level: number, color: number): { tex: THREE.CanvasTexture; mat: THREE.SpriteMaterial; sprite: THREE.Sprite } {
+    const c = document.createElement('canvas')
+    c.width = 128
+    c.height = 64
+    const ctx = c.getContext('2d')!
+    ctx.fillStyle = 'rgba(10,6,22,0.9)'
+    ctx.beginPath()
+    if (typeof ctx.roundRect === 'function') ctx.roundRect(6, 10, 116, 44, 12)
+    else ctx.rect(6, 10, 116, 44) // older Safari lacks roundRect
+    ctx.fill()
+    ctx.lineWidth = 6
+    ctx.strokeStyle = '#' + (color & 0xffffff).toString(16).padStart(6, '0')
+    ctx.stroke()
+    ctx.fillStyle = '#ffffff'
+    ctx.font = 'bold 34px Baloo 2, Arial, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('Lv ' + level, 64, 34)
+    const tex = new THREE.CanvasTexture(c)
+    tex.anisotropy = 2
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false })
+    const sprite = new THREE.Sprite(mat)
+    sprite.scale.set(0.95, 0.48, 1)
+    return { tex, mat, sprite }
+  }
+
+  private createHeroSlot(h: SimHero): HeroSlot {
+    const def = h.def
+    const g = new THREE.Group()
+    g.position.set(wx(h.x), GROUND, wz(h.y))
+
+    const figure = new THREE.Group()
+    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.25, flatShading: true })
+    const body = new THREE.Mesh(this.heroBodyGeo, bodyMat)
+    body.position.y = 0.48
+    const head = new THREE.Mesh(this.heroHeadGeo, bodyMat)
+    head.position.y = 1.02
+    figure.add(body, head)
+    g.add(figure)
+
+    // floating element crystal
+    const orbMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: def.color, emissiveIntensity: 1.5, roughness: 0.15, metalness: 0.1 })
+    const orb = new THREE.Mesh(this.heroOrbGeo, orbMat)
+    orb.position.set(0.46, 1.12, 0)
+    orb.userData.y0 = 1.12
+    g.add(orb)
+
+    // rarity-coloured ground ring (marks the character apart from towers)
+    const ringMat = new THREE.MeshBasicMaterial({ color: RARITY_COLOR[def.rarity], transparent: true, opacity: 0.95, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    const ring = new THREE.Mesh(this.heroRingGeo, ringMat)
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = 0.045
+    g.add(ring)
+
+    this.addBlob(g, 0.4)
+
+    const glow = new THREE.PointLight(def.color, 0.9, 4.5, 2)
+    glow.position.y = 1.0
+    g.add(glow)
+
+    const badge = this.makeLevelBadge(h.level, def.color)
+    badge.sprite.position.y = 1.62
+    g.add(badge.sprite)
+
+    this.scene.add(g)
+    return { group: g, figure, bodyMat, orb, orbMat, ringMat, glow, badgeTex: badge.tex, badgeMat: badge.mat, color: def.color, heroId: h.heroId }
+  }
+
+  private updateHeroSlot(s: HeroSlot, h: SimHero): void {
+    s.group.position.set(wx(h.x), GROUND, wz(h.y))
+    s.figure.rotation.y = -h.aimAngle + Math.PI / 2
+    const flashing = h.fireFlash > 0
+    s.bodyMat.emissiveIntensity = flashing ? 1.2 : 0.5
+    s.glow.intensity = 0.9 + (flashing ? 1.6 : 0)
+    // temporary Holy-Nova buff → brighten the crystal
+    const buffed = h.buffUntil > this.sim.clock
+    s.orbMat.emissiveIntensity = buffed ? 2.6 : 1.5
+  }
+
+  private disposeHeroSlot(s: HeroSlot): void {
+    s.bodyMat.dispose()
+    s.orbMat.dispose()
+    s.ringMat.dispose()
+    s.badgeMat.dispose()
+    s.badgeTex.dispose()
+  }
+
   private syncProjectiles(): void {
     const active = this.activeScratch
     active.clear()
@@ -1007,6 +1139,15 @@ export class BattleView3D {
         new THREE.Vector3(wx(l.bx), 0.7, wz(l.by)),
       ])
       const mat = new THREE.LineBasicMaterial({ color: l.color, transparent: true, opacity: 0.5 })
+      this.buffLinesGroup.add(new THREE.Line(geo, mat))
+    }
+    // element-synergy glow links between fielded heroes (brighter, additive)
+    for (const l of this.sim.synergyLinks()) {
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(wx(l.ax), 0.95, wz(l.ay)),
+        new THREE.Vector3(wx(l.bx), 0.95, wz(l.by)),
+      ])
+      const mat = new THREE.LineBasicMaterial({ color: l.color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false })
       this.buffLinesGroup.add(new THREE.Line(geo, mat))
     }
   }
@@ -1093,6 +1234,56 @@ export class BattleView3D {
     }
   }
 
+  // ---------------------------------------------------------------- hero FX
+  fxHeroDeploy(simX: number, simY: number, color: number, radiusPx: number): void {
+    this.pushRing(simX, simY, radiusPx, color, 0.9)
+    this.emitParticles(wx(simX), 0.9, wz(simY), color, 24, 3.2)
+    this.emitParticles(wx(simX), 0.9, wz(simY), 0xffffff, 8, 2)
+  }
+
+  fxHeroFire(simX: number, simY: number, tsimX: number, tsimY: number, color: number): void {
+    this.fxBeam(simX, simY, tsimX, tsimY, color, 0.12)
+    this.emitParticles(wx(tsimX), 0.7, wz(tsimY), color, 5, 2.2)
+  }
+
+  fxHeroSpell(effect: SpellEffect, simX: number, simY: number, radiusPx: number, color: number): void {
+    const wxp = wx(simX)
+    const wzp = wz(simY)
+    if (effect === 'aoeBurn') {
+      this.pushRing(simX, simY, radiusPx, 0xff8a3c, 0.95)
+      this.emitParticles(wxp, 0.8, wzp, 0xffb15c, 54, 5)
+      this.emitParticles(wxp, 0.8, wzp, 0xffd54a, 26, 4)
+      this.spellFlash(simX, simY, radiusPx, 0xffe0a0, 2.0)
+    } else if (effect === 'freeze') {
+      this.pushRing(simX, simY, radiusPx, 0x9fdcff, 0.95)
+      this.emitParticles(wxp, 0.8, wzp, 0x9fdcff, 46, 4)
+      this.spellFlash(simX, simY, radiusPx, 0xd6f4ff, 1.7)
+    } else if (effect === 'heal') {
+      this.pushRing(simX, simY, radiusPx, 0x6bffb0, 0.95)
+      this.emitParticles(wxp, 0.7, wzp, 0x6bffb0, 40, 3.4)
+    } else if (effect === 'novaBuff') {
+      this.pushRing(simX, simY, radiusPx, 0xfff0a0, 0.95)
+      this.emitParticles(wxp, 0.9, wzp, 0xfff0a0, 60, 4.5)
+      this.spellFlash(simX, simY, radiusPx, 0xfff6c8, 2.4)
+    } else if (effect === 'execute') {
+      this.emitParticles(wxp, 0.8, wzp, color, 44, 5)
+      this.emitParticles(wxp, 0.8, wzp, 0x000000, 18, 3)
+      this.spellFlash(simX, simY, radiusPx || 60, color, 1.4)
+    } else {
+      // chain: handled by the separate 'chain' event; just a spark at the origin
+      this.emitParticles(wxp, 0.8, wzp, color, 12, 3)
+    }
+  }
+
+  private spellFlash(simX: number, simY: number, radiusPx: number, color: number, scale: number): void {
+    const geo = new THREE.SphereGeometry(Math.max(0.2, wr(radiusPx) * 0.5), 12, 10)
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(wx(simX), 0.8, wz(simY))
+    this.scene.add(mesh)
+    this.transients.push({ obj: mesh, mat, geo, t: 0, life: 0.4, kind: 'flash', baseScale: scale, fade: true })
+  }
+
   private updateTransients(dt: number): void {
     for (let i = this.transients.length - 1; i >= 0; i--) {
       const tr = this.transients[i]
@@ -1168,6 +1359,15 @@ export class BattleView3D {
       }
     }
 
+    // hero: bob + spin the element crystal, gentle idle sway of the figure
+    for (const [, s] of this.heroViews) {
+      const y0 = s.orb.userData.y0 as number
+      s.orb.position.y = y0 + Math.sin(this.clockT * 2.6) * 0.06
+      s.orb.rotation.y += dt * 2.2
+      s.orb.rotation.x += dt * 1.1
+      s.figure.position.y = Math.sin(this.clockT * 2 + s.group.position.x) * 0.03
+    }
+
     this.updateParticles(dt)
     this.updateTransients(dt)
     this.composer.render()
@@ -1188,6 +1388,12 @@ export class BattleView3D {
     this.disposables.push(this.hpBgGeo, this.hpFillGeo)
     this.hpBgMat = new THREE.MeshBasicMaterial({ color: 0x101018, transparent: true, opacity: 0.7 })
     this.disposables.push(this.hpBgMat)
+    // hero figure primitives (shared across all hero slots)
+    this.heroBodyGeo = new THREE.ConeGeometry(0.34, 0.95, 7)
+    this.heroHeadGeo = new THREE.SphereGeometry(0.19, 12, 10)
+    this.heroOrbGeo = new THREE.IcosahedronGeometry(0.16, 0)
+    this.heroRingGeo = new THREE.RingGeometry(0.5, 0.6, 32)
+    this.disposables.push(this.heroBodyGeo, this.heroHeadGeo, this.heroOrbGeo, this.heroRingGeo)
   }
 
   // ---------------------------------------------------------------- teardown
@@ -1229,6 +1435,9 @@ export class BattleView3D {
     // dispose their geometry (the persistent registry re-uploads it next battle).
     for (const [, s] of this.towerViews) this.scene.remove(s.group)
     this.towerViews.clear()
+    // hero slots own per-slot materials + a canvas badge texture — dispose them
+    for (const [, s] of this.heroViews) { this.scene.remove(s.group); this.disposeHeroSlot(s) }
+    this.heroViews.clear()
     this.scene.remove(this.detailGroup)
     this.scene.remove(this.buildHighlight)
 

@@ -1,0 +1,334 @@
+// HeroCollection — the CARD collection screen (Rush Royale / Realm Defense style).
+// A rich HTML/CSS DOM overlay mounted by HeroesScene: a grid of rarity-framed,
+// element-coloured hero cards showing level, star pips, stats, the signature spell,
+// a Level-Up button and an add-to-party toggle. Art is a placeholder (element
+// gradient + glyph + rarity frame) so the structure already reads like the
+// reference games; painted portraits swap into .hc-portrait later untouched.
+//
+// It owns NO progression logic: it reads + mutates through `economy` (the single
+// currency/save authority) and re-renders. Disposed fully by the scene on exit.
+
+import { economy } from '../game/economy'
+import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
+import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL } from '../game/heroProgress'
+
+function hex(c: number): string {
+  return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
+}
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag)
+  if (cls) e.className = cls
+  if (text !== undefined) e.textContent = text
+  return e
+}
+
+const RARITY_LABEL: Record<HeroRarity, string> = { common: 'COMMON', rare: 'RARE', epic: 'EPIC' }
+
+const CSS = `
+.hc-root, .hc-root * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; font-family:'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; }
+.hc-root { position:fixed; inset:0; z-index:40; color:#fff; user-select:none; overflow:hidden;
+  background:radial-gradient(120% 90% at 50% -10%, #2a1a5c 0%, #170e33 55%, #0e0822 100%); }
+.hc-scroll { position:absolute; inset:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding: calc(env(safe-area-inset-top,0px) + 8px) 12px calc(env(safe-area-inset-bottom,0px) + 24px); }
+
+/* header */
+.hc-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.hc-back { pointer-events:auto; padding:9px 16px; border:0; border-radius:14px; font:inherit; font-weight:900; font-size:16px; color:#fff; cursor:pointer;
+  background:linear-gradient(180deg,#7b52d8,#4a2f9a); box-shadow:0 5px 14px rgba(0,0,0,.4); }
+.hc-back:active { transform:scale(.94); }
+.hc-title { font-size:26px; font-weight:900; letter-spacing:.5px; text-shadow:0 3px 0 rgba(0,0,0,.4); color:#ffd54a; -webkit-text-stroke:1px #7b2ff7; }
+.hc-wallet { margin-left:auto; display:flex; gap:8px; }
+.hc-cur { display:flex; align-items:center; gap:5px; background:linear-gradient(180deg,#2f2258,#241a44); border:1px solid rgba(255,255,255,.14);
+  border-radius:13px; padding:6px 11px; font-weight:900; font-size:15px; box-shadow:0 3px 10px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
+.hc-cur .ci { font-size:15px; }
+
+/* party strip */
+.hc-party-bar { display:flex; align-items:center; gap:10px; background:linear-gradient(180deg,rgba(46,32,92,.9),rgba(28,18,58,.9));
+  border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:10px 12px; margin-bottom:12px; box-shadow:0 4px 14px rgba(0,0,0,.35); }
+.hc-party-lbl { font-size:13px; font-weight:900; letter-spacing:1px; color:#c9b6ff; }
+.hc-party-slots { display:flex; gap:8px; }
+.hc-slot { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:20px;
+  border:2px dashed rgba(255,255,255,.25); background:rgba(0,0,0,.2); color:#6a5da0; }
+.hc-slot.filled { border-style:solid; box-shadow:0 0 12px currentColor, inset 0 2px 5px rgba(255,255,255,.3); }
+.hc-party-hint { margin-left:auto; font-size:12px; font-weight:700; color:#9f90d0; }
+
+/* grid */
+.hc-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(168px, 1fr)); gap:12px; max-width:760px; margin:0 auto; }
+
+/* card */
+.hc-card { position:relative; border-radius:18px; padding:3px; box-shadow:0 8px 22px rgba(0,0,0,.5);
+  background:linear-gradient(160deg, var(--rar), rgba(0,0,0,.25)); }
+.hc-card.inparty { box-shadow:0 0 0 3px var(--rar), 0 8px 24px rgba(0,0,0,.55); }
+.hc-frame { position:relative; border-radius:16px; padding:10px 10px 12px; background:linear-gradient(180deg,#241743,#150b2c);
+  display:flex; flex-direction:column; gap:6px; overflow:hidden; }
+.hc-frame::before { content:''; position:absolute; inset:0; background:radial-gradient(80% 55% at 50% 0%, var(--elem) 0%, transparent 60%); opacity:.22; pointer-events:none; }
+.hc-top { display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
+.hc-rarity { font-size:10px; font-weight:900; letter-spacing:1.5px; color:var(--rar); }
+.hc-elem { font-size:10px; font-weight:900; letter-spacing:.5px; padding:2px 7px; border-radius:9px; color:#fff; background:var(--elem); box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.hc-portrait { position:relative; height:96px; border-radius:12px; display:grid; place-items:center;
+  background:linear-gradient(160deg, var(--elem), var(--accent)); box-shadow:inset 0 3px 10px rgba(255,255,255,.28), inset 0 -6px 14px rgba(0,0,0,.4); z-index:1; }
+.hc-glyph { font-size:52px; filter:drop-shadow(0 3px 4px rgba(0,0,0,.5)); }
+.hc-lvl { position:absolute; bottom:6px; right:6px; background:rgba(10,6,22,.85); border:1px solid rgba(255,255,255,.3);
+  border-radius:9px; font-size:12px; font-weight:900; padding:2px 8px; color:#ffe27a; }
+.hc-name { font-size:19px; font-weight:900; line-height:1; z-index:1; }
+.hc-title { font-size:11px; font-weight:700; color:#c9b6ff; margin-top:-3px; z-index:1; }
+.hc-pips { font-size:14px; letter-spacing:2px; color:#ffd54a; z-index:1; }
+.hc-role { font-size:11px; font-weight:800; color:#a8e9ff; z-index:1; }
+.hc-stats { font-size:12px; font-weight:800; color:#e6dcff; z-index:1; }
+.hc-stats .delta { color:#8dff4a; }
+.hc-xp { position:relative; height:14px; border-radius:8px; background:rgba(0,0,0,.4); overflow:hidden; z-index:1; }
+.hc-xpfill { position:absolute; inset:0; width:0%; background:linear-gradient(90deg,#4fb4ff,#8dff4a); border-radius:8px; transition:width .3s; }
+.hc-xptxt { position:absolute; inset:0; display:grid; place-items:center; font-size:10px; font-weight:900; text-shadow:0 1px 2px #000; }
+.hc-spell { display:flex; align-items:center; gap:8px; background:rgba(0,0,0,.28); border-radius:10px; padding:6px 8px; z-index:1; }
+.hc-sglyph { width:30px; height:30px; flex:0 0 auto; border-radius:8px; display:grid; place-items:center; font-size:17px; background:var(--elem); box-shadow:0 0 8px var(--elem); }
+.hc-sinfo { line-height:1.2; }
+.hc-sname { font-size:13px; font-weight:900; }
+.hc-sblurb { font-size:10px; color:#c9b6ff; }
+.hc-actions { display:flex; gap:6px; margin-top:2px; z-index:1; }
+.hc-btn { flex:1; pointer-events:auto; border:0; border-radius:11px; font:inherit; font-weight:900; font-size:12px; padding:9px 4px; color:#fff; cursor:pointer;
+  box-shadow:0 3px 9px rgba(0,0,0,.4); line-height:1.1; }
+.hc-btn:active { transform:scale(.95); }
+.hc-lvlup { background:linear-gradient(180deg,#3ad07a,#1f9a54); }
+.hc-lvlup.free { background:linear-gradient(180deg,#ffd54a,#e0a020); color:#5a3d00; }
+.hc-lvlup.no { background:#4a4470; color:#b9b1d8; }
+.hc-lvlup.max { background:#3a2f66; color:#ffd54a; }
+.hc-party-btn { flex:0 0 auto; min-width:48px; background:linear-gradient(180deg,#4a7bff,#2a4fb0); }
+.hc-party-btn.in { background:linear-gradient(180deg,#3ad07a,#1f9a54); }
+.hc-party-btn.no { background:#4a4470; color:#b9b1d8; }
+
+/* locked overlay */
+.hc-lock { position:absolute; inset:3px; border-radius:16px; background:rgba(8,5,18,.74); backdrop-filter:blur(2px);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; z-index:3; }
+.hc-lock .lk { font-size:40px; opacity:.9; }
+.hc-lock .lname { font-size:16px; font-weight:900; }
+.hc-unlock { pointer-events:auto; border:0; border-radius:12px; font:inherit; font-weight:900; font-size:14px; padding:10px 16px; cursor:pointer; color:#fff;
+  background:linear-gradient(180deg,#c06bff,#7b2ff7); box-shadow:0 4px 12px rgba(0,0,0,.45); }
+.hc-unlock.no { background:#4a4470; color:#b9b1d8; }
+.hc-unlock:active { transform:scale(.95); }
+
+/* toast */
+.hc-toast { position:fixed; left:50%; bottom:14%; transform:translateX(-50%); z-index:50; padding:12px 22px; border-radius:14px;
+  font-weight:900; font-size:17px; color:#fff; background:linear-gradient(180deg,#2f2258,#1a1030); border:2px solid; box-shadow:0 8px 22px rgba(0,0,0,.55);
+  animation:hctoast 1.6s ease-out forwards; white-space:nowrap; }
+@keyframes hctoast { 0%{ opacity:0; transform:translateX(-50%) translateY(14px) scale(.8);} 15%{ opacity:1; transform:translateX(-50%) translateY(0) scale(1);} 80%{ opacity:1;} 100%{ opacity:0; } }
+`
+
+export class HeroCollection {
+  readonly root: HTMLDivElement
+  private styleEl: HTMLStyleElement
+  private scroll: HTMLDivElement
+  private grid: HTMLDivElement
+  private walletEl: HTMLDivElement
+  private partySlots: HTMLDivElement
+  private partyHint: HTMLElement
+  private onBack: () => void
+
+  constructor(onBack: () => void) {
+    this.onBack = onBack
+    this.styleEl = el('style')
+    this.styleEl.textContent = CSS
+    document.head.appendChild(this.styleEl)
+
+    this.root = el('div', 'hc-root')
+    this.scroll = el('div', 'hc-scroll')
+    this.root.append(this.scroll)
+
+    // header
+    const head = el('div', 'hc-head')
+    const back = el('button', 'hc-back', '‹ BACK')
+    back.onclick = () => this.onBack()
+    head.append(back, el('div', 'hc-title', 'HEROES'))
+    this.walletEl = el('div', 'hc-wallet')
+    head.append(this.walletEl)
+    this.scroll.append(head)
+
+    // party strip
+    const pbar = el('div', 'hc-party-bar')
+    pbar.append(el('div', 'hc-party-lbl', 'PARTY'))
+    this.partySlots = el('div', 'hc-party-slots')
+    pbar.append(this.partySlots)
+    this.partyHint = el('div', 'hc-party-hint', '')
+    pbar.append(this.partyHint)
+    this.scroll.append(pbar)
+
+    // grid
+    this.grid = el('div', 'hc-grid')
+    this.scroll.append(this.grid)
+
+    document.body.appendChild(this.root)
+    this.render()
+  }
+
+  private render(): void {
+    this.renderWallet()
+    this.renderParty()
+    this.grid.innerHTML = ''
+    for (const id of HERO_ORDER) {
+      const def = HEROES[id]
+      if (def) this.grid.append(this.buildCard(def))
+    }
+  }
+
+  private renderWallet(): void {
+    this.walletEl.innerHTML = ''
+    const shards = el('div', 'hc-cur')
+    shards.append(el('span', 'ci', '🔹'), el('span', undefined, String(economy.heroShards)))
+    const coins = el('div', 'hc-cur')
+    coins.append(el('span', 'ci', '🪙'), el('span', undefined, String(economy.coins)))
+    this.walletEl.append(shards, coins)
+  }
+
+  private renderParty(): void {
+    this.partySlots.innerHTML = ''
+    const party = economy.party()
+    for (let i = 0; i < MAX_PARTY; i++) {
+      const id = party[i]
+      const slot = el('div', 'hc-slot')
+      if (id && HEROES[id]) {
+        const def = HEROES[id]
+        slot.classList.add('filled')
+        slot.textContent = def.glyph
+        slot.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+        slot.style.borderColor = hex(def.color)
+        slot.style.color = hex(def.color)
+      } else {
+        slot.textContent = '+'
+      }
+      this.partySlots.append(slot)
+    }
+    this.partyHint.textContent = `${party.length}/${MAX_PARTY} · pick up to ${MAX_PARTY}`
+  }
+
+  private buildCard(def: HeroDef): HTMLElement {
+    const st = economy.heroState(def.id)
+    const card = el('div', 'hc-card')
+    card.style.setProperty('--elem', hex(def.color))
+    card.style.setProperty('--accent', hex(def.accent))
+    card.style.setProperty('--rar', hex(RARITY_COLOR[def.rarity]))
+    const inParty = economy.party().includes(def.id)
+    if (inParty) card.classList.add('inparty')
+
+    const frame = el('div', 'hc-frame')
+
+    const top = el('div', 'hc-top')
+    top.append(el('div', 'hc-rarity', RARITY_LABEL[def.rarity]))
+    const elem = el('div', 'hc-elem', def.element)
+    elem.style.background = hex(def.color)
+    top.append(elem)
+    frame.append(top)
+
+    const portrait = el('div', 'hc-portrait')
+    portrait.append(el('div', 'hc-glyph', def.glyph))
+    portrait.append(el('div', 'hc-lvl', `Lv ${st.level}`))
+    frame.append(portrait)
+
+    frame.append(el('div', 'hc-name', def.name))
+    frame.append(el('div', 'hc-title', def.title))
+
+    const pips = Math.max(1, Math.min(5, Math.ceil(st.level / 4)))
+    frame.append(el('div', 'hc-pips', '★'.repeat(pips) + '☆'.repeat(5 - pips)))
+    frame.append(el('div', 'hc-role', `${def.role} · ${def.damageType}`))
+
+    // stats with next-level delta
+    const cur = heroStats(def, st.level)
+    const stats = el('div', 'hc-stats')
+    if (st.level < MAX_HERO_LEVEL) {
+      const nxt = heroStats(def, st.level + 1)
+      const dd = Math.round(nxt.damage - cur.damage)
+      stats.innerHTML = `DMG ${Math.round(cur.damage)} <span class="delta">▲${dd}</span> · RNG ${cur.range.toFixed(1)} · ${cur.cooldown.toFixed(2)}s`
+    } else {
+      stats.textContent = `DMG ${Math.round(cur.damage)} · RNG ${cur.range.toFixed(1)} · ${cur.cooldown.toFixed(2)}s`
+    }
+    frame.append(stats)
+
+    // XP bar
+    const xpWrap = el('div', 'hc-xp')
+    const fill = el('div', 'hc-xpfill')
+    const need = xpForLevel(st.level)
+    const frac = st.level >= MAX_HERO_LEVEL ? 1 : Math.max(0, Math.min(1, st.xp / need))
+    fill.style.width = `${Math.round(frac * 100)}%`
+    xpWrap.append(fill)
+    xpWrap.append(el('div', 'hc-xptxt', st.level >= MAX_HERO_LEVEL ? 'MAX LEVEL' : `XP ${st.xp}/${need}`))
+    frame.append(xpWrap)
+
+    // spell
+    const spell = heroSpellScaled(def.spell, st.level)
+    const spellEl = el('div', 'hc-spell')
+    const sg = el('div', 'hc-sglyph', def.spell.glyph)
+    sg.style.background = hex(def.color)
+    const sinfo = el('div', 'hc-sinfo')
+    const dmgTxt = spell.damage ? ` (${Math.round(spell.damage)})` : ''
+    sinfo.append(el('div', 'hc-sname', def.spell.name + dmgTxt), el('div', 'hc-sblurb', def.spell.blurb))
+    spellEl.append(sg, sinfo)
+    frame.append(spellEl)
+
+    // actions
+    const actions = el('div', 'hc-actions')
+    actions.append(this.levelUpButton(def, st.level, st.xp))
+    actions.append(this.partyButton(def, inParty))
+    frame.append(actions)
+
+    card.append(frame)
+
+    // locked overlay
+    if (!st.unlocked) card.append(this.lockOverlay(def))
+    return card
+  }
+
+  private levelUpButton(def: HeroDef, level: number, xp: number): HTMLButtonElement {
+    if (level >= MAX_HERO_LEVEL) {
+      const b = el('button', 'hc-btn hc-lvlup max', 'MAX')
+      b.disabled = true
+      return b
+    }
+    const free = xp >= xpForLevel(level)
+    const cost = shardCostForLevel(level)
+    const afford = free || economy.heroShards >= cost
+    const b = el('button', `hc-btn hc-lvlup ${free ? 'free' : afford ? '' : 'no'}`)
+    b.innerHTML = free ? 'LEVEL UP<br>FREE ★' : `LEVEL UP<br>${cost} 🔹`
+    b.onclick = () => {
+      const res = economy.levelUpHero(def.id)
+      if (res) { this.toast(`${def.name} → Lv ${economy.heroState(def.id).level}!`, def.color); this.render() }
+      else this.toast('Not enough shards', 0xff5b7a)
+    }
+    return b
+  }
+
+  private partyButton(def: HeroDef, inParty: boolean): HTMLButtonElement {
+    const full = economy.party().length >= MAX_PARTY && !inParty
+    const b = el('button', `hc-btn hc-party-btn ${inParty ? 'in' : full ? 'no' : ''}`)
+    b.textContent = inParty ? '✓' : full ? 'FULL' : '＋'
+    b.onclick = () => {
+      if (!inParty && full) { this.toast(`Party is full (${MAX_PARTY})`, 0xff5b7a); return }
+      economy.toggleParty(def.id)
+      this.render()
+    }
+    return b
+  }
+
+  private lockOverlay(def: HeroDef): HTMLElement {
+    const ov = el('div', 'hc-lock')
+    ov.append(el('div', 'lk', '🔒'), el('div', 'lname', def.name))
+    const afford = economy.heroShards >= def.unlockShards
+    const btn = el('button', `hc-unlock ${afford ? '' : 'no'}`, `UNLOCK · ${def.unlockShards} 🔹`)
+    btn.onclick = () => {
+      if (economy.unlockHero(def.id)) { this.toast(`${def.name} unlocked!`, def.color); this.render() }
+      else this.toast('Not enough shards', 0xff5b7a)
+    }
+    ov.append(btn)
+    return ov
+  }
+
+  private toast(msg: string, color: number): void {
+    const t = el('div', 'hc-toast', msg)
+    t.style.borderColor = hex(color)
+    t.style.color = color === 0xff5b7a ? '#ffd0da' : '#fff'
+    document.body.appendChild(t)
+    window.setTimeout(() => t.remove(), 1650)
+  }
+
+  dispose(): void {
+    this.root.remove()
+    this.styleEl.remove()
+    document.querySelectorAll('.hc-toast').forEach((n) => n.remove())
+  }
+}
