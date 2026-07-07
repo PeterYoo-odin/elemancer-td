@@ -89,6 +89,7 @@ interface EnemySlot {
   accent: number // signature Greying accent colour
   boss: boolean // keeper / Titan → set-piece scale + extra spectacle
   castWarned: boolean // keeper telegraph active → flare the accent glow as a tell
+  prevShield: number // Titan mid-fight phase: the frame its shield shatters is a beat
 }
 
 // One animated garnish on a tower (floating ring / orb / flame / runestone):
@@ -1166,7 +1167,7 @@ export class BattleView3D {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
       auraPip: null, auraPipMat: null, crown, crownMat,
-      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false,
+      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false, prevShield: e.shieldMax,
     }
 
     // Swap the primitive body for the painted "greyling" billboard once its PNG
@@ -1479,6 +1480,7 @@ export class BattleView3D {
         s.yaw = 0
         s.burning = false
         s.emberAcc = 0
+        s.prevShield = e.shieldMax // fresh spawn: arm the Titan shield-break beat
         this.configureShield(s, e)
         // portal birth: glow ring at the spawn point + a pulse of the portal torus
         this.pushRing(e.x, e.y, e.def.radius + 34, 0x9a5cff, 0.8)
@@ -1574,6 +1576,14 @@ export class BattleView3D {
     if (s.shield) {
       const sm = s.shield.material as THREE.MeshBasicMaterial
       sm.opacity = e.shield > 0 ? 0.22 : 0
+    }
+
+    // Morose Titan mid-fight phase: the frame its shield shatters is a set-piece
+    // beat — a real arc of entrance → shield-break → screen-filling finale. Pure
+    // view read of e.shield (no sim change); reduce-motion auto-handled by shake/push.
+    if (s.boss && e.kind === 'boss') {
+      if (s.prevShield > 0 && e.shield <= 0) this.fxKeeperPhase(e.x, e.y, e.def.color, e.def.accent)
+      s.prevShield = e.shield
     }
   }
 
