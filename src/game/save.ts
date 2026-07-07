@@ -3,7 +3,7 @@
 // default, so a missing `workshop`/`diamonds`/etc. resolves to a default, not
 // `undefined`. economy.ts is the only module that mutates + persists this.
 
-export const SAVE_VERSION = 4
+export const SAVE_VERSION = 5
 const SAVE_KEY = 'elemancer_td_save_v1'
 
 // Persisted per-hero progression (see heroProgress.ts for the scaling rules).
@@ -11,6 +11,13 @@ export interface SavedHero {
   level: number
   xp: number
   unlocked: boolean
+}
+
+// Persisted per-Wyrm growth (hatchling→adult). Discovery/awakening is DERIVED
+// from realm-finale clears, so only growth needs storing here.
+export interface SavedWyrm {
+  level: number
+  xp: number
 }
 
 export interface SaveData {
@@ -29,6 +36,10 @@ export interface SaveData {
   heroShards: number // free currency for unlocking + levelling heroes
   heroes: Record<string, SavedHero> // heroId -> progression (starters unlocked)
   party: string[] // chosen loadout (hero ids, up to MAX_PARTY) — this is SLOT 1; Ranked always uses it
+  // --- Chromatic Wyrms (companion dragons + the hero↔dragon BOND) ---
+  wyrms: Record<string, SavedWyrm> // wyrmId -> growth (earned through play)
+  bonds: Record<string, string> // heroId -> bonded wyrmId (Ranked normalizes the Wyrm's level)
+  wyrmActSeen: boolean // the late-act "Waking of the Wyrms" beat has played once
   // --- store / economy (all cosmetic or casual-only; Ranked ignores everything here) ---
   prisms: number // event-only cosmetic currency, earned by play, never sold
   owned: string[] // owned SKU ids (skins, dyes, convenience, prestige)
@@ -86,6 +97,9 @@ export function defaultSave(): SaveData {
     heroShards: 0,
     heroes: starterHeroes(),
     party: [...STARTER_HERO_IDS],
+    wyrms: {},
+    bonds: {},
+    wyrmActSeen: false,
     prisms: 0,
     owned: [],
     equipped: {},
@@ -162,6 +176,23 @@ function coerce(raw: unknown): SaveData {
     for (const p of o.party) if (typeof p === 'string' && party.length < 3 && !party.includes(p)) party.push(p)
     d.party = party
   }
+
+  // --- Chromatic Wyrms (each field defended; old blobs keep the fresh defaults) ---
+  if (o.wyrms && typeof o.wyrms === 'object') {
+    for (const [k, v] of Object.entries(o.wyrms as Record<string, unknown>)) {
+      if (!v || typeof v !== 'object') continue
+      const w = v as Record<string, unknown>
+      const level = typeof w.level === 'number' && isFinite(w.level) ? Math.max(1, Math.floor(w.level)) : 1
+      const xp = typeof w.xp === 'number' && isFinite(w.xp) ? Math.max(0, Math.floor(w.xp)) : 0
+      d.wyrms[k] = { level, xp }
+    }
+  }
+  if (o.bonds && typeof o.bonds === 'object') {
+    for (const [k, v] of Object.entries(o.bonds as Record<string, unknown>)) {
+      if (typeof v === 'string' && v) d.bonds[k] = v
+    }
+  }
+  d.wyrmActSeen = o.wyrmActSeen === true
 
   // --- store / economy (each field defended; old blobs keep defaults) ---
   if (typeof o.prisms === 'number' && isFinite(o.prisms)) d.prisms = Math.max(0, Math.floor(o.prisms))

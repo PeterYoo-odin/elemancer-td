@@ -197,7 +197,7 @@ export class BattleScene extends Phaser.Scene {
       : this.endless
         ? economy.rankedParty()
         : partyAllowedForMode(this.runMode) // No-Hero challenge: leave the champions home
-          ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
+          ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level, wyrm: economy.bondEntry(id) }))
           : []
     this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
 
@@ -953,7 +953,15 @@ export class BattleScene extends Phaser.Scene {
 
   // Free hero currency + XP earned by playing (the provably-fair progression path).
   private awardHeroes(shards: number, xpEach: number): number {
-    economy.awardHeroProgress(economy.party(), xpEach, shards)
+    const party = economy.party()
+    economy.awardHeroProgress(party, xpEach, shards)
+    // A bonded Wyrm grows by flying with its hero (hatchling → adult, earned).
+    const wyrmIds: string[] = []
+    for (const id of party) {
+      const w = economy.bondFor(id)
+      if (w && !wyrmIds.includes(w)) wyrmIds.push(w)
+    }
+    if (wyrmIds.length > 0) economy.awardWyrmProgress(wyrmIds, xpEach)
     return shards
   }
   private endlessShards(): number { return 8 + Math.round(this.sim.waveIndex * 2.5) }

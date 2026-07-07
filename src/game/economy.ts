@@ -19,6 +19,11 @@ import {
 import { STARTER_HEROES, MAX_PARTY, heroById } from './heroes'
 import { MAX_HERO_LEVEL, clampLevel, xpForLevel, shardCostForLevel } from './heroProgress'
 import {
+  REALM_FINALE, WYRM_ACT_REALMS, WYRM_MAX_LEVEL, RANKED_WYRM_LEVEL,
+  clampWyrmLevel, wyrmXpForLevel, wyrmById, isPrismHero, bondTier, WYRM_ORDER,
+} from './wyrms'
+import type { SavedWyrm } from './save'
+import {
   skuById,
   passTierForXp,
   PASS_SEASON,
@@ -684,8 +689,10 @@ class Economy {
 
   // RANKED loadout: ALWAYS slot 1, hero levels normalized — no purchase and no
   // grind changes ranked hero strength. This is the constitution, in code.
-  rankedParty(): Array<{ heroId: string; level: number }> {
-    return this.validateParty(this.data.party).map((id) => ({ heroId: id, level: RANKED_HERO_LEVEL }))
+  rankedParty(): Array<{ heroId: string; level: number; wyrm?: { wyrmId: string; level: number } }> {
+    return this.validateParty(this.data.party).map((id) => ({
+      heroId: id, level: RANKED_HERO_LEVEL, wyrm: this.rankedBondEntry(id),
+    }))
   }
   // Toggle a hero in/out of the party (respecting the cap). Returns the new party.
   toggleParty(id: string): string[] {
@@ -695,6 +702,129 @@ class Economy {
     else if (cur.length < MAX_PARTY && this.isHeroUnlocked(id)) cur.push(id)
     this.setParty(cur)
     return this.party()
+  }
+
+  // ======================================================================
+  //  CHROMATIC WYRMS — companion dragons + the hero↔dragon BOND.
+  //  FAIRNESS: discovery is EARNED (gated on realm restoration), growth is
+  //  EARNED (play awards XP), and RANKED NORMALIZES the Wyrm's level so no
+  //  grind/purchase changes ranked strength. Skins are the only store items.
+  // ======================================================================
+
+  // Persisted growth for a Wyrm (defaults to a fresh hatchling).
+  wyrmState(id: string): SavedWyrm {
+    const s = this.data.wyrms[id]
+    if (s) return { level: clampWyrmLevel(s.level), xp: Math.max(0, s.xp) }
+    return { level: 1, xp: 0 }
+  }
+  wyrmXpProgress(id: string): { xp: number; need: number } {
+    const s = this.wyrmState(id)
+    return { xp: s.xp, need: wyrmXpForLevel(s.level) }
+  }
+
+  // How many realms are RESTORED (their Keeper finale cleared). Drives the gate.
+  realmsRestored(): number {
+    let n = 0
+    for (const finaleId of Object.values(REALM_FINALE)) {
+      if (this.data.firstClears[finaleId]) n++
+    }
+    return n
+  }
+  // The late act — "The Waking of the Wyrms" — unlocks once enough realms return.
+  wyrmsAwakened(): boolean {
+    return this.realmsRestored() >= WYRM_ACT_REALMS
+  }
+  // A Wyrm is discovered when the act is open AND its own realm is restored.
+  wyrmDiscovered(wyrmId: string): boolean {
+    if (!this.wyrmsAwakened()) return false
+    const w = wyrmById(wyrmId)
+    if (!w) return false
+    return this.data.firstClears[REALM_FINALE[w.realmId]] === true
+  }
+  discoveredWyrms(): string[] {
+    if (!this.wyrmsAwakened()) return []
+    return WYRM_ORDER.filter((id) => this.wyrmDiscovered(id))
+  }
+  wyrmActSeen(): boolean {
+    return this.data.wyrmActSeen === true
+  }
+  markWyrmActSeen(): void {
+    if (!this.data.wyrmActSeen) { this.data.wyrmActSeen = true; this.save() }
+  }
+
+  // The bonded Wyrm for a hero (validated: only a DISCOVERED Wyrm counts).
+  bondFor(heroId: string): string | null {
+    const w = this.data.bonds[heroId]
+    return w && this.wyrmDiscovered(w) ? w : null
+  }
+  // Assign (or clear) a hero's bonded Wyrm. A Wyrm bonds to at most one hero at a
+  // time (like a pet) — assigning it elsewhere unbinds the previous holder. Fizz
+  // (Prism Bond) may swap freely; any hero may re-bond any discovered Wyrm.
+  setBond(heroId: string, wyrmId: string | null): boolean {
+    if (!heroById(heroId)) return false
+    if (!wyrmId) { delete this.data.bonds[heroId]; this.save(); return true }
+    if (!this.wyrmDiscovered(wyrmId)) return false
+    for (const [hid, wid] of Object.entries(this.data.bonds)) {
+      if (wid === wyrmId && hid !== heroId) delete this.data.bonds[hid]
+    }
+    this.data.bonds[heroId] = wyrmId
+    this.save()
+    return true
+  }
+
+  // Sim loadout entry for a hero's bonded Wyrm (casual: earned level). undefined
+  // when unbonded/undiscovered, so no companion reaches the sim.
+  bondEntry(heroId: string): { wyrmId: string; level: number } | undefined {
+    const w = this.bondFor(heroId)
+    if (!w) return undefined
+    return { wyrmId: w, level: this.wyrmState(w).level }
+  }
+  // RANKED loadout entry — the Wyrm's level is NORMALIZED to a constant, so
+  // grinding or buying never changes ranked companion power (the constitution).
+  rankedBondEntry(heroId: string): { wyrmId: string; level: number } | undefined {
+    const w = this.bondFor(heroId)
+    if (!w) return undefined
+    return { wyrmId: w, level: RANKED_WYRM_LEVEL }
+  }
+
+  // Award XP to the bonded Wyrms of the fielded party (auto-levels, like heroes).
+  awardWyrmProgress(wyrmIds: string[], xp: number): void {
+    const gain = Math.max(0, Math.round(xp))
+    if (gain <= 0) return
+    let touched = false
+    for (const id of wyrmIds) {
+      if (!wyrmById(id)) continue
+      const s = this.wyrmState(id)
+      let level = s.level
+      let cur = s.xp + gain
+      while (level < WYRM_MAX_LEVEL) {
+        const need = wyrmXpForLevel(level)
+        if (cur < need) break
+        cur -= need
+        level++
+      }
+      if (level >= WYRM_MAX_LEVEL) cur = 0
+      this.data.wyrms[id] = { level: clampWyrmLevel(level), xp: Math.max(0, Math.floor(cur)) }
+      touched = true
+    }
+    if (touched) this.save()
+  }
+
+  // The best available Wyrm for a hero to bond next (its Perfect if discovered,
+  // else the tightest discovered tier) — powers the Bond screen's suggestion.
+  suggestedWyrm(heroId: string): string | null {
+    if (isPrismHero(heroId)) {
+      const d = this.discoveredWyrms()
+      return d.length ? d[0] : null
+    }
+    let best: string | null = null
+    let bestRank = -1
+    const rank: Record<string, number> = { perfect: 2, good: 1, regular: 0 }
+    for (const id of this.discoveredWyrms()) {
+      const r = rank[bondTier(heroId, id)] ?? 0
+      if (r > bestRank) { bestRank = r; best = id }
+    }
+    return best
   }
 
   // ---- tower unlocks ----

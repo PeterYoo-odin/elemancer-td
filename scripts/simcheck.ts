@@ -17,6 +17,7 @@ import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
 import { runScriptedDemo } from '../src/game/attractScript'
 import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
+import { resolveBond, RANKED_WYRM_LEVEL, WYRM_MAX_LEVEL } from '../src/game/wyrms'
 
 // Stress runs are DECOUPLED from the campaign ladder: we build a bespoke max-size
 // level (6-lane serpentine) so regenerating LEVELS can never starve the ≥200
@@ -34,6 +35,7 @@ const STEP_BUDGET = 60 * 60 * 200 // generous cap (~200 min of sim time)
 let failures = 0
 let reactionEvents = 0 // elemental reactions must actually fire during the stress runs
 let fusionsForged = 0 // fusion towers must be forged (and survive) the stress runs
+let wyrmBreaths = 0 // bonded Wyrms must actually breathe during the stress runs
 const seen: Record<string, number> = {}
 function fail(msg: string): void {
   const key = msg.slice(0, 60)
@@ -50,10 +52,14 @@ function finite(v: number): boolean {
 // exercised by the gate (all levels ≥ 3 → signatures awake): A = cindernova /
 // twinspark / tithe + Fire resonance; B = foreseen / intercession / wager;
 // C = deeproots / overload (+ a repeat Control for the slow-stack interplay).
-const PARTIES: Array<Array<{ heroId: string; level: number }>> = [
-  [{ heroId: 'ember', level: 20 }, { heroId: 'pyra', level: 12 }, { heroId: 'vex', level: 8 }],
-  [{ heroId: 'glacia', level: 12 }, { heroId: 'aurelia', level: 14 }, { heroId: 'zephyra', level: 10 }],
-  [{ heroId: 'sylvan', level: 10 }, { heroId: 'volt', level: 10 }, { heroId: 'glacia', level: 6 }],
+// Bonded CHROMATIC WYRMS ride along in every party so the companion breath +
+// aura + fused-ultimate code paths are exercised under stress, and all six
+// Wyrm elements paint auras that detonate reactions alongside the towers.
+type SimParty = Array<{ heroId: string; level: number; wyrm?: { wyrmId: string; level: number } }>
+const PARTIES: SimParty[] = [
+  [{ heroId: 'ember', level: 20, wyrm: { wyrmId: 'pyrax', level: 10 } }, { heroId: 'pyra', level: 12 }, { heroId: 'vex', level: 8, wyrm: { wyrmId: 'umbrawyrm', level: 6 } }],
+  [{ heroId: 'glacia', level: 12, wyrm: { wyrmId: 'glaciaxis', level: 7 } }, { heroId: 'aurelia', level: 14, wyrm: { wyrmId: 'lumenwyrm', level: 5 } }, { heroId: 'zephyra', level: 10, wyrm: { wyrmId: 'voltaryx', level: 9 } }],
+  [{ heroId: 'sylvan', level: 10, wyrm: { wyrmId: 'verdwyrm', level: 8 } }, { heroId: 'volt', level: 10, wyrm: { wyrmId: 'voltaryx', level: 4 } }, { heroId: 'glacia', level: 6 }],
 ]
 
 function makeSim(seed: number, _levelIndex = 3, party = 0): Sim {
@@ -229,6 +235,9 @@ function validate(sim: Sim, tick: number): void {
     if (!finite(sim.heroDps(h)) || sim.heroDps(h) < 0) fail(`hero DPS bad: ${sim.heroDps(h)} @${tick}`)
     const rng = sim.heroRange(h)
     if (!finite(rng) || rng < 0) fail(`hero range bad: ${rng} @${tick}`)
+    // bonded-Wyrm companion state must stay finite + non-negative
+    if (!finite(h.wyrmBreathCd) || h.wyrmBreathCd < 0) fail(`wyrm breath cd out of range: ${h.wyrmBreathCd} @${tick}`)
+    if (h.wyrm && (!finite(h.wyrm.breathDamage) || h.wyrm.breathDamage < 0)) fail(`wyrm breath damage bad: ${h.wyrm.breathDamage} @${tick}`)
   }
   // damage numbers emitted this step must all be finite & non-negative
   for (const ev of sim.drainEvents()) {
@@ -238,6 +247,10 @@ function validate(sim: Sim, tick: number): void {
     if (ev.t === 'reaction') {
       reactionEvents++
       if (!finite(ev.x) || !finite(ev.y) || !finite(ev.radius) || ev.radius < 0) fail(`reaction event bad geometry @${tick}`)
+    }
+    if (ev.t === 'wyrmBreath') {
+      wyrmBreaths++
+      if (!finite(ev.x) || !finite(ev.y) || !finite(ev.radius) || ev.radius < 0) fail(`wyrm breath event bad geometry @${tick}`)
     }
   }
 }
@@ -321,6 +334,67 @@ else console.log(`  elemental reactions fired: ${reactionEvents}`)
 // and the fusion path must actually forge dual-aura towers under stress
 if (fusionsForged === 0) fail('no fusion towers were forged across the max-mode stress runs')
 else console.log(`  fusion towers forged: ${fusionsForged}`)
+
+// ---------------------------------------------------------------------------
+//  CHROMATIC WYRMS — the bonded-companion breath must fire under stress AND it
+//  must FEED the reaction system (fire breath detonates a frost-primed enemy).
+//  RANKED must NORMALIZE Wyrm power (no grind/purchase power); casual growth
+//  must be REAL (an adult out-breathes a hatchling). All deterministic.
+// ---------------------------------------------------------------------------
+console.log('\nchromatic wyrms — companion breath + reaction integration + ranked-neutrality…')
+if (wyrmBreaths === 0) fail('no bonded Wyrm ever breathed across the stress runs')
+else console.log(`  wyrm breaths fired: ${wyrmBreaths}`)
+
+// req 1a — a FIRE breath on a WATER-primed enemy must detonate a reaction. We
+// bond Pyrax (Fire) to Lumi (a WATER hero): only the Wyrm paints Fire, so any
+// reaction we see PROVES the breath — not the hero's attack — fed the system.
+function wyrmReactionProof(): boolean {
+  const sim = new Sim({
+    level: STRESS_LEVEL, mods: { ...NEUTRAL }, seed: 5, endless: true,
+    startGold: 5_000_000, startLives: 5_000_000,
+    party: [{ heroId: 'glacia', level: 20, wyrm: { wyrmId: 'pyrax', level: 12 } }],
+  })
+  let hero: ReturnType<Sim['deployHero']> = null
+  for (const c of sim.buildCells()) {
+    if (sim.canPlace(c.col, c.row)) { hero = sim.deployHero('glacia', c.col, c.row); if (hero) break }
+  }
+  if (!hero) return false
+  let saw = false
+  for (let i = 0; i < 60 * 40 && !saw; i++) {
+    if (sim.state === 'draft') { sim.chooseDraft(0); continue }
+    if (sim.state === 'prep') sim.startWave()
+    if (sim.state === 'won' || sim.state === 'lost') break
+    // keep every live enemy WATER-primed; Lumi's own hits are Water too (no
+    // reaction), so a detonation can only come from the Pyrax FIRE breath.
+    for (const e of sim.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      e.auraElem = 'Water'
+      e.auraUntil = sim.clock + 3
+      e.reactLockUntil = 0
+    }
+    sim.step()
+    for (const ev of sim.drainEvents()) if (ev.t === 'reaction') saw = true
+  }
+  return saw
+}
+if (!wyrmReactionProof()) fail('Wyrm breath does NOT feed the reaction system (fire breath failed to detonate a frost-primed enemy)')
+else console.log('  wyrm breath ⇒ reactions confirmed (fire breath detonates frost-primed enemies)')
+
+// RANKED NEUTRALITY (constitution): ranked pins every bonded Wyrm to a fixed
+// level, so no grind/purchase changes ranked companion power.
+const rk1 = resolveBond('ember', 'pyrax', RANKED_WYRM_LEVEL)
+const rk2 = resolveBond('ember', 'pyrax', RANKED_WYRM_LEVEL)
+if (!rk1 || !rk2 || rk1.breathDamage !== rk2.breathDamage) fail('ranked Wyrm resolve is non-deterministic')
+const hatch = resolveBond('ember', 'pyrax', 1)
+const adult = resolveBond('ember', 'pyrax', WYRM_MAX_LEVEL)
+if (!hatch || !adult || !(adult.breathDamage > hatch.breathDamage)) fail('Wyrm growth is inert — an adult must out-breathe a hatchling')
+// tiered affinity must actually tier: a PERFECT bond out-breathes a REGULAR one.
+const perfect = resolveBond('ember', 'pyrax', WYRM_MAX_LEVEL)
+const regular = resolveBond('ember', 'glaciaxis', WYRM_MAX_LEVEL)
+if (!perfect || !regular || !(perfect.breathDamage > regular.breathDamage) || perfect.ult === null || regular.ult !== null) {
+  fail('tiered affinity broken — PERFECT must out-breathe REGULAR and own a fused ultimate')
+}
+console.log(`  ranked-neutral (Lv ${RANKED_WYRM_LEVEL} pinned) · growth real (${Math.round(hatch.breathDamage)}→${Math.round(adult.breathDamage)}) · tiers ordered`)
 
 // ---------------------------------------------------------------------------
 //  SEED CODEC — the shareable WORD-WORD-NN space must round-trip exactly.

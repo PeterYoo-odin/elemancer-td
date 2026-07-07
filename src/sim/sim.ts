@@ -32,6 +32,7 @@ import { AURA_COLOR, FUSION_NAMES, REACTIONS, reactionFor, type AuraElement, typ
 import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
 import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
 import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
+import { resolveBond, type BondResolution } from '../game/wyrms'
 import { computeSynergies, neutralSynergy, type SynergyBonus, type SynergyEffects } from '../game/synergy'
 import { computeResonances, type ResonanceBonus } from '../game/resonance'
 import {
@@ -85,7 +86,9 @@ export interface SimConfig {
   endless: boolean
   startGold: number
   startLives: number
-  party?: Array<{ heroId: string; level: number }> // slice-6 hero loadout (optional)
+  // slice-6 hero loadout (optional). Each hero may carry a bonded Chromatic Wyrm
+  // (companion dragon) — deterministic breath + aura resolved via resolveBond().
+  party?: Array<{ heroId: string; level: number; wyrm?: { wyrmId: string; level: number } }>
   towerCap?: number // per-level challenge: max simultaneous towers (undefined = no cap)
 }
 
@@ -208,6 +211,11 @@ export interface SimHero {
   sigCounter: number // rhythm kinds (cindernova/foreseen/wager) + tithe text pacing
   sigRamp: number // deeproots: accumulated bonus aura from waves held
   sigGuardUsed: boolean // intercession: spent for the current wave
+  // CHROMATIC WYRM bond (null = no companion). Deterministic breath + aura; all
+  // effects folded through the shared damage/reaction pipeline (see updateHeroes).
+  wyrm: BondResolution | null
+  wyrmBreathCd: number // seconds until the next breath (0 = ready)
+  wyrmUltUsed: boolean // PERFECT fused ultimate: spent for the current wave
 }
 
 export interface SimProjectile {
@@ -251,6 +259,7 @@ export type SimEvent =
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
   | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
+  | { t: 'wyrmBreath'; wyrmId: string; element: Element; x: number; y: number; radius: number; color: number; ult: boolean; name: string }
   | { t: 'fuse'; towerId: number; name: string; x: number; y: number; px: number; py: number; color: number; color2: number }
   | { t: 'morose'; kind: 'warn' | 'greyTower' | 'stealDraft'; towerId: number; x: number; y: number; duration: number }
   | {
@@ -300,7 +309,7 @@ export class Sim {
   // heroes: the loadout available to deploy, which ids are already fielded, and the
   // live element-synergy state (recomputed whenever the field changes).
   private occupiedHero: (SimHero | null)[][] = []
-  private partyDefs: Array<{ heroId: string; level: number }> = []
+  private partyDefs: Array<{ heroId: string; level: number; wyrm?: { wyrmId: string; level: number } }> = []
   deployedHeroIds = new Set<string>()
   synergyEffects: SynergyEffects = neutralSynergy()
   synergyBonuses: SynergyBonus[] = []
@@ -381,7 +390,12 @@ export class Sim {
       if (this.partyDefs.length >= 3) break
       if (!p || seenHeroes.has(p.heroId) || !heroById(p.heroId)) continue
       seenHeroes.add(p.heroId)
-      this.partyDefs.push({ heroId: p.heroId, level: Math.max(1, Math.floor(p.level || 1)) })
+      // A bonded Wyrm rides along only if it resolves to a real companion; a bad
+      // id is dropped here so deployHero never sees it (the sim self-defends).
+      const wyrm = p.wyrm && resolveBond(p.heroId, p.wyrm.wyrmId, p.wyrm.level)
+        ? { wyrmId: p.wyrm.wyrmId, level: Math.max(1, Math.floor(p.wyrm.level || 1)) }
+        : undefined
+      this.partyDefs.push({ heroId: p.heroId, level: Math.max(1, Math.floor(p.level || 1)), wyrm })
     }
     this.planIntrusions()
     this.buildGrid()
@@ -686,8 +700,9 @@ export class Sim {
       this.emit({ t: 'text', x: 360, y: 250, msg: `+${bonus} EARLY`, color: 0xffd54a, size: 24 })
     }
     this.state = 'active'
-    // fresh wave → Seraphine's once-per-wave intercession is available again
-    for (const h of this.heroes) if (h.active) h.sigGuardUsed = false
+    // fresh wave → Seraphine's once-per-wave intercession + the Wyrm's fused
+    // ultimate are available again.
+    for (const h of this.heroes) if (h.active) { h.sigGuardUsed = false; h.wyrmUltUsed = false }
     this.buildSpawnQueue()
     // arm this wave's planned Morose moment (if any)
     const greyAt = this.greyWaves.get(this.waveIndex)
@@ -1405,6 +1420,16 @@ export class Sim {
         if (adjacentCell(a, n)) n.adjBuff += aura
       }
     }
+    // Chromatic Wyrm aura: nearby towers of the Wyrm's element hit harder.
+    const WYRM_AURA_R2 = (3 * TILE) * (3 * TILE)
+    for (const a of this.heroes) {
+      if (!a.active || !a.wyrm || a.wyrm.towerBuff <= 0) continue
+      const elem = a.wyrm.wyrm.element
+      for (const n of this.towers) {
+        if (!n.active || n.def.element !== elem) continue
+        if (dist2(a.x, a.y, n.x, n.y) <= WYRM_AURA_R2) n.buffDmg += a.wyrm.towerBuff
+      }
+    }
   }
 
   // Support-buff adjacency, for the view to draw glow links.
@@ -1986,6 +2011,7 @@ export class Sim {
     const cc = cellCenter(col, row)
     const stats = heroStats(def, pd.level)
     const spell = heroSpellScaled(def.spell, pd.level)
+    const bond = pd.wyrm ? resolveBond(heroId, pd.wyrm.wyrmId, pd.wyrm.level) : null
     let h: SimHero | null = null
     for (const cand of this.heroes) if (!cand.active) { h = cand; h.id = this.nextId++; break }
     if (!h) {
@@ -1994,6 +2020,7 @@ export class Sim {
         cd: 0, aimAngle: 0, fireFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
         slowDuration: 0, adjBuff: 1, buffMult: 1, buffUntil: 0, spell, spellCd: 0, spellMaxCd: 1,
         greyUntil: 0, sigAwake: false, sigCounter: 0, sigRamp: 0, sigGuardUsed: false,
+        wyrm: null, wyrmBreathCd: 0, wyrmUltUsed: false,
       }
       this.heroes.push(h)
     }
@@ -2026,6 +2053,10 @@ export class Sim {
     h.sigCounter = 0
     h.sigRamp = 0
     h.sigGuardUsed = false
+    // reset the Wyrm bond (pooled slots must never carry a prior hero's companion)
+    h.wyrm = bond
+    h.wyrmBreathCd = bond ? bond.breathCd * 0.5 : 0 // first breath comes fast
+    h.wyrmUltUsed = false
     this.occupiedHero[row][col] = h
     this.deployedHeroIds.add(heroId)
     this.recomputeSynergies()
@@ -2034,6 +2065,10 @@ export class Sim {
     this.emit({ t: 'heroDeploy', x: cc.x, y: cc.y, color: def.color, radius: this.heroRange(h) })
     this.emit({ t: 'text', x: cc.x, y: cc.y - 44, msg: def.name.toUpperCase() + '!', color: def.color, size: 26 })
     if (h.sigAwake) this.emit({ t: 'text', x: cc.x, y: cc.y - 70, msg: `✦ ${def.signature.name}`, color: def.color, size: 15 })
+    if (bond) {
+      this.emit({ t: 'text', x: cc.x, y: cc.y - 96, msg: `${bond.wyrm.emoji} ${bond.wyrm.name} · ${bond.tierLabel}`, color: bond.wyrm.color, size: 15 })
+      this.emit({ t: 'banner', msg: `${bond.wyrm.emoji} ${bond.wyrm.name.toUpperCase()} TAKES FLIGHT — ${bond.tier.toUpperCase()} BOND`, color: bond.wyrm.color })
+    }
     return h
   }
 
@@ -2085,7 +2120,9 @@ export class Sim {
     const elem = syn.elementDmg[h.def.element] ?? 1
     const buff = h.buffUntil > this.clock ? h.buffMult : 1
     const res = this.resHeroMult.get(h.heroId) ?? 1
-    const dmg = h.baseDamage * h.adjBuff * elem * syn.allDmgMult * syn.allStatMult * buff * res * this.config.mods.towerDamageMult
+    // Wyrm aura AMPLIFIES the bonded hero (stronger the tighter the bond).
+    const wyrmAmp = h.wyrm ? h.wyrm.heroAmp : 1
+    const dmg = h.baseDamage * h.adjBuff * elem * syn.allDmgMult * syn.allStatMult * buff * res * wyrmAmp * this.config.mods.towerDamageMult
     return clamp(dmg, 0, 1e7)
   }
   heroRange(h: SimHero): number {
@@ -2100,12 +2137,13 @@ export class Sim {
   }
 
   // loadout view for the HUD (party order, deploy state + cost)
-  partyLoadout(): Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number }> {
-    const out: Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number }> = []
+  partyLoadout(): Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number; wyrm: BondResolution | null }> {
+    const out: Array<{ heroId: string; def: HeroDef; level: number; deployed: boolean; cost: number; wyrm: BondResolution | null }> = []
     for (const p of this.partyDefs) {
       const def = heroById(p.heroId)
       if (!def) continue
-      out.push({ heroId: p.heroId, def, level: p.level, deployed: this.deployedHeroIds.has(p.heroId), cost: this.heroDeployCost(p.heroId) })
+      const wyrm = p.wyrm ? resolveBond(p.heroId, p.wyrm.wyrmId, p.wyrm.level) : null
+      out.push({ heroId: p.heroId, def, level: p.level, deployed: this.deployedHeroIds.has(p.heroId), cost: this.heroDeployCost(p.heroId), wyrm })
     }
     return out
   }
@@ -2125,6 +2163,9 @@ export class Sim {
       if (h.fireFlash > 0) h.fireFlash = Math.max(0, h.fireFlash - dt)
       if (h.spellCd > 0) h.spellCd = Math.max(0, h.spellCd - dt)
       if (h.greyUntil > this.clock) continue // borrowed by the Moth Mirror: no attacks
+      // the bonded Wyrm circles the hero and breathes on its own cadence (only
+      // while the hero is present + not borrowed) — runs before the attack gate.
+      if (h.wyrm) this.updateWyrm(h, dt)
       h.cd -= dt
       if (h.cd > 0) continue
       const range = this.heroRange(h)
@@ -2274,6 +2315,75 @@ export class Sim {
       if (!e.active) continue
       this.applyDirect(e, dmg)
       dmg *= falloff
+    }
+  }
+
+  // ---- CHROMATIC WYRM companion ------------------------------------------
+  // The bonded Wyrm breathes its element in a burst around the hero on a fixed
+  // cadence. Deterministic (clock-paced, no RNG). CRITICAL: each hit routes
+  // through dealDamageWith so the breath PAINTS the element aura and detonates
+  // reactions — fire breath shatters frozen/primed enemies, etc. (req 1a).
+  private updateWyrm(h: SimHero, dt: number): void {
+    const b = h.wyrm
+    if (!b) return
+    if (h.wyrmBreathCd > 0) { h.wyrmBreathCd = Math.max(0, h.wyrmBreathCd - dt); return }
+    // Only breathe when there's something to breathe at (near the hero). If not,
+    // idle a short beat and re-check — the cadence never runs away.
+    const isUlt = b.ult != null && !h.wyrmUltUsed
+    const radius = (isUlt && b.ult ? b.ult.radiusTiles : b.breathRadiusTiles) * TILE
+    const r2 = radius * radius
+    let any = false
+    for (const e of this.enemies) {
+      if (e.active && e.hp > 0 && dist2(h.x, h.y, e.x, e.y) <= r2) { any = true; break }
+    }
+    if (!any) { h.wyrmBreathCd = 0.25; return }
+    this.wyrmBreath(h, b, isUlt, radius, r2)
+    if (isUlt) h.wyrmUltUsed = true
+    h.wyrmBreathCd = b.breathCd
+  }
+
+  private wyrmBreath(h: SimHero, b: BondResolution, isUlt: boolean, radius: number, r2: number): void {
+    const cx = h.x
+    const cy = h.y
+    const element = b.wyrm.element
+    const dmg = clamp(b.breathDamage * (isUlt && b.ult ? b.ult.damageMult : 1) * this.config.mods.towerDamageMult, 0, 1e7)
+    const name = isUlt && b.ult ? b.ult.name : b.wyrm.breathName
+    this.emit({ t: 'wyrmBreath', wyrmId: b.wyrm.id, element, x: cx, y: cy, radius, color: b.wyrm.color, ult: isUlt, name })
+    if (isUlt) this.emit({ t: 'banner', msg: `★ ${name.toUpperCase()}!`, color: b.wyrm.color })
+    else this.emit({ t: 'text', x: cx, y: cy - 30, msg: `${b.wyrm.emoji} ${name}`, color: b.wyrm.color, size: 14 })
+    for (const e of this.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      if (dist2(cx, cy, e.x, e.y) > r2) continue
+      // aura === element → paints + detonates through the shared reaction path
+      const atk: AttackStats = { damage: dmg, dmgType: 'Magic', element, armorPen: this.upgrades.armorPenBonus, aura: element }
+      this.dealDamageWith(e, atk, true, cx, cy)
+      if (e.active && b.status) this.applyBreathStatus(e, b, dmg, isUlt)
+    }
+  }
+
+  // The element "bite" a GOOD/PERFECT breath adds (regular = pure damage+aura).
+  private applyBreathStatus(e: SimEnemy, b: BondResolution, dmg: number, isUlt: boolean): void {
+    const dur = isUlt ? 3.5 : 2
+    switch (b.status) {
+      case 'burn':
+        e.burnUntil = Math.max(e.burnUntil, this.clock + dur)
+        e.burnDps = Math.max(e.burnDps, clamp(dmg * 0.4, 0, 1e6))
+        break
+      case 'slow':
+        e.slowUntil = Math.max(e.slowUntil, this.clock + dur)
+        e.slowFactor = Math.min(e.slowFactor, isUlt ? 0.4 : 0.55)
+        break
+      case 'poison':
+        e.poisonUntil = Math.max(e.poisonUntil, this.clock + dur + 1)
+        e.poisonDps = Math.max(e.poisonDps, clamp(dmg * 0.3, 0, 1e6))
+        break
+      case 'stun':
+        e.stunUntil = Math.max(e.stunUntil, this.clock + (isUlt ? 0.7 : 0.4))
+        break
+      case 'tear':
+        e.tearUntil = Math.max(e.tearUntil, this.clock + 4)
+        e.tearAmount = Math.max(e.tearAmount, isUlt ? 14 : 8)
+        break
     }
   }
 
