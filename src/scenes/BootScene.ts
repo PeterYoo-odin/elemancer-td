@@ -1,6 +1,9 @@
 import Phaser from 'phaser'
 import { models } from '../three/models'
 import { splashDone } from '../ui/bootGate'
+import { readLaunchParams } from '../game/seedcode'
+import { levelById } from '../game/levels'
+import type { BattleLaunchData } from './BattleScene'
 
 /**
  * BootScene — silent asset preloader behind the Odin Platforms splash (a DOM
@@ -44,10 +47,33 @@ export class BootScene extends Phaser.Scene {
           .catch(() => undefined) // never trap the player on a failed asset
 
     // The splash fades itself out over the top of this scene; by the time it's
-    // gone (or the assets finish, whichever is later) we go straight to Menu.
+    // gone (or the assets finish, whichever is later) we go straight to Menu —
+    // unless a growth deep-link (?attract / ?demo / ?seed) routes into a run.
     void Promise.all([assetsReady, splashDone]).then(() => {
       if (!this.scene.isActive('Boot')) return
-      this.scene.start('Menu')
+      const route = deepLinkRoute()
+      if (route) this.scene.start('Battle', route)
+      else this.scene.start('Menu')
     })
   }
+}
+
+// ?attract=1 → hands-free cinematic reel (trailer source / landing hero / demo).
+// ?demo=1 or ?lv=demo → the Ember Vale demo, live, as guest.
+// ?seed=CODE [&lv=..] → that exact seeded run: campaign level, demo, or endless.
+function deepLinkRoute(): BattleLaunchData | null {
+  const p = readLaunchParams()
+  const common = {
+    seedOverride: p.seed ?? undefined,
+    speed: p.speed,
+    captions: p.captions,
+    loop: p.loop,
+  }
+  if (p.attract) return { ...common, attract: true, demo: true }
+  if (p.demo) return { ...common, demo: true }
+  if (p.seed !== null) {
+    if (p.levelId && levelById(p.levelId)) return { ...common, levelId: p.levelId }
+    return { ...common, endless: true }
+  }
+  return null
 }

@@ -296,7 +296,41 @@ export const LEVELS: LevelDef[] = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// DEMO LEVEL — "The Restoration of Ember Vale". A hand-tuned greatest-hits arc
+// used by the shareable demo (?demo=1) AND the attract/trailer reel (?attract=1):
+// W1-2 scripted first-win power fantasy → W3 guaranteed SHATTER combo (Frost
+// pre-placed, add Storm) → draft after W3 → W5 mini-Keeper tuned for a 1-3 HP
+// near-loss finish. NOT in LEVELS (never on the world map); index 1 so the
+// Morose intrusion planner gives it exactly one grey moment and no draft steal.
+// ---------------------------------------------------------------------------
+export const DEMO_LEVEL: LevelDef = {
+  id: 'demo',
+  index: 1,
+  name: 'The Restoration of Ember Vale',
+  blurb: 'Ember Vale has gone grey. Paint it back.',
+  lanes: [2, 5, 8],
+  startGold: 260,
+  startLives: 10,
+  baseCoins: 40,
+  palette: PAL.ember,
+  unlockTower: 'storm',
+  waves: [
+    // W1 — power fantasy: one flame tower deletes these
+    w([e('runner', 8, 0.6)], 22),
+    // W2 — a little pressure, first grunts
+    w([e('runner', 10, 0.4), e('grunt', 8, 0.7, 1.1)], 26),
+    // W3 — THE SHATTER WAVE: armored grunts + brutes (SHATTER doubles vs armor)
+    w([e('grunt', 16, 0.55, 1.25), e('brute', 3, 1.3, 1.15)], 36),
+    // W4 — post-draft: shields + a fast pack to flex the new power
+    w([e('shielded', 8, 0.85, 1.5), e('runner', 16, 0.32, 1.6), e('grunt', 10, 0.5, 1.7)], 44),
+    // W5 — mini-Keeper "Cindral, Ember of Kaelen" + a tide tuned to leak a few
+    w([e('boss', 1, 1, 12), e('brute', 12, 0.9, 3.5), e('runner', 12, 1.4, 60), e('swarm', 30, 0.14, 12)], 120),
+  ],
+}
+
 export function levelById(id: string): LevelDef | undefined {
+  if (id === DEMO_LEVEL.id) return DEMO_LEVEL
   return LEVELS.find((l) => l.id === id)
 }
 

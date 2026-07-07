@@ -138,6 +138,23 @@ interface Transient {
 const MAX_PARTICLES = 900
 const MAX_MOTES = 110 // ambient atmosphere dust
 
+// A cinematic camera pose: look target in sim px + spherical offset.
+export interface CinePose {
+  x: number
+  y: number
+  dist: number
+  pitch: number // degrees
+  yaw: number // degrees
+}
+
+// shortest angular distance in degrees (for yaw blending across the seam)
+function shortestDeg(a: number, b: number): number {
+  let d = (b - a) % 360
+  if (d > 180) d -= 360
+  if (d < -180) d += 360
+  return d
+}
+
 // shortest-path angle lerp (keeps facing turns smooth across the ±π seam)
 function lerpAngle(a: number, b: number, t: number): number {
   let d = (b - a) % (Math.PI * 2)
@@ -228,6 +245,16 @@ export class BattleView3D {
   // camera juice: base pose from frameCamera(); render() layers drift/shake/push on it
   private camBasePos = new THREE.Vector3()
   private camLook = new THREE.Vector3(0, -0.2, -0.4)
+
+  // CINEMATIC camera (attract/demo reel): poses blend from→to over dur seconds
+  // with gentle breathing on top. Time advances by cineTimeScale × real dt so
+  // ?speed= capture stays in sync with the sim-clock-keyed cue timeline.
+  private cineActive = false
+  private cineFrom: CinePose | null = null
+  private cineDest: CinePose | null = null
+  private cineT = 0
+  private cineDur = 1
+  cineTimeScale = 1
   private shakeAmp = 0 // decaying screenshake amplitude (world units)
   private pushAmp = 0 // current push-in strength 0..1
   private pushTarget = 0
@@ -721,6 +748,7 @@ export class BattleView3D {
   private frameCamera(): void {
     const aspect = window.innerWidth / Math.max(1, window.innerHeight)
     this.camera.aspect = aspect
+    if (this.cineActive) { this.camera.updateProjectionMatrix(); return } // cine owns the pose
     const pitch = 52 * Math.PI / 180
     // fit the board: horizontal half-extent 4.5, depth half-extent 5.5 (+margin)
     const halfX = 5.3
@@ -739,6 +767,69 @@ export class BattleView3D {
     this.camera.position.copy(this.camBasePos)
     this.camera.lookAt(this.camLook)
     this.camera.updateProjectionMatrix()
+  }
+
+  // ------------------------------------------------------- cinematic camera
+  /** Enter/leave cinematic mode. Leaving restores the standard framed pose. */
+  setCinematic(on: boolean, startPose?: CinePose): void {
+    this.cineActive = on
+    if (on) {
+      const pose = startPose ?? { x: 360, y: 640, dist: 22, pitch: 55, yaw: 0 }
+      this.cineFrom = { ...pose }
+      this.cineDest = { ...pose }
+      this.cineT = 0
+      this.cineDur = 0.01
+    } else {
+      this.cineFrom = this.cineDest = null
+      this.frameCamera()
+    }
+  }
+
+  /** Blend to a new pose over dur seconds (sim-time; scaled by cineTimeScale). */
+  cineTo(pose: CinePose, dur: number): void {
+    if (!this.cineActive) return
+    this.cineFrom = this.evalCine()
+    this.cineDest = { ...pose }
+    this.cineT = 0
+    this.cineDur = Math.max(0.01, dur)
+  }
+
+  private evalCine(): CinePose {
+    const a = this.cineFrom
+    const b = this.cineDest
+    if (!a || !b) return { x: 360, y: 640, dist: 22, pitch: 55, yaw: 0 }
+    const t = Math.min(1, this.cineT / this.cineDur)
+    const k = t * t * (3 - 2 * t) // smoothstep — slow in, slow out
+    const yawD = shortestDeg(a.yaw, b.yaw)
+    return {
+      x: a.x + (b.x - a.x) * k,
+      y: a.y + (b.y - a.y) * k,
+      dist: a.dist + (b.dist - a.dist) * k,
+      pitch: a.pitch + (b.pitch - a.pitch) * k,
+      yaw: a.yaw + yawD * k,
+    }
+  }
+
+  private applyCine(dt: number): void {
+    this.cineT += dt * this.cineTimeScale
+    const p = this.evalCine()
+    // gentle breathing so held shots never feel frozen
+    const breathe = 1 + Math.sin(this.clockT * 0.42) * 0.012
+    const yaw = (p.yaw + Math.sin(this.clockT * 0.21) * 1.1) * Math.PI / 180
+    const pitch = Math.max(8, Math.min(84, p.pitch)) * Math.PI / 180
+    const dist = Math.max(4, p.dist * breathe)
+    const lx = wx(p.x)
+    const lz = wz(p.y)
+    const sh = this.shakeAmp
+    const jx = sh > 0.001 ? (Math.sin(this.clockT * 91) + Math.sin(this.clockT * 47)) * 0.5 * sh : 0
+    const jy = sh > 0.001 ? (Math.sin(this.clockT * 83 + 1.7) + Math.sin(this.clockT * 59)) * 0.5 * sh : 0
+    this.camera.position.set(
+      lx + Math.sin(yaw) * Math.cos(pitch) * dist + jx,
+      Math.sin(pitch) * dist + jy,
+      lz + Math.cos(yaw) * Math.cos(pitch) * dist,
+    )
+    this.camLook.set(lx, -0.1, lz)
+    this.camera.lookAt(this.camLook)
   }
 
   // Screenshake, scaled to impact: amplitudes stack via max (never spiral), decay
@@ -1686,20 +1777,24 @@ export class BattleView3D {
     this.clockT += dt
 
     // camera: idle drift + push-in on big moments + decaying screenshake
-    this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12
     this.pushAmp += (this.pushTarget - this.pushAmp) * Math.min(1, dt * 6)
     this.pushTarget = Math.max(0, this.pushTarget - dt * 1.1) // release
     this.shakeAmp = Math.max(0, this.shakeAmp - dt * 1.4)
-    const sh = this.shakeAmp
-    const jx = sh > 0.001 ? (Math.sin(this.clockT * 91) + Math.sin(this.clockT * 47)) * 0.5 * sh : 0
-    const jy = sh > 0.001 ? (Math.sin(this.clockT * 83 + 1.7) + Math.sin(this.clockT * 59)) * 0.5 * sh : 0
-    this.tmpV.copy(this.camLook).sub(this.camBasePos).normalize().multiplyScalar(this.pushAmp * 1.4)
-    this.camera.position.set(
-      this.camBasePos.x + Math.sin(this.camBaseAngle) * 0.9 + this.tmpV.x + jx,
-      this.camBasePos.y + Math.sin(this.clockT * 0.31) * 0.12 + this.tmpV.y + jy,
-      this.camBasePos.z + this.tmpV.z,
-    )
-    this.camera.lookAt(this.camLook)
+    if (this.cineActive) {
+      this.applyCine(dt) // attract reel: authored poses own the camera
+    } else {
+      this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12
+      const sh = this.shakeAmp
+      const jx = sh > 0.001 ? (Math.sin(this.clockT * 91) + Math.sin(this.clockT * 47)) * 0.5 * sh : 0
+      const jy = sh > 0.001 ? (Math.sin(this.clockT * 83 + 1.7) + Math.sin(this.clockT * 59)) * 0.5 * sh : 0
+      this.tmpV.copy(this.camLook).sub(this.camBasePos).normalize().multiplyScalar(this.pushAmp * 1.4)
+      this.camera.position.set(
+        this.camBasePos.x + Math.sin(this.camBaseAngle) * 0.9 + this.tmpV.x + jx,
+        this.camBasePos.y + Math.sin(this.clockT * 0.31) * 0.12 + this.tmpV.y + jy,
+        this.camBasePos.z + this.tmpV.z,
+      )
+      this.camera.lookAt(this.camLook)
+    }
 
     // enemies: spawn pop, walk bob (squash & stretch), hit knockback, status anim
     for (const [, s] of this.enemyViews) {

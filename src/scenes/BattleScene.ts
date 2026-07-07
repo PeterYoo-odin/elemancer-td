@@ -6,12 +6,15 @@
 
 import Phaser from 'phaser'
 import { TOWERS, type TowerKind } from '../game/towers'
-import { LEVELS, levelById, serpentine, starsForClear, type LevelDef } from '../game/levels'
+import { LEVELS, levelById, serpentine, starsForClear, DEMO_LEVEL, type LevelDef } from '../game/levels'
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
+import { NEUTRAL } from '../game/workshop'
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
+import type { ShareCardOpts } from '../ui/ShareCard'
+import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
 import { barkEngine } from '../game/barks'
@@ -19,19 +22,50 @@ import { showBark, dismissBark } from '../ui/barkUi'
 import { unlockCodex } from '../game/codex'
 import { realmForLevel } from '../game/levels'
 import { playMoroseHush } from '../ui/sfx'
+import { canonicalSeed, seedToCode, seedLink } from '../game/seedcode'
+import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
+import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
 
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
 
 type InputMode = 'idle' | 'building' | 'deploying' | 'aiming'
 
+export interface BattleLaunchData {
+  levelId?: string
+  endless?: boolean
+  demo?: boolean // "The Restoration of Ember Vale" — live play
+  attract?: boolean // hands-free cinematic demo reel (?attract=1)
+  seedOverride?: number // ?seed= deep link — the exact seeded run
+  speed?: number // ?speed= capture control (attract)
+  captions?: boolean // ?captions=0 disables the reel captions
+  loop?: boolean // ?loop=1 restarts the reel after the end card
+}
+
 export class BattleScene extends Phaser.Scene {
   private levelId = 'l1'
   private endless = false
+  private demoMode = false
+  private attract = false
+  private seedOverride: number | undefined
+  private captionsOn = true
+  private loopReel = false
+  private seed = 0
+  private seedCode = ''
   private level!: LevelDef
   private sim!: Sim
   private view!: BattleView3D
   private hud!: BattleHud
+
+  // attract-mode machinery (all torn down on takeover/shutdown)
+  private script: ScriptRunner | null = null
+  private cueIdx = 0
+  private capIdx = 0
+  private draftHoldT = 0
+  private takeoverEl: HTMLDivElement | null = null
+  private captionEl: HTMLDivElement | null = null
+  private attractEndEl: HTMLDivElement | null = null
+  private shatterBloomDone = false
 
   private gameSpeed = 1
   private paused = false
@@ -66,28 +100,53 @@ export class BattleScene extends Phaser.Scene {
 
   constructor() { super('Battle') }
 
-  init(data: { levelId?: string; endless?: boolean }): void {
-    this.endless = !!data?.endless
-    this.levelId = data?.levelId ?? 'l1'
+  init(data: BattleLaunchData): void {
+    this.attract = !!data?.attract
+    this.demoMode = this.attract || !!data?.demo || data?.levelId === 'demo'
+    this.endless = !this.demoMode && !!data?.endless
+    this.levelId = this.demoMode ? 'demo' : data?.levelId ?? 'l1'
+    this.seedOverride = data?.seedOverride
+    this.gameSpeed = this.attract ? Math.min(8, Math.max(0.25, data?.speed ?? 1)) : 1
+    this.captionsOn = data?.captions !== false
+    this.loopReel = !!data?.loop
   }
 
   create(): void {
     music.setTrack('battle')
-    // ---- run config (unchanged from the 2D scene) ----
-    this.level = this.endless ? this.endlessLevel() : levelById(this.levelId) ?? LEVELS[0]
-    const mods = economy.runModifiers(this.endless)
+    // ---- run config ----
+    this.level = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
+    // Demo/attract runs are provably fair showcases: NEUTRAL modifiers always,
+    // so a shared seed replays identically on every account.
+    const mods = this.demoMode ? { ...NEUTRAL } : economy.runModifiers(this.endless)
     const startGold = this.endless ? ENDLESS_START_GOLD : this.level.startGold + mods.startGoldBonus
     const startLives = this.endless ? ENDLESS_START_LIVES : this.level.startLives + mods.startLivesBonus
-    const seed = this.endless
+    // Every run's seed lives in the shareable WORD-WORD-NN code space, so the
+    // "Copy seed link" on ANY run reproduces it exactly.
+    const rawSeed = this.endless
       ? (0xE9D1E55 ^ (economy.data.endlessBest * 2654435761)) >>> 0
-      : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234) >>> 0
+      : this.demoMode
+        ? DEMO_SEED
+        : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234) >>> 0
+    this.seed = this.seedOverride ?? canonicalSeed(rawSeed)
+    this.seedCode = seedToCode(this.seed)
     // resolve the chosen loadout into (heroId, level) pairs — economy.party() is
     // already filtered to unlocked, valid heroes, so no bad id reaches the sim.
-    const party = economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
-    this.sim = new Sim({ level: this.level, mods, seed, endless: this.endless, startGold, startLives, party })
+    // The attract reel uses a FIXED party so the footage never depends on a save.
+    const party = this.attract
+      ? DEMO_PARTY.map((p) => ({ ...p }))
+      : economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
+    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party })
+
+    // LIVE demo: Maddervane pre-places the Frost tower (the guaranteed-SHATTER
+    // setup — the player adds Storm). Placement is refunded: a gift, not a cost.
+    if (this.demoMode && !this.attract) {
+      const cost = this.sim.placeCost('frost')
+      const t = this.sim.placeTower('frost', DEMO_FROST_CELL.col, DEMO_FROST_CELL.row)
+      if (t) this.sim.gold += cost
+    }
 
     // reset transient state (scene instance is reused across restarts)
-    this.gameSpeed = 1
+    if (!this.attract) this.gameSpeed = 1 // attract keeps its ?speed= capture rate
     this.paused = false
     this.resultShown = false
     this.draftShown = false
@@ -107,6 +166,17 @@ export class BattleScene extends Phaser.Scene {
     this.lowLivesBarked = false
     window.clearTimeout(this.pairTimer)
     barkEngine.resetBattle()
+    this.script = null
+    this.cueIdx = 0
+    this.capIdx = 0
+    this.draftHoldT = 0
+    this.shatterBloomDone = false
+    this.takeoverEl?.remove()
+    this.takeoverEl = null
+    this.captionEl?.remove()
+    this.captionEl = null
+    this.attractEndEl?.remove()
+    this.attractEndEl = null
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -128,7 +198,7 @@ export class BattleScene extends Phaser.Scene {
       onTargeting: (id) => this.cycleTargeting(id),
       onDraft: (i) => this.pickDraft(i),
       onQuit: () => this.quitBattle(),
-      onReplay: () => this.scene.restart({ levelId: this.levelId, endless: this.endless }),
+      onReplay: () => this.scene.restart({ levelId: this.levelId, endless: this.endless, demo: this.demoMode, seedOverride: this.seed }),
       onBack: () => this.scene.start(this.endless ? 'Menu' : 'Map'),
     })
     this.hud.setLevelName(this.level.name)
@@ -139,6 +209,18 @@ export class BattleScene extends Phaser.Scene {
     window.addEventListener('resize', this.onResize)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.teardown())
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.teardown())
+
+    // ---- ATTRACT / DEMO REEL: scripted run + cinematic camera, hands-free ----
+    if (this.attract) {
+      this.script = new ScriptRunner(DEMO_SCRIPT)
+      this.hud.setAttract(true)
+      this.view.cineTimeScale = this.gameSpeed
+      this.view.setCinematic(true, CINE_HOME)
+      this.buildTakeoverOverlay()
+    } else if (this.demoMode) {
+      this.hud.banner('MADDERVANE LEFT YOU A FROST TOWER', 0x9fdcff)
+    }
+    if (this.attract) this.hud.setSpeed(this.gameSpeed)
 
     economy.touchLastSeen()
   }
@@ -163,15 +245,33 @@ export class BattleScene extends Phaser.Scene {
       this.hitstopT -= dt
       simDt *= 0.12
     }
-    this.sim.advance(simDt)
+    // Scripted input (attract reel) is injected on exact fixed-step boundaries
+    // so the showcase run replays identically at any frame rate or ?speed=.
+    // The draft pick is held open for a real-time beat (sim clock is frozen in
+    // draft, so the hold can't desync the deterministic timeline).
+    if (this.script && this.sim.state === 'draft' && this.draftHoldT > 0) this.draftHoldT -= dt
+    const allowPick = !this.script || this.draftHoldT <= 0
+    const runner = this.script
+    this.sim.advance(simDt, runner ? () => runner.update(this.sim, allowPick) : undefined)
 
     for (const ev of this.sim.drainEvents()) this.handleEvent(ev)
 
     // wave-start flourish on the prep→active transition
     if (this.sim.state === 'active' && this.lastSimState === 'prep') {
       this.hud.waveBanner(`WAVE ${this.sim.waveIndex + 1}`)
+      // the mini-Keeper gets a proper entrance in the demo
+      if (this.demoMode && this.sim.waveIndex === this.level.waves.length - 1) {
+        window.setTimeout(() => this.hud.banner('CINDRAL, EMBER OF KAELEN', 0xff4db8), 900)
+      }
+      // live demo: telegraph the guaranteed-SHATTER build beat at W3
+      if (this.demoMode && !this.attract && this.sim.waveIndex === 2) {
+        this.hud.banner('ADD A STORM TOWER BY THE FROST — ⚡ SHATTER!', 0xffe14a)
+      }
     }
     this.lastSimState = this.sim.state
+
+    // attract cinematography: camera cues + captions keyed to the sim clock
+    if (this.attract) this.updateAttract()
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
     this.updateGreying(dt)
@@ -187,18 +287,100 @@ export class BattleScene extends Phaser.Scene {
     this.hud.update(this.sim, this.hudCtx())
 
     // state-driven overlays
-    if (this.sim.state === 'draft' && !this.draftShown) { this.draftShown = true; this.enterDraftUi() }
+    if (this.sim.state === 'draft' && !this.draftShown) {
+      this.draftShown = true
+      if (this.script) this.draftHoldT = 2.6 // let the reel viewer READ the cards
+      this.enterDraftUi()
+    }
     if (this.sim.state !== 'draft' && this.draftShown) { this.draftShown = false; this.hud.hideDraft() }
     if ((this.sim.state === 'won' || this.sim.state === 'lost') && !this.resultShown) this.showResult()
     void time
+  }
+
+  // ======================================================================
+  //  ATTRACT / DEMO REEL — cinematic camera, captions, take-over
+  // ======================================================================
+  private updateAttract(): void {
+    const clock = this.sim.clock
+    this.view.cineTimeScale = this.gameSpeed
+    while (this.cueIdx < DEMO_CINE_CUES.length && clock >= DEMO_CINE_CUES[this.cueIdx].at) {
+      const c = DEMO_CINE_CUES[this.cueIdx++]
+      this.view.cineTo({ x: c.x, y: c.y, dist: c.dist, pitch: c.pitch, yaw: c.yaw }, c.dur)
+    }
+    while (this.capIdx < DEMO_CAPTIONS.length && clock >= DEMO_CAPTIONS[this.capIdx].at) {
+      const cap = DEMO_CAPTIONS[this.capIdx++]
+      if (this.captionsOn) this.showCaption(cap.text, cap.sub, cap.dur)
+    }
+  }
+
+  private showCaption(text: string, sub: string | undefined, dur: number): void {
+    this.captionEl?.remove()
+    const d = document.createElement('div')
+    d.style.cssText =
+      'position:fixed;left:50%;bottom:18%;transform:translateX(-50%);z-index:3500;text-align:center;' +
+      'pointer-events:none;color:#fff;font-family:"Baloo 2","Nunito",system-ui,sans-serif;max-width:86vw;' +
+      'text-shadow:0 3px 0 rgba(0,0,0,.55),0 0 26px rgba(130,90,255,.6);transition:opacity .45s ease;opacity:0;'
+    const h = document.createElement('div')
+    h.textContent = text
+    h.style.cssText = 'font-size:clamp(22px,5.4vw,40px);font-weight:900;letter-spacing:2px;'
+    d.append(h)
+    if (sub) {
+      const s = document.createElement('div')
+      s.textContent = sub
+      s.style.cssText = 'font-size:clamp(13px,3vw,19px);font-weight:700;color:#cbbcff;margin-top:4px;letter-spacing:1px;'
+      d.append(s)
+    }
+    document.body.appendChild(d)
+    this.captionEl = d
+    requestAnimationFrame(() => { d.style.opacity = '1' })
+    const ms = (dur / Math.max(0.25, this.gameSpeed)) * 1000
+    window.setTimeout(() => { d.style.opacity = '0' }, Math.max(600, ms - 450))
+    window.setTimeout(() => { d.remove(); if (this.captionEl === d) this.captionEl = null }, ms + 500)
+  }
+
+  private buildTakeoverOverlay(): void {
+    const d = document.createElement('div')
+    d.style.cssText = 'position:fixed;inset:0;z-index:4000;cursor:pointer;background:transparent;touch-action:manipulation;'
+    const pill = document.createElement('div')
+    pill.textContent = '▶  TAP TO TAKE OVER'
+    pill.style.cssText =
+      'position:absolute;left:50%;bottom:6.5%;transform:translateX(-50%);padding:14px 30px;border-radius:999px;' +
+      'font:800 19px "Baloo 2","Nunito",system-ui,sans-serif;letter-spacing:2px;color:#fff;white-space:nowrap;' +
+      'background:rgba(22,13,44,.68);border:1px solid rgba(255,255,255,.4);backdrop-filter:blur(5px);' +
+      'box-shadow:0 0 26px rgba(160,110,255,.5);animation:chrTakeover 1.7s ease-in-out infinite;'
+    const style = document.createElement('style')
+    style.textContent = '@keyframes chrTakeover{0%,100%{transform:translateX(-50%) scale(1);opacity:.92}50%{transform:translateX(-50%) scale(1.06);opacity:1}}'
+    d.append(style, pill)
+    d.addEventListener('pointerdown', (e) => { e.preventDefault(); this.takeOver() })
+    document.body.appendChild(d)
+    this.takeoverEl = d
+  }
+
+  // The reel hands the brush to the viewer mid-run: script stops, HUD returns,
+  // camera glides home, and the SAME deterministic sim keeps playing.
+  private takeOver(): void {
+    if (!this.attract) return
+    this.attract = false
+    this.script = null
+    this.gameSpeed = 1
+    this.hud.setSpeed(1)
+    this.hud.setAttract(false)
+    this.view.setCinematic(false)
+    this.takeoverEl?.remove()
+    this.takeoverEl = null
+    this.captionEl?.remove()
+    this.captionEl = null
+    this.hud.banner('YOUR BRUSH NOW — HOLD THE LINE', 0x2ff7c3)
+    this.tryBark('deploy')
   }
 
   // The Greying: battlefield saturation tracks clear progress — every kill and
   // wave paints colour back; victory blooms past full colour then settles.
   private updateGreying(dt: number): void {
     const p = this.sim.colorProgress()
-    let target = 0.28 + 0.72 * p
-    let bright = 0.92 + 0.08 * p
+    // the demo opens ~90% Greyed — maximum before/after contrast for the reel
+    let target = this.demoMode ? 0.1 + 0.9 * p : 0.28 + 0.72 * p
+    let bright = this.demoMode ? 0.86 + 0.14 * p : 0.92 + 0.08 * p
     if (this.greyBloomT > 0) {
       this.greyBloomT = Math.max(0, this.greyBloomT - dt)
       const k = Math.sin(Math.min(1, this.greyBloomT / 1.4) * Math.PI) // 0→1→0 pulse
@@ -410,7 +592,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private towerUnlocked(kind: TowerKind): boolean {
-    return this.endless || economy.isTowerUnlocked(kind)
+    return this.endless || this.demoMode || economy.isTowerUnlocked(kind)
   }
 
   // ======================================================================
@@ -440,7 +622,7 @@ export class BattleScene extends Phaser.Scene {
       this.exitBuild()
       this.exitAiming()
       this.exitDeploy()
-      this.hud.showPause(this.endless)
+      this.hud.showPause(this.endless, { code: this.seedCode, link: this.runLink() })
     } else {
       this.hud.hidePause()
     }
@@ -467,13 +649,61 @@ export class BattleScene extends Phaser.Scene {
   private endlessShards(): number { return 8 + Math.round(this.sim.waveIndex * 2.5) }
   private endlessXp(): number { return 30 + this.sim.waveIndex * 8 }
 
+  // The full deep link for THIS run (level-scoped for campaign/demo, plain for endless).
+  private runLink(): string {
+    return seedLink(this.seedCode, this.endless ? undefined : this.level.id)
+  }
+
+  // The prove-it card payload: pure function of the finished sim + run identity.
+  private buildShare(win: boolean): ShareCardOpts {
+    const rs = this.sim.runStats
+    let bestName = ''
+    let bestN = 0
+    for (const [name, n] of Object.entries(rs.reactionCounts)) {
+      if (n > bestN) { bestN = n; bestName = name }
+    }
+    const comboHighlight = bestName
+      ? `${bestName} ×${bestN} · combo ×${rs.maxCombo}`
+      : rs.maxCombo > 1 ? `combo ×${rs.maxCombo}` : `${rs.kills} restored`
+    const deployed = this.sim.deployedHeroes()
+    const heroName = deployed[0]?.def.name ?? this.sim.partyLoadout()[0]?.def.name ?? 'No hero'
+    const totalWaves = this.endless ? Infinity : this.level.waves.length
+    const wave = win && !this.endless ? this.level.waves.length : this.sim.waveIndex + 1
+    const realm = realmForLevel(this.levelId)
+    const headline = win
+      ? this.demoMode ? 'EMBER VALE RESTORED' : this.endless ? `SURVIVED TO WAVE ${wave}` : 'RESTORED IN FULL COLOUR'
+      : `FELL AT WAVE ${wave}`
+    return {
+      code: this.seedCode,
+      link: this.runLink(),
+      headline,
+      levelName: this.level.name,
+      heroName,
+      score: this.sim.score(),
+      wave,
+      totalWaves,
+      comboHighlight,
+      accent: realm.ui.accent,
+      accent2: '#ffd54a',
+      win,
+    }
+  }
+
   private showResult(): void {
     this.resultShown = true
     this.exitBuild()
     this.exitAiming()
     this.exitDeploy()
     this.deselect()
-    if (this.sim.state === 'won') {
+    const win = this.sim.state === 'won'
+    // hands-free reel: bloom, then its own end card (prove-it + PLAY CTA)
+    if (this.attract) {
+      if (win && !appSettings.reducedMotion()) this.greyBloomT = 1.4
+      window.setTimeout(() => this.showAttractEnd(win), win ? 2400 : 800)
+      if (win) this.tryBark('victory')
+      return
+    }
+    if (win) {
       // victory colour-BLOOM: the level snaps back to full colour with an overshoot
       // (reduce-motion users still get full colour, just without the pulse)
       if (!appSettings.reducedMotion()) this.greyBloomT = 1.4
@@ -486,19 +716,67 @@ export class BattleScene extends Phaser.Scene {
         unlocked = TOWERS[this.level.unlockTower].name
       }
       this.hud.flash(0x2ff7c3, 0.4)
-      this.hud.showResult({ win: true, title: 'VICTORY!', color: 0x2ff7c3, stars, coins: result.coins, diamonds: result.diamonds, shards, unlocked, endless: this.endless })
+      this.hud.showResult({
+        win: true, title: this.demoMode ? 'THE VALE BLOOMS!' : 'VICTORY!', color: 0x2ff7c3, stars,
+        coins: result.coins, diamonds: result.diamonds, shards, unlocked, endless: this.endless,
+        share: this.buildShare(true),
+        // demo: guest progress carries straight into the full game
+        continueLabel: this.demoMode ? 'CONTINUE INTO THE FULL GAME →' : undefined,
+        onContinue: this.demoMode ? () => this.scene.start('Map') : undefined,
+      })
       this.tryBark('victory') // post-victory beat: Color Bloom + one line over the card
     } else {
       this.hud.flash(0xff3b6b, 0.5)
       if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true })
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true, share: this.buildShare(false) })
       } else {
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false })
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false, share: this.buildShare(false) })
         this.tryBark('defeat') // Morose condoles — he always does
       }
     }
+  }
+
+  // The reel's final frame: prove-it card + the seed challenge + one-tap PLAY.
+  // Doubles as the trailer's closing shot and the landing embed's CTA.
+  private showAttractEnd(win: boolean): void {
+    this.takeoverEl?.remove()
+    this.takeoverEl = null
+    this.captionEl?.remove()
+    this.captionEl = null
+    const ov = document.createElement('div')
+    ov.style.cssText =
+      'position:fixed;inset:0;z-index:4200;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'gap:18px;background:rgba(8,5,18,.78);backdrop-filter:blur(4px);opacity:0;transition:opacity .6s ease;' +
+      'font-family:"Baloo 2","Nunito",system-ui,sans-serif;color:#fff;text-align:center;padding:20px;'
+    const card = renderShareCard(this.buildShare(win))
+    card.style.cssText = 'width:min(88vw,480px);height:auto;border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,.6);'
+    const line = document.createElement('div')
+    line.textContent = win ? 'Everything you just watched is real gameplay.' : 'Even the reel bleeds. Your turn.'
+    line.style.cssText = 'font-size:clamp(15px,3.6vw,21px);font-weight:700;color:#d8ccff;'
+    const cta = document.createElement('button')
+    cta.textContent = '🎨  PLAY FREE NOW'
+    cta.style.cssText =
+      'padding:16px 44px;border-radius:18px;border:1px solid rgba(255,255,255,.3);cursor:pointer;color:#fff;' +
+      'font:900 22px "Baloo 2","Nunito",system-ui,sans-serif;letter-spacing:1px;' +
+      'background:linear-gradient(180deg,#3ad07a,#1f9a54);box-shadow:0 8px 30px rgba(46,220,130,.4);'
+    cta.onclick = () => { window.location.href = window.location.origin + window.location.pathname + '?demo=1' }
+    const seedBtn = document.createElement('button')
+    seedBtn.textContent = `🔗 seed ${this.seedCode} — copy the challenge link`
+    seedBtn.style.cssText =
+      'padding:10px 22px;border-radius:12px;border:1px solid rgba(255,255,255,.25);cursor:pointer;color:#cbe9ff;' +
+      'font:700 15px ui-monospace,Menlo,monospace;background:rgba(255,255,255,.08);'
+    seedBtn.onclick = async () => {
+      const ok = await copyText(this.runLink())
+      seedBtn.textContent = ok ? '✓ link copied — go beat it' : '✗ copy failed'
+    }
+    ov.append(card, line, cta, seedBtn)
+    document.body.appendChild(ov)
+    requestAnimationFrame(() => { ov.style.opacity = '1' })
+    this.attractEndEl = ov
+    // landing-hero loop: run it again for the next passer-by
+    if (this.loopReel) window.setTimeout(() => window.location.reload(), 16000)
   }
 
   // ======================================================================
@@ -592,6 +870,12 @@ export class BattleScene extends Phaser.Scene {
       case 'reaction':
         this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
         this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, true, 1.1)
+        // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
+        if (this.demoMode && ev.key === 'shatter' && !this.shatterBloomDone) {
+          this.shatterBloomDone = true
+          if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.0)
+          window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 450)
+        }
         if (this.reactCalloutCd <= 0) {
           this.hud.reactionCallout(ev.name, ev.color)
           this.reactCalloutCd = 0.55
@@ -632,6 +916,13 @@ export class BattleScene extends Phaser.Scene {
     window.removeEventListener('resize', this.onResize)
     window.clearTimeout(this.pairTimer)
     dismissBark()
+    this.script = null
+    this.takeoverEl?.remove()
+    this.takeoverEl = null
+    this.captionEl?.remove()
+    this.captionEl = null
+    this.attractEndEl?.remove()
+    this.attractEndEl = null
     this.hud?.dispose()
     this.view?.dispose()
   }

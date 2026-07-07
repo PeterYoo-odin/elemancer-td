@@ -13,6 +13,8 @@ import { Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H } from '../src/sim/index'
 import { NEUTRAL } from '../src/game/workshop'
 import { LEVELS } from '../src/game/levels'
 import { TOWER_ORDER } from '../src/game/towers'
+import { runScriptedDemo } from '../src/game/attractScript'
+import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
 
 const COMBO_MAX = 6
 const TARGET_WAVES = 60
@@ -224,6 +226,41 @@ if (peak < 200) fail(`stress too light — only ${peak} concurrent enemies (need
 // mixed-element towers + heroes MUST detonate elemental reactions during the runs
 if (reactionEvents === 0) fail('no elemental reactions fired across all stress runs')
 else console.log(`  elemental reactions fired: ${reactionEvents}`)
+
+// ---------------------------------------------------------------------------
+//  SEED CODEC — the shareable WORD-WORD-NN space must round-trip exactly.
+// ---------------------------------------------------------------------------
+console.log('\nseed codec — round-trip + demo seed…')
+for (const s of [0, 1, 42, 6400, 123456, SEED_SPACE - 1]) {
+  const rt = codeToSeed(seedToCode(s))
+  if (rt !== s) fail(`seed codec round-trip broke: ${s} → ${seedToCode(s)} → ${rt}`)
+}
+if (codeToSeed('EMBER-FOX-42') !== 42) fail(`EMBER-FOX-42 must decode to 42 (got ${codeToSeed('EMBER-FOX-42')})`)
+if (codeToSeed('ember fox 42') !== 42) fail('codec must be case/space tolerant')
+if (codeToSeed('NOT-AWORD-99') !== null) fail('codec must reject unknown words')
+console.log('  codec ok — space of ' + SEED_SPACE.toLocaleString('en-US') + ' codes')
+
+// ---------------------------------------------------------------------------
+//  DEMO / ATTRACT SHOWCASE — the scripted Ember Vale run IS the trailer, the
+//  landing hero and the demo. Its money-shot beats are load-bearing marketing
+//  infrastructure, so the gate asserts every one of them:
+//    · hands-free VICTORY on the pinned seed (EMBER-FOX-42)
+//    · the guaranteed SHATTER cascade lands inside 90s
+//    · the near-loss finish (1-5 crystal HP) actually happens
+//    · the whole reel fits a capture window and replays bit-identically
+// ---------------------------------------------------------------------------
+console.log('\ndemo showcase — scripted Ember Vale run (attract/trailer source)…')
+const demo = runScriptedDemo()
+if (!demo.won) fail(`demo script LOST (lives=${demo.lives}, t=${demo.clock.toFixed(1)}) — the reel must always win`)
+if (demo.shatterAt < 0 || demo.shatterAt > 90) fail(`SHATTER money shot missing/late: ${demo.shatterAt.toFixed(1)}s (needs <90s)`)
+if (demo.lives < 1 || demo.lives > 5) fail(`near-loss finish off-tune: ${demo.lives} lives left (want 1-5)`)
+if (demo.clock > 360) fail(`demo run too long for capture: ${demo.clock.toFixed(0)}s`)
+if (demo.waveStarts.length !== 5) fail(`demo must run all 5 waves (got ${demo.waveStarts.length})`)
+if (demo.waveStarts[0] > 15) fail(`first wave too late: ${demo.waveStarts[0].toFixed(1)}s (first tower <15s promise)`)
+const demo2 = runScriptedDemo()
+if (demo.fingerprint !== demo2.fingerprint) fail(`demo replay diverged: ${demo.fingerprint} vs ${demo2.fingerprint}`)
+console.log(`  demo ok — won t=${demo.clock.toFixed(1)}s, lives=${demo.lives}, first SHATTER @${demo.shatterAt.toFixed(1)}s, ` +
+  `reactions=${demo.reactions}, maxCombo=${demo.maxCombo}, score=${demo.score}`)
 
 if (failures > 0) {
   console.error(`\nSIMCHECK FAILED — ${failures} violation(s).`)

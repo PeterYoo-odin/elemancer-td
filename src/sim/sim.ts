@@ -274,6 +274,17 @@ export class Sim {
   private greyPendingAt = -1 // clock time the pending grey lands (-1 = none)
   private greyWarned = false
 
+  // run stats — pure counters for the prove-it share card / score. They consume
+  // no RNG and never feed back into gameplay, so determinism is untouched.
+  readonly runStats = {
+    kills: 0,
+    bossKills: 0,
+    maxCombo: 0, // highest comboCount reached
+    reactions: 0, // total elemental reactions detonated
+    reactionCounts: {} as Record<string, number>, // reaction NAME -> times fired
+    goldEarned: 0, // all battle-gold income (kills + clears + bonuses)
+  }
+
   // spells
   spellCd: Record<SpellKey, number> = { meteor: 0, freeze: 0, goldrush: 0 }
   spellMaxCd: Record<SpellKey, number> = { meteor: 0, freeze: 0, goldrush: 0 }
@@ -442,11 +453,15 @@ export class Sim {
   // ---- fixed-timestep driver ---------------------------------------------
   // View passes already-scaled dt (realDt * gameSpeed, or 0 when paused). We
   // accumulate and step in fixed increments so behaviour is frame-rate independent.
-  advance(dt: number): void {
+  // beforeStep (optional) runs before EVERY fixed step — scripted input (the
+  // attract/demo reel) injects commands there so they land on exact tick
+  // boundaries and replay identically at any frame rate or game speed.
+  advance(dt: number, beforeStep?: () => void): void {
     if (!Number.isFinite(dt) || dt <= 0) return
     this.accumulator += Math.min(dt, 0.25) // clamp catastrophic frames
     let steps = 0
     while (this.accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+      beforeStep?.()
       this.step()
       this.accumulator -= FIXED_DT
       steps++
@@ -530,6 +545,7 @@ export class Sim {
 
   private bumpCombo(x: number, y: number): number {
     this.comboCount = Math.min(this.comboCount + 1, 9999)
+    if (this.comboCount > this.runStats.maxCombo) this.runStats.maxCombo = this.comboCount
     this.comboTimer = COMBO_WINDOW
     const stepAmt = COMBO_STEP * this.upgrades.comboRamp
     this.comboMult = clamp(1 + this.comboCount * stepAmt, 1, COMBO_MAX)
@@ -1363,6 +1379,8 @@ export class Sim {
   }
 
   private triggerReaction(e: SimEnemy, def: ReactionDef, trigger: number): void {
+    this.runStats.reactions++
+    this.runStats.reactionCounts[def.name] = (this.runStats.reactionCounts[def.name] ?? 0) + 1
     const cx = e.x
     const cy = e.y
     let radius = 0
@@ -1479,6 +1497,8 @@ export class Sim {
     if (!e.active) return
     e.active = false
     this.waveKills++ // every kill paints a little colour back (Greying restoration)
+    this.runStats.kills++
+    if (e.def.boss) this.runStats.bossKills++
     const reward = Math.max(0, Math.round(e.def.reward * this.config.mods.goldGainMult * this.upgrades.goldGainMult))
     this.addGold(reward)
     this.emit({ t: 'gold', x: e.x, y: e.y, amount: reward })
@@ -1853,6 +1873,18 @@ export class Sim {
   private addGold(n: number): void {
     if (n <= 0) return
     this.gold = clamp(this.gold + Math.round(n), 0, 1e9)
+    this.runStats.goldEarned += Math.round(n)
+  }
+
+  // The prove-it score shown on share cards. Pure function of run stats so a
+  // future replay-verifier recomputes the identical number from the same run.
+  score(): number {
+    const wavesCleared = this.state === 'won' && !this.config.endless
+      ? this.config.level.waves.length
+      : this.waveIndex
+    const s = this.runStats.kills * 20 + this.runStats.reactions * 45 + this.runStats.maxCombo * 30
+      + this.runStats.bossKills * 400 + wavesCleared * 250 + Math.max(0, this.lives) * 60
+    return clamp(Math.round(s), 0, 1e9)
   }
   private spendGold(n: number): void {
     this.gold = clamp(this.gold - Math.round(n), 0, 1e9)

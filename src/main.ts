@@ -9,11 +9,16 @@ import { HeroesScene } from './scenes/HeroesScene'
 import { showOdinSplash } from './ui/OdinSplash'
 import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
+import { readLaunchParams } from './game/seedcode'
 
 // The Odin Platforms boot splash goes up first (a DOM overlay above the canvas)
 // and is gated behind a tap so the thunderclap is allowed to play. Phaser boots
 // and preloads assets underneath it; BootScene waits on both before the menu.
-showOdinSplash({ gate: true, onDone: markSplashDone })
+// GROWTH DEEP-LINKS skip it entirely: ?attract=1 must run hands-free (headless
+// trailer capture), and ?seed=/?demo= links promise <5s to interactive.
+const launch = readLaunchParams()
+if (launch.attract || launch.demo || launch.seed !== null) markSplashDone()
+else showOdinSplash({ gate: true, onDone: markSplashDone })
 
 // The same "TAP TO ENTER" gesture unlocks music playback; scenes then declare
 // the theme they want (menu/map vs battle) and the mixer crossfades.

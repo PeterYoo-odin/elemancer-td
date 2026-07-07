@@ -11,6 +11,7 @@ import { ENEMIES, type EnemyKind } from '../game/enemies'
 import { RARITY_COLOR } from '../game/heroes'
 import { heroStats, heroSpellScaled } from '../game/heroProgress'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
+import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 
 export interface HudCallbacks {
   onStart(): void
@@ -312,6 +313,22 @@ const CSS = `
 }
 `
 
+// Growth-infra additions: attract-mode chrome hiding + the prove-it share card.
+const CSS_SHARE = `
+/* ATTRACT / DEMO REEL: hide every interactive control; keep the juice
+   (fx layer, banners, reaction callouts, barks live outside these). */
+.eld-hud.attract .eld-top, .eld-hud.attract .eld-levelname, .eld-hud.attract .eld-rc,
+.eld-hud.attract .eld-start, .eld-hud.attract .eld-dock, .eld-hud.attract .eld-syn,
+.eld-hud.attract .eld-telegraph, .eld-hud.attract .eld-hint, .eld-hud.attract .eld-combo {
+  display: none !important;
+}
+.eld-ov { overflow-y: auto; }
+.eld-sharecard { width: min(88vw, 430px); height: auto; border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.1); }
+.eld-btn.blue { background: linear-gradient(180deg,#3f9be8,#1d62b8); }
+.eld-btn.slim { padding: 10px 22px; font-size: 16px; }
+`
+
 export class BattleHud {
   readonly root: HTMLDivElement
   private fxLayer: HTMLDivElement
@@ -362,7 +379,7 @@ export class BattleHud {
   constructor(cb: HudCallbacks) {
     this.cb = cb
     this.styleEl = el('style')
-    this.styleEl.textContent = CSS
+    this.styleEl.textContent = CSS + CSS_SHARE
     document.head.appendChild(this.styleEl)
 
     this.root = el('div', 'eld-hud')
@@ -997,8 +1014,19 @@ export class BattleHud {
 
   hideDraft(): void { this.clearOverlay() }
 
+  /** Attract/demo-reel mode: hide all interactive chrome (fx + overlays stay). */
+  setAttract(on: boolean): void {
+    this.root.classList.toggle('attract', on)
+  }
+
   // ------------------------------------------------------------- result
-  showResult(opts: { win: boolean; title: string; color: number; stars: number; coins: number; diamonds: number; shards?: number; unlocked: string | null; sub?: string; endless: boolean }): void {
+  showResult(opts: {
+    win: boolean; title: string; color: number; stars: number; coins: number; diamonds: number;
+    shards?: number; unlocked: string | null; sub?: string; endless: boolean;
+    share?: ShareCardOpts // prove-it card + seed-link buttons
+    continueLabel?: string // demo: "CONTINUE INTO THE FULL GAME"
+    onContinue?: () => void
+  }): void {
     this.clearOverlay()
     this.startBtn.classList.add('hidden')
     const ov = el('div', 'eld-ov pe')
@@ -1031,22 +1059,59 @@ export class BattleHud {
       u.style.fontWeight = '900'
       ov.append(u)
     }
+    // PROVE-IT share card: the run's receipt, rendered client-side, one tap to share
+    if (opts.share) {
+      const share = opts.share
+      const canvas = renderShareCard(share)
+      canvas.className = 'eld-sharecard'
+      ov.append(canvas)
+      const srow = el('div', 'eld-btnrow')
+      const sh = el('button', 'eld-btn blue slim', '📤 SHARE')
+      sh.onclick = async () => {
+        if (!(await shareCard(canvas, share))) {
+          downloadCard(canvas, share.code)
+          this.banner('CARD SAVED — paste it anywhere', 0x9ee8ff)
+        }
+      }
+      const cp = el('button', 'eld-btn purple slim', '🔗 COPY SEED LINK')
+      cp.onclick = async () => {
+        const ok = await copyText(share.link)
+        cp.textContent = ok ? '✓ LINK COPIED' : '✗ COPY FAILED'
+        window.setTimeout(() => { cp.textContent = '🔗 COPY SEED LINK' }, 1600)
+      }
+      const dl = el('button', 'eld-btn purple slim', '⬇')
+      dl.title = 'Download the card'
+      dl.onclick = () => downloadCard(canvas, share.code)
+      srow.append(sh, cp, dl)
+      ov.append(srow)
+    }
     const row = el('div', 'eld-btnrow')
     const replay = el('button', 'eld-btn purple', 'REPLAY')
     replay.onclick = () => this.cb.onReplay()
-    const back = el('button', 'eld-btn green', opts.endless ? 'MENU' : 'WORLD MAP')
-    back.onclick = () => this.cb.onBack()
-    row.append(replay, back)
+    row.append(replay)
+    if (opts.onContinue) {
+      const cont = el('button', 'eld-btn green', opts.continueLabel ?? 'CONTINUE →')
+      cont.onclick = () => opts.onContinue?.()
+      row.append(cont)
+    } else {
+      const back = el('button', 'eld-btn green', opts.endless ? 'MENU' : 'WORLD MAP')
+      back.onclick = () => this.cb.onBack()
+      row.append(back)
+    }
     ov.append(row)
     this.root.append(ov)
     this.overlayEl = ov
   }
 
   // ------------------------------------------------------------- pause
-  showPause(endless: boolean): void {
+  showPause(endless: boolean, share?: { code: string; link: string }): void {
     this.clearOverlay()
     const ov = el('div', 'eld-ov pe')
     ov.append(el('h1', undefined, 'PAUSED'))
+    if (share) {
+      const sub = el('div', 'sub', `Seed ${share.code} — every run is replayable`)
+      ov.append(sub)
+    }
     const resume = el('button', 'eld-btn green', 'RESUME')
     resume.onclick = () => this.cb.onPause()
     const quit = el('button', 'eld-btn red', endless ? 'RETIRE & BANK' : 'QUIT TO MAP')
@@ -1054,6 +1119,17 @@ export class BattleHud {
     const row = el('div', 'eld-btnrow')
     row.append(resume, quit)
     ov.append(row)
+    if (share) {
+      const srow = el('div', 'eld-btnrow')
+      const cp = el('button', 'eld-btn purple slim', '🔗 COPY SEED LINK')
+      cp.onclick = async () => {
+        const ok = await copyText(share.link)
+        cp.textContent = ok ? '✓ LINK COPIED' : '✗ COPY FAILED'
+        window.setTimeout(() => { cp.textContent = '🔗 COPY SEED LINK' }, 1600)
+      }
+      srow.append(cp)
+      ov.append(srow)
+    }
     this.root.append(ov)
     this.overlayEl = ov
   }
