@@ -329,6 +329,17 @@ const CSS_SHARE = `
   box-shadow: 0 10px 40px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.1); }
 .eld-btn.blue { background: linear-gradient(180deg,#3f9be8,#1d62b8); }
 .eld-btn.slim { padding: 10px 22px; font-size: 16px; }
+
+/* DEATH TEACHES: one specific, actionable lesson on the defeat screen */
+.eld-lesson { max-width: min(88vw, 430px); padding: 12px 18px; border-radius: 14px; text-align: left;
+  background: linear-gradient(180deg, rgba(52,36,96,.95), rgba(30,18,60,.95));
+  border: 1px solid rgba(196,166,255,.5); box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  display: flex; gap: 10px; align-items: flex-start; }
+.eld-lesson .li { font-size: 22px; flex: 0 0 auto; }
+.eld-lesson .lt { display: flex; flex-direction: column; gap: 2px; }
+.eld-lesson .lh { font-size: 11px; font-weight: 900; letter-spacing: 2px; color: #c9b6ff; }
+.eld-lesson .lb { font-size: 14.5px; font-weight: 700; line-height: 1.35; color: #f0eaff; }
+.eld-retrynote { font-size: 12.5px; font-weight: 700; color: #9d8fc5; margin-top: -6px; }
 `
 
 export class BattleHud {
@@ -538,6 +549,20 @@ export class BattleHud {
   setLevelName(name: string): void {
     const l = this.root.querySelector('#eld-levelname')
     if (l) l.textContent = name.toUpperCase()
+  }
+
+  // ---- coach anchors (onboarding points/rings these; view-only, never logic) ----
+  towerButtonEl(kind: TowerKind): HTMLElement | null {
+    return this.towerBtns.get(kind)?.root ?? null
+  }
+  startButtonEl(): HTMLElement {
+    return this.startBtn
+  }
+  heroButtonEl(heroId: string): HTMLElement | null {
+    return this.heroBtns.get(heroId)?.root ?? null
+  }
+  upgradePanelEl(): HTMLElement | null {
+    return this.upgradeEl
   }
 
   // ------------------------------------------------------------- per-frame
@@ -1123,6 +1148,7 @@ export class BattleHud {
     win: boolean; title: string; color: number; stars: number; coins: number; diamonds: number;
     shards?: number; unlocked: string | null; sub?: string; endless: boolean;
     share?: ShareCardOpts // prove-it card + seed-link buttons
+    lesson?: string // death-teaches: one actionable line, defeat screens only
     continueLabel?: string // demo: "CONTINUE INTO THE FULL GAME"
     onContinue?: () => void
   }): void {
@@ -1144,6 +1170,14 @@ export class BattleHud {
       ov.append(s)
     } else if (opts.sub) {
       ov.append(el('div', 'sub', opts.sub))
+    }
+    // DEATH TEACHES — Maddervane turns the loss into one concrete move
+    if (opts.lesson) {
+      const box = el('div', 'eld-lesson')
+      const lt = el('div', 'lt')
+      lt.append(el('div', 'lh', "MADDERVANE'S LESSON"), el('div', 'lb', opts.lesson))
+      box.append(el('div', 'li', '🖌️'), lt)
+      ov.append(box)
     }
     const rewards = el('div', 'eld-rewards')
     const lines: string[] = []
@@ -1184,8 +1218,9 @@ export class BattleHud {
       srow.append(sh, cp, dl)
       ov.append(srow)
     }
+    if (!opts.win) ov.append(el('div', 'eld-retrynote', 'Retry replays the SAME waves — same seed, no surprises.'))
     const row = el('div', 'eld-btnrow')
-    const replay = el('button', 'eld-btn purple', 'REPLAY')
+    const replay = el('button', 'eld-btn purple', opts.win ? 'REPLAY' : '↻ RETRY')
     replay.onclick = () => this.cb.onReplay()
     row.append(replay)
     if (opts.onContinue) {

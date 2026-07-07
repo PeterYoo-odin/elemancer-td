@@ -25,6 +25,23 @@ import { playMoroseHush } from '../ui/sfx'
 import { canonicalSeed, seedToCode, seedLink } from '../game/seedcode'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
+import { ftue, LEVEL_LESSONS, deathLesson } from '../game/onboarding'
+import { Coach } from '../ui/coach'
+
+// ONBOARDING coach steps for the first-ever battle (L1). Every step completes
+// by DOING; none of them ever blocks input, and skipping ahead auto-advances.
+type CoachStep =
+  | 'off'
+  | 'pickTower' // tap the Flame button
+  | 'placeTower' // tap the suggested bend cell
+  | 'start' // press START
+  | 'watch' // wave 1 runs, coach stays quiet
+  | 'frost' // wave 2 prep: add Frost next to Flame → THERMAL SHOCK
+  | 'upgradeWait'
+  | 'upgrade' // wave 3 prep: tap a tower → UPGRADE
+  | 'heroWait'
+  | 'hero' // wave 4 prep: deploy the first party hero
+  | 'done'
 
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
@@ -97,6 +114,16 @@ export class BattleScene extends Phaser.Scene {
   private lowLivesBarked = false
   private pairTimer = 0
   private barkNow(): number { return performance.now() / 1000 }
+
+  // ONBOARDING & FIRST SESSION — all view-side; the sim never sees any of it.
+  private coach: Coach | null = null
+  private coachStep: CoachStep = 'off'
+  private coachCellSim: { x: number; y: number } | null = null // cached teach cell
+  private battleT = 0 // wall-clock seconds since battle create (TTFT / first-wow)
+  private firstTowerRecorded = false
+  private towersBuilt = 0
+  private leakKinds: Record<string, number> = {} // enemy kind -> leaks (death teaches)
+  private firstWowDone = false // per-run guard for the first-reaction colour bloom
 
   constructor() { super('Battle') }
 
@@ -177,6 +204,15 @@ export class BattleScene extends Phaser.Scene {
     this.captionEl = null
     this.attractEndEl?.remove()
     this.attractEndEl = null
+    this.coach?.dispose()
+    this.coach = null
+    this.coachStep = 'off'
+    this.coachCellSim = null
+    this.battleT = 0
+    this.firstTowerRecorded = false
+    this.towersBuilt = 0
+    this.leakKinds = {}
+    this.firstWowDone = false
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -199,7 +235,10 @@ export class BattleScene extends Phaser.Scene {
       onTargeting: (id) => this.cycleTargeting(id),
       onDraft: (i) => this.pickDraft(i),
       onQuit: () => this.quitBattle(),
-      onReplay: () => this.scene.restart({ levelId: this.levelId, endless: this.endless, demo: this.demoMode, seedOverride: this.seed }),
+      onReplay: () => {
+        if (this.sim.state === 'lost') ftue.recordRetry() // death → same-seed retry taken
+        this.scene.restart({ levelId: this.levelId, endless: this.endless, demo: this.demoMode, seedOverride: this.seed })
+      },
       onBack: () => this.scene.start(this.endless ? 'Menu' : 'Map'),
     })
     this.hud.setLevelName(this.level.name)
@@ -222,6 +261,23 @@ export class BattleScene extends Phaser.Scene {
       this.hud.banner('MADDERVANE LEFT YOU A FROST TOWER', 0x9fdcff)
     }
     if (this.attract) this.hud.setSpeed(this.gameSpeed)
+
+    // ---- ONBOARDING: the L1 live coach, or a one-time ramp lesson (l2+) ----
+    if (!this.attract && !this.demoMode && !this.endless) {
+      // The live coach runs until the L1 curriculum completes — but never for a
+      // save that already has stars (veterans replaying L1 are left alone).
+      if (this.levelId === 'l1' && !ftue.isDone('l1-core') && economy.totalStars() === 0) {
+        this.coach = new Coach()
+        this.coachStep = 'pickTower'
+      } else {
+        const lesson = LEVEL_LESSONS[this.levelId]
+        if (lesson && !ftue.lessonSeen(this.levelId)) {
+          ftue.markLessonSeen(this.levelId)
+          this.coach = new Coach()
+          this.coach.say(lesson.title, lesson.body, 9000)
+        }
+      }
+    }
 
     economy.touchLastSeen()
   }
@@ -276,6 +332,8 @@ export class BattleScene extends Phaser.Scene {
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
     this.updateGreying(dt)
+    this.battleT += dt
+    if (this.coachStep !== 'off' && this.coachStep !== 'done') this.runCoach()
 
     // danger line: one in-voice rally when lives first dip below 35%
     if (!this.lowLivesBarked && this.sim.lives > 0 && this.sim.lives < this.sim.startLives * 0.35) {
@@ -394,6 +452,163 @@ export class BattleScene extends Phaser.Scene {
     const br = Math.round(bright * 200) / 200
     const filter = sat >= 0.995 && br >= 0.995 && br <= 1.005 ? '' : `saturate(${sat}) brightness(${br})`
     if (this.view.canvas.style.filter !== filter) this.view.canvas.style.filter = filter
+  }
+
+  // ======================================================================
+  //  ONBOARDING COACH — teach-by-doing, never blocks, auto-advances if the
+  //  player runs ahead. Steps persist (ftue) so a retry never re-teaches.
+  // ======================================================================
+  private runCoach(): void {
+    const c = this.coach
+    if (!c) { this.coachStep = 'off'; return }
+    const s = this.sim
+    if (s.state === 'won' || s.state === 'lost' || s.state === 'draft' || this.paused) { c.clear(); return }
+    switch (this.coachStep) {
+      case 'pickTower': {
+        if (this.towersBuilt > 0) { this.coachStep = 'start'; break } // they figured it out
+        if (this.buildKind) { this.coachStep = 'placeTower'; break }
+        c.say('Tap the FLAME tower', '“Small strokes first, little brush.” — Maddervane')
+        const btn = this.hud.towerButtonEl('flame')
+        c.ring(btn)
+        c.pointAtEl(btn)
+        break
+      }
+      case 'placeTower': {
+        if (this.towersBuilt > 0) { ftue.markDone('l1-place'); this.coachStep = 'start'; break }
+        if (!this.buildKind) { this.coachStep = 'pickTower'; break } // backed out of build mode
+        c.say('Now tap the glowing tile at the bend', 'Corners see the road twice — double the shots')
+        c.ring(null)
+        const cell = this.bestTeachCell()
+        if (cell) {
+          const p = this.view.projectToScreen(cell.x, cell.y, 0)
+          if (p.visible) c.pointAt(p.x, p.y)
+          else c.hidePointer()
+        }
+        break
+      }
+      case 'start': {
+        if (s.state !== 'prep') { ftue.markDone('l1-start'); c.clear(); this.coachStep = 'watch'; break }
+        c.say('Press START to send them in', 'Starting early pays bonus gold — courage is a currency')
+        const btn = this.hud.startButtonEl()
+        c.ring(btn)
+        c.pointAtEl(btn)
+        break
+      }
+      case 'watch': {
+        if (s.state === 'prep' && s.waveIndex >= 1) this.coachStep = 'frost'
+        break
+      }
+      case 'frost': {
+        const hasFrost = s.towers.some((t) => t.active && t.kind === 'frost')
+        if (hasFrost) {
+          ftue.markDone('l1-combo')
+          c.clear()
+          c.say('Fire + Water on the same foe…', '⚡ THERMAL SHOCK — watch the colour come back', 6000)
+          this.coachStep = 'upgradeWait'
+          break
+        }
+        if (s.state !== 'prep') { this.coachStep = 'upgradeWait'; break } // never nag mid-wave
+        if (this.buildKind === 'frost') {
+          c.ring(null)
+          c.say('Place FROST beside your Flame', 'Two elements, one victim — that\'s a REACTION')
+          const cell = this.cellBesideFirstTower()
+          if (cell) {
+            const p = this.view.projectToScreen(cell.x, cell.y, 0)
+            if (p.visible) c.pointAt(p.x, p.y)
+            else c.hidePointer()
+          }
+        } else {
+          c.say('Add a FROST tower next to your Flame', 'Fire + Water on the same foe = ⚡ THERMAL SHOCK')
+          const btn = this.hud.towerButtonEl('frost')
+          c.ring(btn)
+          c.pointAtEl(btn)
+        }
+        break
+      }
+      case 'upgradeWait': {
+        if (s.state === 'prep' && s.waveIndex >= 2) this.coachStep = 'upgrade'
+        break
+      }
+      case 'upgrade': {
+        const upgraded = s.towers.some((t) => t.active && t.level > 0)
+        if (upgraded) { ftue.markDone('l1-upgrade'); c.clear(); this.coachStep = 'heroWait'; break }
+        if (s.state !== 'prep') { this.coachStep = 'heroWait'; break }
+        if (this.selectedId != null) { c.clear(); break } // panel open — it takes over
+        c.say('Tap a tower, then UPGRADE it', 'One strong tower beats two weak ones')
+        c.ring(null)
+        const t = s.towers.find((tw) => tw.active)
+        if (t) {
+          const p = this.view.projectToScreen(t.x, t.y, 0.6)
+          if (p.visible) c.pointAt(p.x, p.y)
+          else c.hidePointer()
+        } else {
+          c.hidePointer()
+        }
+        break
+      }
+      case 'heroWait': {
+        if (s.state === 'prep' && s.waveIndex >= 3) this.coachStep = 'hero'
+        break
+      }
+      case 'hero': {
+        const party = s.partyLoadout()
+        if (party.length === 0 || s.deployedHeroes().length > 0) { this.finishCoach(); break }
+        if (s.state !== 'prep') { this.finishCoach(); break }
+        const first = party[0]
+        if (this.buildHeroId) {
+          c.ring(null)
+          c.hidePointer()
+          c.say(`Set ${first.def.name} on any free tile`, 'Heroes fight beside your towers — and cast on demand')
+        } else {
+          c.say(`Deploy ${first.def.name}, your first hero`, 'Tap the portrait, then tap a tile')
+          const btn = this.hud.heroButtonEl(first.heroId)
+          c.ring(btn)
+          c.pointAtEl(btn)
+        }
+        break
+      }
+    }
+  }
+
+  private finishCoach(): void {
+    ftue.markDone('l1-hero')
+    ftue.markDone('l1-core')
+    this.coach?.clear()
+    this.coach?.say('You know everything that matters', 'The rest is paint. Bring the colour home.', 5000)
+    this.coachStep = 'done'
+  }
+
+  // The teach cell: a free build tile touching the MOST path tiles (a bend sees
+  // the road twice), tie-broken toward the board centre. Cached per battle.
+  private bestTeachCell(): { x: number; y: number } | null {
+    if (this.coachCellSim) return this.coachCellSim
+    const g = this.sim.grid
+    let best: { col: number; row: number } | null = null
+    let bestScore = -1
+    for (const cand of this.sim.buildCells()) {
+      if (!this.sim.canPlace(cand.col, cand.row)) continue
+      let paths = 0
+      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const r = cand.row + dr
+        const cc = cand.col + dc
+        if (r >= 0 && r < g.length && cc >= 0 && cc < g[0].length && g[r][cc] === 'path') paths++
+      }
+      const score = paths * 10 - Math.abs(cand.col - 4) - Math.abs(cand.row - 5) * 0.5
+      if (score > bestScore) { bestScore = score; best = cand }
+    }
+    if (!best) return null
+    this.coachCellSim = cellCenter(best.col, best.row)
+    return this.coachCellSim
+  }
+
+  // A free tile orthogonally beside the player's first tower (for the Frost step).
+  private cellBesideFirstTower(): { x: number; y: number } | null {
+    const t = this.sim.towers.find((tw) => tw.active)
+    if (!t) return this.bestTeachCell()
+    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      if (this.sim.canPlace(t.col + dc, t.row + dr)) return cellCenter(t.col + dc, t.row + dr)
+    }
+    return this.bestTeachCell()
   }
 
   private hudCtx(): HudContext {
@@ -574,6 +789,14 @@ export class BattleScene extends Phaser.Scene {
     if (!this.sim.canPlace(col, row)) { this.floatAt(cc.x, cc.y, 'CANT BUILD', 0xff5b7a, 22); return }
     if (this.sim.gold < this.sim.placeCost(this.buildKind)) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
     const placed = this.sim.placeTower(this.buildKind, col, row)
+    if (placed) {
+      this.towersBuilt++
+      // KPI instrumentation: time-to-first-tower (first-ever only; guards inside)
+      if (!this.firstTowerRecorded && !this.attract) {
+        this.firstTowerRecorded = true
+        ftue.recordFirstTower(this.battleT)
+      }
+    }
     if (placed && this.sim.activeResonances().length > 0 && unlockCodex('field-resonance')) {
       this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
     }
@@ -695,12 +918,27 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  // Turn the run's evidence (what leaked, what stood, what was hoarded) into
+  // ONE actionable lesson for the defeat screen. Pure diagnosis, no state.
+  private buildDefeatLesson(): string {
+    const wave = this.level.waves[Math.min(this.sim.waveIndex, this.level.waves.length - 1)]
+    return deathLesson({
+      leakKinds: this.leakKinds,
+      towerKinds: [...new Set(this.sim.towers.filter((t) => t.active).map((t) => t.kind))],
+      towersBuilt: this.towersBuilt,
+      goldLeft: this.sim.gold,
+      hadAntiAir: this.sim.towers.some((t) => t.active && TOWERS[t.kind].antiAir),
+      waveHadHealers: !!wave && wave.entries.some((e) => e.kind === 'healer'),
+    })
+  }
+
   private showResult(): void {
     this.resultShown = true
     this.exitBuild()
     this.exitAiming()
     this.exitDeploy()
     this.deselect()
+    this.coach?.clear() // the coach never talks over a result screen
     const win = this.sim.state === 'won'
     // hands-free reel: bloom, then its own end card (prove-it + PLAY CTA)
     if (this.attract) {
@@ -710,6 +948,7 @@ export class BattleScene extends Phaser.Scene {
       return
     }
     if (win) {
+      if (this.levelId === 'l1') ftue.markDone('l1-core') // graduated — never coach again
       // victory colour-BLOOM: the level snaps back to full colour with an overshoot
       // (reduce-motion users still get full colour, just without the pulse)
       if (!appSettings.reducedMotion()) this.greyBloomT = 1.4
@@ -738,7 +977,10 @@ export class BattleScene extends Phaser.Scene {
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
         this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true, share: this.buildShare(false) })
       } else {
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false, share: this.buildShare(false) })
+        // DEATH TEACHES: diagnose the loss into one actionable lesson, and the
+        // retry button replays the SAME seed — the player knows the whole plan.
+        ftue.recordDefeat()
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false, lesson: this.buildDefeatLesson(), share: this.buildShare(false) })
         this.tryBark('defeat') // Morose condoles — he always does
       }
     }
@@ -813,6 +1055,7 @@ export class BattleScene extends Phaser.Scene {
         break
       case 'leak':
         this.hud.flash(0xff3b3b, 0.4)
+        this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
       case 'towerFire':
         this.view.fxMuzzle(ev.x, ev.y, ev.tx, ev.ty, ev.color, ev.kind)
@@ -882,6 +1125,14 @@ export class BattleScene extends Phaser.Scene {
           if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.0)
           window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 450)
         }
+        // the campaign's scripted first-wow: the FIRST-EVER reaction blooms colour
+        // back across the field (L1's coach guarantees this lands inside 90s)
+        if (!this.demoMode && !this.endless && !this.firstWowDone && ftue.data.firstWowS === undefined) {
+          this.firstWowDone = true
+          ftue.recordFirstWow(this.battleT)
+          if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.2)
+          window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 500)
+        }
         if (this.reactCalloutCd <= 0) {
           this.hud.reactionCallout(ev.name, ev.color)
           this.reactCalloutCd = 0.55
@@ -940,6 +1191,8 @@ export class BattleScene extends Phaser.Scene {
     this.captionEl = null
     this.attractEndEl?.remove()
     this.attractEndEl = null
+    this.coach?.dispose()
+    this.coach = null
     this.hud?.dispose()
     this.view?.dispose()
   }

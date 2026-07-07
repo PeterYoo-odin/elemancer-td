@@ -212,7 +212,7 @@ export type SimEvent =
   | { t: 'damage'; x: number; y: number; amount: number; eff: Effectiveness; combo: number }
   | { t: 'death'; x: number; y: number; kind: EnemyKind; color: number; boss: boolean }
   | { t: 'shieldBreak'; x: number; y: number; radius: number }
-  | { t: 'leak'; x: number; y: number; boss: boolean }
+  | { t: 'leak'; x: number; y: number; kind: EnemyKind; boss: boolean }
   | { t: 'towerFire'; x: number; y: number; tx: number; ty: number; color: number; kind: TowerKind }
   | { t: 'hit'; x: number; y: number; color: number }
   | { t: 'chain'; points: Array<[number, number]>; color: number; count: number; supercharged: boolean }
@@ -855,7 +855,7 @@ export class Sim {
     e.active = false
     const base = this.waypointFor('base')
     this.loseLife(e.def.boss ? 5 : 1)
-    this.emit({ t: 'leak', x: base.x, y: base.y, boss: !!e.def.boss })
+    this.emit({ t: 'leak', x: base.x, y: base.y, kind: e.def.kind, boss: !!e.def.boss })
   }
 
   // ---- towers -------------------------------------------------------------

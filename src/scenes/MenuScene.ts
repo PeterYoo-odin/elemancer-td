@@ -21,7 +21,13 @@ export class MenuScene extends Phaser.Scene {
     music.setTrack('map')
 
     this.front = new FrontPage({
-      onPlay: () => this.scene.start('Map'),
+      // FIRST SESSION: nothing cleared yet → skip the map and drop straight into
+      // level 1 with the live coach (first tower <20s). The world map opens after.
+      onPlay: () => {
+        const fresh = economy.totalStars() === 0 && Object.keys(economy.data.firstClears).length === 0
+        if (fresh) this.scene.start('Battle', { levelId: 'l1' })
+        else this.scene.start('Map')
+      },
       onHeroes: () => this.scene.start('Heroes'),
       onWorkshop: () => this.scene.start('Workshop'),
       onShop: () => this.scene.start('Shop'),
