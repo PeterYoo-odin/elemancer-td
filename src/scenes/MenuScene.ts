@@ -2,6 +2,7 @@ import Phaser from 'phaser'
 import { economy } from '../game/economy'
 import { FrontPage } from '../ui/FrontPage'
 import { showOdinSplash } from '../ui/OdinSplash'
+import { music } from '../ui/music'
 
 // Main menu / hub. The visuals live in FrontPage (an HTML/CSS overlay, like
 // BattleHud); this scene owns its lifecycle, routes navigation to the other
@@ -17,6 +18,7 @@ export class MenuScene extends Phaser.Scene {
     const { width, height } = this.scale
     // Solid backdrop behind the DOM overlay (visible for a frame on scene swaps).
     this.add.rectangle(width / 2, height / 2, width, height, 0x0a0716)
+    music.setTrack('map')
 
     this.front = new FrontPage({
       onPlay: () => this.scene.start('Map'),

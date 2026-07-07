@@ -8,6 +8,7 @@
 
 import { appSettings } from './settings'
 import { playUiTick } from './sfx'
+import { music } from './music'
 
 export interface FrontPageHandlers {
   onPlay(): void
@@ -206,6 +207,9 @@ const CSS = `
 .efp-mbtn:hover { background: rgba(255,255,255,.11); }
 .efp-mbtn:active { transform: scale(.97); }
 .efp-mbtn.ghost { margin-top: 8px; border-color: transparent; background: transparent; color: #9d92c4; }
+.efp-vol { width: 132px; accent-color: #ffd76a; cursor: pointer; }
+.efp-lic { margin-top: 14px; text-align: center; font-size: 10px; letter-spacing: .06em; line-height: 1.6; color: #8b7fb5; }
+.efp-lic a { color: #b3a5e0; }
 
 @media (max-height: 640px) {
   .efp-hero { gap: 8px; }
@@ -441,24 +445,34 @@ export class FrontPage {
     card.className = 'efp-card'
     card.innerHTML = `
       <div class="efp-ctitle">SETTINGS</div>
-      <div class="efp-row"><span>Sound</span><div class="efp-switch ${appSettings.data.sound ? 'on' : ''}" data-set="sound" role="switch"></div></div>
+      <div class="efp-row"><span>Sound FX</span><div class="efp-switch ${appSettings.data.sound ? 'on' : ''}" data-set="sound" role="switch"></div></div>
+      <div class="efp-row"><span>Music</span><div class="efp-switch ${appSettings.data.music ? 'on' : ''}" data-set="music" role="switch"></div></div>
+      <div class="efp-row"><span>Music volume</span>
+        <input class="efp-vol" type="range" min="0" max="100" value="${Math.round(appSettings.data.musicVol * 100)}" data-vol aria-label="Music volume" /></div>
       <div class="efp-row"><span>Reduce motion</span><div class="efp-switch ${appSettings.data.reduceMotion ? 'on' : ''}" data-set="reduceMotion" role="switch"></div></div>
       <button class="efp-mbtn" data-set="replay">&#9889;&nbsp; REPLAY INTRO</button>
       <button class="efp-mbtn ghost" data-set="close">CLOSE</button>
+      <div class="efp-lic">Music: Kevin MacLeod (incompetech.com) &middot; CC BY 4.0</div>
     `
     overlay.appendChild(card)
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.remove()
     })
+    card.querySelector<HTMLInputElement>('[data-vol]')!.addEventListener('input', (e) => {
+      const v = Number((e.target as HTMLInputElement).value) / 100
+      appSettings.set({ musicVol: v })
+      music.refresh(80)
+    })
     card.addEventListener('click', (e) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>('[data-set]')
       if (!el) return
       const key = el.dataset.set
-      if (key === 'sound' || key === 'reduceMotion') {
+      if (key === 'sound' || key === 'music' || key === 'reduceMotion') {
         const next = !appSettings.data[key]
         appSettings.set({ [key]: next })
         el.classList.toggle('on', next)
         this.root.classList.toggle('efp-reduced', appSettings.reducedMotion())
+        if (key === 'music') music.refresh(400)
         playUiTick()
       } else if (key === 'replay') {
         playUiTick()

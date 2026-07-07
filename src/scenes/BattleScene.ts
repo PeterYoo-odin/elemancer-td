@@ -12,6 +12,7 @@ import { economy } from '../game/economy'
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
+import { music } from '../ui/music'
 
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
@@ -53,6 +54,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create(): void {
+    music.setTrack('battle')
     // ---- run config (unchanged from the 2D scene) ----
     this.level = this.endless ? this.endlessLevel() : levelById(this.levelId) ?? LEVELS[0]
     const mods = economy.runModifiers(this.endless)

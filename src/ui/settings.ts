@@ -4,17 +4,20 @@
 const KEY = 'elemancer_settings_v1'
 
 export interface AppSettings {
-  sound: boolean
+  sound: boolean // synthesized SFX (thunder, ticks)
+  music: boolean // streamed music themes
+  musicVol: number // 0..1
   reduceMotion: boolean // explicit user override; the OS preference is honored too
 }
 
 function load(): AppSettings {
-  const def: AppSettings = { sound: true, reduceMotion: false }
+  const def: AppSettings = { sound: true, music: true, musicVol: 0.6, reduceMotion: false }
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return def
     const p = JSON.parse(raw) as Partial<AppSettings>
-    return { sound: p.sound !== false, reduceMotion: p.reduceMotion === true }
+    const vol = typeof p.musicVol === 'number' && isFinite(p.musicVol) ? Math.min(1, Math.max(0, p.musicVol)) : def.musicVol
+    return { sound: p.sound !== false, music: p.music !== false, musicVol: vol, reduceMotion: p.reduceMotion === true }
   } catch {
     return def
   }
