@@ -176,6 +176,17 @@ interface Transient {
 const MAX_PARTICLES = 900
 const MAX_MOTES = 110 // ambient atmosphere dust
 
+// USER ORBIT CAMERA limits — clamped so the board always stays readable:
+// never street-level, never upside-down, never panned off into the void.
+const DEF_PITCH = 52 * Math.PI / 180 // default tilt from the ground plane
+const PITCH_MIN = 28 * Math.PI / 180
+const PITCH_MAX = 80 * Math.PI / 180 // near top-down (never flips over the pole)
+const CAM_DIST_MIN = 6
+const CAM_DIST_MAX = 42
+const PAN_X = 5.5 // look-target clamp (world units) — stays on/near the board
+const PAN_Z = 6.5
+const LOOK_Y = -0.2
+
 // A cinematic camera pose: look target in sim px + spherical offset.
 export interface CinePose {
   x: number
@@ -283,9 +294,17 @@ export class BattleView3D {
   private tmpV = new THREE.Vector3()
   private tmpQ = new THREE.Quaternion()
 
-  // camera juice: base pose from frameCamera(); render() layers drift/shake/push on it
+  // camera juice: base pose from the orbit rig; render() layers drift/shake/push on it
   private camBasePos = new THREE.Vector3()
-  private camLook = new THREE.Vector3(0, -0.2, -0.4)
+  private camLook = new THREE.Vector3(0, LOOK_Y, -0.35)
+
+  // USER ORBIT RIG — a clamped spherical pose around a ground look-target.
+  // Gestures (CameraControls) write the GOAL; render() eases the live pose
+  // toward it so every pan/zoom/rotate lands smooth. Defaults re-fit on resize.
+  private camGoal = { yaw: 0, pitch: DEF_PITCH, dist: 20, tx: 0, tz: -0.35 }
+  private camCur = { yaw: 0, pitch: DEF_PITCH, dist: 20, tx: 0, tz: -0.35 }
+  private camDefDist = 20
+  private userCam = false // player owns the camera → idle drift stands down
 
   // CINEMATIC camera (attract/demo reel): poses blend from→to over dur seconds
   // with gentle breathing on top. Time advances by cineTimeScale × real dt so
@@ -365,6 +384,18 @@ export class BattleView3D {
     this.composer.setSize(window.innerWidth, window.innerHeight)
 
     this.frameCamera()
+    // snap the live pose onto the default framing and place the camera so the
+    // very first pick/projection (before the first render) is already correct
+    Object.assign(this.camCur, this.camGoal)
+    const c0 = this.camCur
+    const cp0 = Math.cos(c0.pitch)
+    this.camLook.set(c0.tx, LOOK_Y, c0.tz)
+    this.camera.position.set(
+      c0.tx + Math.sin(c0.yaw) * cp0 * c0.dist,
+      LOOK_Y + Math.sin(c0.pitch) * c0.dist,
+      c0.tz + Math.cos(c0.yaw) * cp0 * c0.dist,
+    )
+    this.camera.lookAt(this.camLook)
   }
 
   mount(parent: HTMLElement): void {
@@ -801,11 +832,14 @@ export class BattleView3D {
   }
 
   // ---------------------------------------------------------------- camera
+  // Fit the DEFAULT framing (whole board + path + base, nothing cut off) for the
+  // current aspect, then adopt it — unless the player owns the camera, in which
+  // case only the clamps are refreshed and their pose is preserved.
   private frameCamera(): void {
     const aspect = window.innerWidth / Math.max(1, window.innerHeight)
     this.camera.aspect = aspect
-    if (this.cineActive) { this.camera.updateProjectionMatrix(); return } // cine owns the pose
-    const pitch = 52 * Math.PI / 180
+    this.camera.updateProjectionMatrix()
+    if (this.cineActive) return // cine owns the pose
     // fit the board: horizontal half-extent 4.5, depth half-extent 5.5 (+margin)
     const halfX = 5.3
     const halfZ = 5.8
@@ -813,16 +847,73 @@ export class BattleView3D {
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect)
     const dForWidth = halfX / Math.tan(hFov / 2)
     // depth is foreshortened by the tilt; approximate its screen span
-    const dForDepth = (halfZ * Math.sin(pitch) + 1.5) / Math.tan(vFov / 2)
-    const dist = Math.min(34, Math.max(13, Math.max(dForWidth, dForDepth) + 1.5))
-    const targetY = -0.2
-    const camY = dist * Math.sin(pitch)
-    const camZ = dist * Math.cos(pitch)
-    this.camBasePos.set(Math.sin(this.camBaseAngle) * 0.6, camY, camZ + 0.5)
-    this.camLook.set(0, targetY, -0.4)
-    this.camera.position.copy(this.camBasePos)
-    this.camera.lookAt(this.camLook)
-    this.camera.updateProjectionMatrix()
+    const dForDepth = (halfZ * Math.sin(DEF_PITCH) + 1.5) / Math.tan(vFov / 2)
+    this.camDefDist = Math.min(34, Math.max(13, Math.max(dForWidth, dForDepth) + 1.5))
+    if (this.userCam) { this.clampGoal(); return }
+    // On tall screens the bottom action bar eats the lower band, so bias the
+    // look target toward +Z — the board rides UP into the un-occluded space
+    // instead of hiding its bottom edge behind the dock.
+    const tz0 = aspect < 0.7 ? 2.3 : aspect < 1 ? 1.1 : -0.35
+    this.camGoal.yaw = 0
+    this.camGoal.pitch = DEF_PITCH
+    this.camGoal.dist = this.camDefDist
+    this.camGoal.tx = 0
+    this.camGoal.tz = tz0
+  }
+
+  private clampGoal(): void {
+    const g = this.camGoal
+    g.pitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, g.pitch))
+    const dMax = Math.min(CAM_DIST_MAX, this.camDefDist * 1.45)
+    g.dist = Math.min(dMax, Math.max(CAM_DIST_MIN, g.dist))
+    g.tx = Math.min(PAN_X, Math.max(-PAN_X, g.tx))
+    g.tz = Math.min(PAN_Z, Math.max(-PAN_Z, g.tz))
+  }
+
+  // ---- user camera controls (the gesture layer calls these; cine ignores them)
+  orbitBy(dYaw: number, dPitch: number): void {
+    if (this.cineActive) return
+    this.userCam = true
+    this.camGoal.yaw += dYaw
+    this.camGoal.pitch += dPitch
+    this.clampGoal()
+  }
+
+  /** Pan by screen pixels — the world slides ~1:1 under the finger at any zoom. */
+  panBy(dxPx: number, dyPx: number): void {
+    if (this.cineActive) return
+    this.userCam = true
+    const h = Math.max(1, window.innerHeight)
+    const wpp = 2 * this.camCur.dist * Math.tan(this.camera.fov * Math.PI / 360) / h
+    // vertical screen travel is foreshortened by the tilt — compensate
+    const dyW = dyPx * wpp / Math.max(0.5, Math.sin(this.camCur.pitch))
+    const dxW = dxPx * wpp
+    const sy = Math.sin(this.camCur.yaw)
+    const cy = Math.cos(this.camCur.yaw)
+    // screen-right on the ground = (cy, -sy); screen-down = (sy, cy)
+    this.camGoal.tx -= dxW * cy + dyW * sy
+    this.camGoal.tz -= dxW * -sy + dyW * cy
+    this.clampGoal()
+  }
+
+  zoomBy(factor: number): void {
+    if (this.cineActive) return
+    this.userCam = true
+    this.camGoal.dist *= factor
+    this.clampGoal()
+  }
+
+  /** Glide back to the sensible center-safe default framing. */
+  resetView(): void {
+    if (this.cineActive) return
+    this.userCam = false
+    this.frameCamera()
+    if (!this.motionOk) Object.assign(this.camCur, this.camGoal) // reduce-motion: snap
+  }
+
+  /** True once the player has panned/zoomed/rotated away from the default. */
+  viewCustomized(): boolean {
+    return this.userCam
   }
 
   // ------------------------------------------------------- cinematic camera
@@ -836,8 +927,20 @@ export class BattleView3D {
       this.cineT = 0
       this.cineDur = 0.01
     } else {
+      // leaving cine: seed the orbit rig from the current cine pose so the
+      // camera GLIDES home to the default framing instead of teleporting
+      const p = this.cineFrom && this.cineDest ? this.evalCine() : null
       this.cineFrom = this.cineDest = null
+      this.userCam = false
       this.frameCamera()
+      if (p) {
+        this.camCur.yaw = p.yaw * Math.PI / 180
+        this.camCur.pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, p.pitch * Math.PI / 180))
+        this.camCur.dist = p.dist
+        this.camCur.tx = wx(p.x)
+        this.camCur.tz = wz(p.y)
+      }
+      if (!this.motionOk) Object.assign(this.camCur, this.camGoal)
     }
   }
 
@@ -1946,17 +2049,40 @@ export class BattleView3D {
     if (this.cineActive) {
       this.applyCine(dt) // attract reel: authored poses own the camera
     } else {
-      this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12
+      // ease the live orbit pose toward the gesture goal (frame-rate safe)
+      const g = this.camGoal
+      const c = this.camCur
+      const k = 1 - Math.exp(-dt * 9)
+      c.yaw += (g.yaw - c.yaw) * k
+      c.pitch += (g.pitch - c.pitch) * k
+      c.dist += (g.dist - c.dist) * k
+      c.tx += (g.tx - c.tx) * k
+      c.tz += (g.tz - c.tz) * k
+      const cp = Math.cos(c.pitch)
+      this.camLook.set(c.tx, LOOK_Y, c.tz)
+      this.camBasePos.set(
+        c.tx + Math.sin(c.yaw) * cp * c.dist,
+        LOOK_Y + Math.sin(c.pitch) * c.dist,
+        c.tz + Math.cos(c.yaw) * cp * c.dist,
+      )
+      // idle drift only while the framing is still ours (and motion is welcome);
+      // once the player takes the camera their pose holds perfectly still
+      const drift = this.userCam || !this.motionOk ? 0 : 1
+      this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12 * drift
       const sh = this.shakeAmp
       const jx = sh > 0.001 ? (Math.sin(this.clockT * 91) + Math.sin(this.clockT * 47)) * 0.5 * sh : 0
       const jy = sh > 0.001 ? (Math.sin(this.clockT * 83 + 1.7) + Math.sin(this.clockT * 59)) * 0.5 * sh : 0
       this.tmpV.copy(this.camLook).sub(this.camBasePos).normalize().multiplyScalar(this.pushAmp * 1.4)
       this.camera.position.set(
         this.camBasePos.x + Math.sin(this.camBaseAngle) * 0.9 + this.tmpV.x + jx,
-        this.camBasePos.y + Math.sin(this.clockT * 0.31) * 0.12 + this.tmpV.y + jy,
+        this.camBasePos.y + Math.sin(this.clockT * 0.31) * 0.12 * drift + this.tmpV.y + jy,
         this.camBasePos.z + this.tmpV.z,
       )
       this.camera.lookAt(this.camLook)
+      // fog tracks zoom so the board never drowns in haze when pulled back
+      const fog = this.scene.fog as THREE.Fog
+      fog.near = c.dist + 6
+      fog.far = c.dist + 26
     }
 
     // enemies: spawn pop, walk bob (squash & stretch), hit knockback, status anim

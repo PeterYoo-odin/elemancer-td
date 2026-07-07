@@ -12,13 +12,13 @@ import { economy } from '../game/economy'
 import { NEUTRAL } from '../game/workshop'
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
+import { CameraControls } from '../three/cameraControls'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
 import type { ShareCardOpts } from '../ui/ShareCard'
 import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
 import { barkEngine } from '../game/barks'
-import { showBark, dismissBark } from '../ui/barkUi'
 import { unlockCodex } from '../game/codex'
 import { realmForLevel } from '../game/levels'
 import { playMoroseHush } from '../ui/sfx'
@@ -97,8 +97,7 @@ export class BattleScene extends Phaser.Scene {
   private aimingHeroSlot: number | null = null
   private selectedId: number | null = null
 
-  private onDown = (e: PointerEvent) => this.handleDown(e)
-  private onMove = (e: PointerEvent) => this.handleMove(e)
+  private camCtl: CameraControls | null = null
   private onResize = () => this.view?.resize()
   private lastTime = 0
   private hitstopT = 0 // brief slow-mo on big kills (view pacing only)
@@ -230,6 +229,7 @@ export class BattleScene extends Phaser.Scene {
       onStart: () => { if (this.sim.state === 'prep') this.sim.startWave() },
       onPause: () => this.togglePause(),
       onSpeed: () => this.toggleSpeed(),
+      onResetView: () => this.view.resetView(),
       onTowerButton: (k) => this.onTowerButton(k),
       onSpellButton: (k) => this.onSpellButton(k),
       onHeroButton: (id) => this.onHeroButton(id),
@@ -249,8 +249,12 @@ export class BattleScene extends Phaser.Scene {
     this.hud.setLevelName(this.level.name)
 
     // ---- input + lifecycle ----
-    this.view.canvas.addEventListener('pointerdown', this.onDown)
-    this.view.canvas.addEventListener('pointermove', this.onMove)
+    // The gesture layer owns the canvas: it turns drags/pinches/wheel into
+    // camera moves and hands us only CLEAN taps and hover positions.
+    this.camCtl = new CameraControls(this.view.canvas, this.view, {
+      onTap: (x, y) => this.handleTap(x, y),
+      onHover: (x, y) => this.handleHover(x, y),
+    })
     window.addEventListener('resize', this.onResize)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.teardown())
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.teardown())
@@ -640,15 +644,17 @@ export class BattleScene extends Phaser.Scene {
   // ======================================================================
   //  INPUT
   // ======================================================================
-  private handleDown(e: PointerEvent): void {
+  // A CLEAN tap on the board (the gesture layer already filtered out pans,
+  // pinches and rotates — a drag can never misfire a build or select).
+  private handleTap(x: number, y: number): void {
     if (!this.sim) return
     if (this.sim.state === 'won' || this.sim.state === 'lost' || this.sim.state === 'draft') return
     if (this.paused) return
 
     if (this.mode === 'aiming') {
-      // The spell button is a DOM click (never a canvas pointerdown), so the FIRST
+      // The spell button is a DOM click (never a canvas tap), so the FIRST
       // canvas tap here is the intended aim — no "just entered" tap to swallow.
-      const p = this.view.pickPoint(e.clientX, e.clientY)
+      const p = this.view.pickPoint(x, y)
       if (p && this.inMap(p.x, p.y)) {
         if (this.aimingHeroSlot != null) this.sim.castHeroSpell(this.aimingHeroSlot, p.x, p.y)
         else if (this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
@@ -657,7 +663,7 @@ export class BattleScene extends Phaser.Scene {
       return
     }
 
-    const cell = this.view.pickCell(e.clientX, e.clientY)
+    const cell = this.view.pickCell(x, y)
     if (!cell) { if (this.mode === 'idle') this.deselect(); return }
 
     if (this.mode === 'building') { this.tryPlace(cell.col, cell.row); return }
@@ -665,16 +671,16 @@ export class BattleScene extends Phaser.Scene {
 
     const t = this.sim.towerAt(cell.col, cell.row)
     if (t) this.selectTower(t.id)
-    else this.deselect()
+    else this.deselect() // tap on empty board: deselect + close panels
   }
 
-  private handleMove(e: PointerEvent): void {
+  private handleHover(x: number, y: number): void {
     if (!this.sim) return
     if (this.mode === 'building' || this.mode === 'deploying') {
-      const cell = this.view.pickCell(e.clientX, e.clientY)
+      const cell = this.view.pickCell(x, y)
       this.view.setHover(cell, cell ? this.sim.canPlace(cell.col, cell.row) : false)
     } else if (this.mode === 'aiming') {
-      const cell = this.view.pickCell(e.clientX, e.clientY)
+      const cell = this.view.pickCell(x, y)
       this.view.setHover(cell, true)
     }
   }
@@ -761,17 +767,18 @@ export class BattleScene extends Phaser.Scene {
         this.pairTimer = window.setTimeout(() => {
           if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
           const bark = barkEngine.pick('pair', { party: fielded }, this.barkNow())
-          if (bark) showBark(bark)
+          if (bark) this.hud.chatBark(bark.speaker, bark.text)
         }, 2600)
       }
     }
   }
 
-  // ask the engine for a line; it may say "not now" (rate limits) — that's fine
+  // ask the engine for a line; it may say "not now" (rate limits) — that's fine.
+  // Lines land in the docked chat feed, never floating over the board.
   private tryBark(trigger: Parameters<typeof barkEngine.pick>[0], heroId?: string): void {
     const realmId = this.endless ? undefined : realmForLevel(this.levelId).id
     const bark = barkEngine.pick(trigger, { party: this.partyIds, heroId, realmId }, this.barkNow())
-    if (bark) showBark(bark)
+    if (bark) this.hud.chatBark(bark.speaker, bark.text)
   }
 
   private onSpellButton(key: SpellKey): void {
@@ -1219,11 +1226,10 @@ export class BattleScene extends Phaser.Scene {
   //  TEARDOWN (critical: dispose GL context every time we leave/restart)
   // ======================================================================
   private teardown(): void {
-    this.view?.canvas.removeEventListener('pointerdown', this.onDown)
-    this.view?.canvas.removeEventListener('pointermove', this.onMove)
+    this.camCtl?.dispose()
+    this.camCtl = null
     window.removeEventListener('resize', this.onResize)
     window.clearTimeout(this.pairTimer)
-    dismissBark()
     this.script = null
     this.takeoverEl?.remove()
     this.takeoverEl = null

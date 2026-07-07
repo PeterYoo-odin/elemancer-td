@@ -17,11 +17,13 @@ import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 import { playUiTick } from './sfx'
 import { battleSfx } from './battleSfx'
+import { ChatFeed } from './ChatFeed'
 
 export interface HudCallbacks {
   onStart(): void
   onPause(): void
   onSpeed(): void
+  onResetView(): void // camera "reset view" button in the dock controls
   onTowerButton(kind: TowerKind): void
   onSpellButton(key: SpellKey): void
   onHeroButton(heroId: string): void // deploy a party hero, or cast its spell if fielded
@@ -83,37 +85,46 @@ const CSS = `
 .eld-life .val { color:#ffd0da; }
 .eld-wave { margin-left:auto; }
 .eld-wave .val { color:#a8e9ff; font-size:18px; }
-.eld-levelname { position:absolute; top: calc(env(safe-area-inset-top,0px) + 58px); right:14px; font-size:12px; font-weight:700; color:#c9b6ff; opacity:.85; letter-spacing:1px; }
+.eld-levelname { position:absolute; top: calc(env(safe-area-inset-top,0px) + 62px); left:14px; font-size:12px; font-weight:700; color:#c9b6ff; opacity:.85; letter-spacing:1px; }
 
-/* combo + telegraph, centered under the top bar */
-.eld-combo { position:absolute; top:80px; left:50%; transform:translateX(-50%); font-weight:900; font-size:22px;
-  text-shadow:0 2px 0 rgba(0,0,0,.5); opacity:0; transition:opacity .2s; white-space:nowrap; }
-.eld-combo.show { opacity:1; }
-.eld-telegraph { position:absolute; top:112px; left:50%; transform:translateX(-50%);
-  background:rgba(20,12,40,.82); border:1px solid var(--stroke); border-radius:12px; padding:6px 16px;
-  font-size:14px; font-weight:800; letter-spacing:.5px; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,.4); }
+/* combo readout lives IN the top bar (a stat chip) so it can never overlap
+   the boss bar / telegraph / anything floating over the board */
+.eld-combo { display:none; align-items:center; background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--stroke); border-radius:16px; padding:8px 12px; font-weight:900; font-size:15px;
+  line-height:1; white-space:nowrap; box-shadow:0 4px 14px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
+.eld-combo.show { display:flex; }
+
+/* telegraph pill — docked in the bottom bar's prep row (never over the board) */
+.eld-telegraph { flex:1 1 140px; min-width:0; overflow:hidden; text-overflow:ellipsis;
+  background:rgba(20,12,40,.82); border:1px solid var(--stroke); border-radius:12px; padding:8px 14px;
+  font-size:13px; font-weight:800; letter-spacing:.5px; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,.4); }
 .eld-telegraph.hidden { display:none; }
 
-/* ---- right controls (pause/speed) ---- */
-.eld-rc { position:absolute; top: calc(env(safe-area-inset-top,0px) + 66px); right:12px; display:flex; gap:8px; }
-.eld-rc button { width:52px; height:52px; border-radius:14px; background:linear-gradient(180deg,var(--panel2),var(--panel));
-  border:1px solid var(--stroke); font-size:22px; font-weight:800; box-shadow:0 4px 12px rgba(0,0,0,.35); display:grid; place-items:center; }
+/* ---- dock control cluster (pause / speed / reset view) ---- */
+.eld-rc { display:flex; gap:6px; flex:0 0 auto; }
+.eld-rc button { width:44px; height:44px; border-radius:12px; background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--stroke); font-size:18px; font-weight:800; box-shadow:0 4px 12px rgba(0,0,0,.35); display:grid; place-items:center; }
 .eld-rc button:active { transform:scale(.92); }
 
-/* ---- start button ---- */
-.eld-start { position:absolute; left:50%; bottom:210px; transform:translateX(-50%);
-  padding:16px 42px; border-radius:20px; font-size:26px; font-weight:900; letter-spacing:1px;
+/* ---- start button (docked in the bottom bar's prep row) ---- */
+.eld-start { flex:0 0 auto; margin-left:auto;
+  padding:10px 26px; border-radius:16px; font-size:20px; font-weight:900; letter-spacing:1px;
   background:linear-gradient(180deg,#3ad07a,#1f9a54); border:1px solid rgba(255,255,255,.25);
-  box-shadow:0 8px 22px rgba(31,154,84,.5), inset 0 1px 0 rgba(255,255,255,.3); animation:eldpulse 1.4s ease-in-out infinite; }
-.eld-start:active { transform:translateX(-50%) scale(.94); }
+  box-shadow:0 6px 18px rgba(31,154,84,.5), inset 0 1px 0 rgba(255,255,255,.3); animation:eldpulse 1.4s ease-in-out infinite; }
+.eld-start:active { transform:scale(.94); }
 .eld-start.hidden { display:none; }
-@keyframes eldpulse { 0%,100%{ transform:translateX(-50%) scale(1);} 50%{ transform:translateX(-50%) scale(1.05);} }
+@keyframes eldpulse { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.04);} }
 
-/* ---- bottom dock ---- */
+/* ---- bottom dock: FIXED action-bar zone. The container itself stays
+   pointer-transparent (board taps pass through the gradient); only the
+   buttons opt back in. Rows never overlap anything by construction. ---- */
 .eld-dock { position:absolute; left:0; right:0; bottom:0; padding: 10px 10px calc(env(safe-area-inset-bottom,0px) + 12px);
   background:linear-gradient(0deg, rgba(18,10,36,.96), rgba(18,10,36,.7) 70%, rgba(18,10,36,0));
   display:flex; flex-direction:column; gap:8px; }
-.eld-spells { display:flex; gap:10px; justify-content:center; }
+.eld-dockbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.eld-dockbar.hidden { display:none; }
+.eld-spellrow { display:flex; align-items:center; gap:8px; }
+.eld-spells { display:flex; gap:10px; justify-content:center; flex:1 1 auto; }
 .eld-spell { position:relative; width:58px; height:58px; border-radius:50%; display:grid; place-items:center;
   background:radial-gradient(circle at 40% 35%, #2c2050, #1a1030); border:2px solid #555; font-size:24px;
   box-shadow:0 4px 12px rgba(0,0,0,.4); }
@@ -136,10 +147,18 @@ const CSS = `
 .eld-tower .tt { font-size:10px; color:#c9b6ff; letter-spacing:.5px; }
 .eld-tower .lock { position:absolute; inset:0; display:grid; place-items:center; font-size:26px; background:rgba(10,6,20,.55); border-radius:14px; }
 
-/* ---- upgrade panel ---- */
-.eld-upg { position:absolute; left:50%; bottom:308px; transform:translateX(-50%); width:min(94vw,440px);
-  background:linear-gradient(180deg,#221743,#1a1030); border-radius:20px; padding:14px 16px;
+/* ---- upgrade panel: an EDGE-DOCKED contextual panel, never over the board
+   centre. Mobile/portrait: a bottom sheet flush above the action dock (rides
+   --dock-h). Wide screens: docked to the right edge below the top bar. ---- */
+.eld-upg { position:absolute; left:62px; right:8px; bottom: calc(var(--dock-h, 240px) + 8px); width:auto;
+  /* left:62px clears the chat tab's column — the tab stays tappable with the sheet open */
+  max-height:38vh; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; z-index:25;
+  background:linear-gradient(180deg,#221743,#1a1030); border-radius:18px; padding:12px 14px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); border:2px solid; }
+@media (min-width:900px) {
+  .eld-upg { left:auto; right:12px; bottom:auto; top: calc(env(safe-area-inset-top,0px) + 78px);
+    width:330px; max-height:min(64vh, 540px); }
+}
 .eld-upg .row1 { display:flex; align-items:baseline; justify-content:space-between; }
 .eld-upg .tt { font-size:20px; font-weight:900; }
 .eld-upg .stars { font-size:16px; color:var(--gold); }
@@ -159,8 +178,9 @@ const CSS = `
 .eld-upg .maxlbl { flex:1 1 auto; text-align:center; padding:10px; font-weight:900; color:var(--gold); font-size:18px; }
 .eld-upg .close { position:absolute; top:8px; right:12px; font-size:20px; opacity:.7; padding:4px 8px; }
 
-/* ---- overlays (draft / result / pause) ---- */
-.eld-ov { position:absolute; inset:0; background:rgba(10,6,22,.72); backdrop-filter:blur(3px);
+/* ---- overlays (draft / result / pause): the MODAL layer. Dim backdrop,
+   centered content, sits above every panel and blocks board input. ---- */
+.eld-ov { position:absolute; inset:0; z-index:40; background:rgba(10,6,22,.72); backdrop-filter:blur(3px);
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; text-align:center; }
 .eld-ov h1 { font-size:44px; font-weight:900; margin:0; text-shadow:0 4px 0 rgba(0,0,0,.5); }
 .eld-ov .sub { font-size:18px; color:#d8d0ff; margin:-6px 0 2px; }
@@ -228,7 +248,7 @@ const CSS = `
 .eld-hero .hname { font-size:10px; font-weight:800; color:#e6dcff; letter-spacing:.3px; }
 
 /* ---- synergy panel (active element team bonuses) ---- */
-.eld-syn { position:absolute; left:10px; top:132px; display:flex; flex-direction:column; gap:5px; max-width:190px; z-index:21; }
+.eld-syn { position:absolute; left:10px; top: calc(env(safe-area-inset-top,0px) + 96px); display:flex; flex-direction:column; gap:5px; max-width:190px; z-index:21; }
 .eld-syn.hidden { display:none; }
 .eld-syn .syn-h { font-size:11px; font-weight:900; letter-spacing:1.5px; color:#c9b6ff; opacity:.9; text-shadow:0 1px 2px #000; }
 .eld-syn .syn-chip { display:flex; align-items:center; gap:6px; border:1px solid; border-radius:11px; padding:4px 9px 4px 7px;
@@ -265,7 +285,7 @@ const CSS = `
 @keyframes eldsheen { 0%,55%{ left:-70%; } 100%{ left:130%; } }
 
 .eld-upg { animation: eldpanelin .28s cubic-bezier(.2,1.4,.4,1) both; }
-@keyframes eldpanelin { from { opacity:0; transform:translateX(-50%) translateY(26px) scale(.94);} to { opacity:1; transform:translateX(-50%) translateY(0) scale(1);} }
+@keyframes eldpanelin { from { opacity:0; transform:translateY(22px) scale(.96);} to { opacity:1; transform:translateY(0) scale(1);} }
 .eld-ov { animation: eldovin .3s ease-out both; }
 @keyframes eldovin { from { opacity:0; } to { opacity:1; } }
 .eld-ov h1 { animation: eldtitlein .55s cubic-bezier(.2,1.5,.4,1) both; }
@@ -291,18 +311,19 @@ const CSS = `
   78%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-24px) scale(.96); } }
 
 /* one-time "the UI can explain itself" hint (first battle only) */
-.eld-hint { position:absolute; top:150px; left:50%; transform:translateX(-50%) translateY(-6px);
+.eld-hint { position:absolute; top: calc(env(safe-area-inset-top,0px) + 66px); left:50%; transform:translateX(-50%) translateY(-6px);
   padding:8px 18px; border-radius:999px; background:rgba(16,10,32,.92); border:1px solid rgba(255,255,255,.18);
   box-shadow:0 8px 22px rgba(0,0,0,.5); font-size:12.5px; font-weight:700; letter-spacing:.04em; color:#d9cff5;
   white-space:nowrap; opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none; z-index:22; }
 .eld-hint.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
 /* ---- KEEPER BOSS BAR: name, phase pips, HP + shield, cast telegraph pulse ---- */
-.eld-boss { position:absolute; top:44px; left:50%; transform:translateX(-50%); z-index:21; width:min(430px, 86vw);
+.eld-boss { position:absolute; top: calc(env(safe-area-inset-top,0px) + 64px); left:50%; transform:translateX(-50%); z-index:21; width:min(430px, 86vw);
   padding:7px 12px 9px; border-radius:14px; background:linear-gradient(180deg, rgba(24,16,44,.92), rgba(14,8,30,.92));
   border:1px solid var(--bossc, #c9b6ff); box-shadow:0 6px 22px rgba(0,0,0,.5), 0 0 16px color-mix(in srgb, var(--bossc, #c9b6ff) 22%, transparent);
-  opacity:0; transition:opacity .35s ease, transform .35s ease; pointer-events:auto; }
-.eld-boss.show { opacity:1; }
+  opacity:0; transition:opacity .35s ease, transform .35s ease;
+  pointer-events:none; /* hidden = untouchable — never an invisible click-eater */ }
+.eld-boss.show { opacity:1; pointer-events:auto; }
 .eld-boss.echo { border-style:dashed; filter:saturate(.55); }
 .eld-boss .bn { display:flex; align-items:baseline; gap:8px; }
 .eld-boss .bname { flex:1 1 auto; font-size:12.5px; font-weight:900; letter-spacing:.14em; color:var(--bossc, #c9b6ff);
@@ -359,7 +380,8 @@ const CSS_SHARE = `
    (fx layer, banners, reaction callouts, barks live outside these). */
 .eld-hud.attract .eld-top, .eld-hud.attract .eld-levelname, .eld-hud.attract .eld-rc,
 .eld-hud.attract .eld-start, .eld-hud.attract .eld-dock, .eld-hud.attract .eld-syn,
-.eld-hud.attract .eld-telegraph, .eld-hud.attract .eld-hint, .eld-hud.attract .eld-combo {
+.eld-hud.attract .eld-telegraph, .eld-hud.attract .eld-hint, .eld-hud.attract .eld-combo,
+.eld-hud.attract .eld-chat, .eld-hud.attract .eld-upg {
   display: none !important;
 }
 .eld-ov { overflow-y: auto; }
@@ -420,6 +442,13 @@ export class BattleHud {
   private upgradeEl: HTMLElement | null = null
   private overlayEl: HTMLElement | null = null
 
+  // chat/log feed (barks + event lines) + dock-height tracking for the
+  // edge-anchored panels that must clear the action bar exactly
+  private chat: ChatFeed
+  private dockEl: HTMLElement
+  private dockBar: HTMLElement
+  private dockRO: ResizeObserver | null = null
+
   private displayGold = 0
   private lastGoldTarget = -1
   private lastAfford = new Map<TowerKind, boolean>()
@@ -453,7 +482,8 @@ export class BattleHud {
     life.append(this.iconDiv('♥'), (this.livesVal = el('span', 'val', '0')))
     const wave = el('div', 'eld-stat eld-wave pe')
     wave.append((this.waveVal = el('span', 'val', 'WAVE 1')))
-    top.append(gold, life, wave)
+    this.comboEl = el('div', 'eld-combo') // combo chip: lives in the bar, in flow
+    top.append(gold, life, this.comboEl, wave)
     this.goldStat = gold
     this.lifeStat = life
     this.root.append(top)
@@ -489,9 +519,8 @@ export class BattleHud {
     levelName.id = 'eld-levelname'
     this.root.append(levelName)
 
-    this.comboEl = el('div', 'eld-combo')
+    // telegraph pill — docked into the bottom bar's prep row (built below)
     this.telegraphEl = el('div', 'eld-telegraph hidden pe')
-    this.root.append(this.comboEl, this.telegraphEl)
     attachTip(this.telegraphEl, () => this.telegraphTip())
 
     // Keeper boss bar — hidden until a Corrupted Keeper takes the field
@@ -519,14 +548,15 @@ export class BattleHud {
     this.root.append(this.bossEl)
     attachTip(this.bossEl, () => this.bossTip())
 
-    // right controls
+    // controls cluster (pause / speed / reset view) — docked in the bottom bar
     const rc = el('div', 'eld-rc')
     this.pauseBtn = el('button', 'pe', '❚❚')
     this.pauseBtn.onclick = () => { playUiTick(); this.cb.onPause() }
     this.speedBtn = el('button', 'pe', '1×')
     this.speedBtn.onclick = () => { playUiTick(); this.cb.onSpeed() }
-    rc.append(this.pauseBtn, this.speedBtn)
-    this.root.append(rc)
+    const resetBtn = el('button', 'pe', '🧭')
+    resetBtn.onclick = () => { playUiTick(); this.cb.onResetView() }
+    rc.append(this.pauseBtn, this.speedBtn, resetBtn)
     attachTip(this.pauseBtn, () => ({
       tag: 'CONTROL', title: 'Pause', accent: '#c9b6ff',
       body: 'Freeze the battle and take a breath. Nothing moves until you resume.',
@@ -535,11 +565,14 @@ export class BattleHud {
       tag: 'CONTROL', title: 'Battle speed', accent: '#c9b6ff',
       body: 'Toggle between 1× and 2×. The simulation stays exact at both speeds — only time flows faster.',
     }))
+    attachTip(resetBtn, () => ({
+      tag: 'CONTROL', title: 'Reset view', accent: '#c9b6ff',
+      body: 'Glide the camera back to the default framing. Drag to pan, pinch or scroll to zoom, two fingers (or right-drag) to rotate.',
+    }))
 
-    // start
+    // start (docked in the bottom bar's prep row, beside the telegraph)
     this.startBtn = el('button', 'eld-start pe', 'START ▶')
     this.startBtn.onclick = () => { playUiTick(); this.cb.onStart() }
-    this.root.append(this.startBtn)
     attachTip(this.startBtn, () => ({
       tag: 'PREP PHASE', title: 'Start the wave', accent: '#3ad07a',
       body: 'Send the wave in early and pocket +2 gold for every second left on the clock. Build first, then cash in the courage.',
@@ -594,8 +627,15 @@ export class BattleHud {
     // hero bar sits between the global spells and the towers (built lazily once the
     // party is known). Empty → CSS hides it, so a no-hero run looks unchanged.
     this.heroRow = el('div', 'eld-heroes pe')
-    dock.append(spells, this.heroRow, towers)
+    // prep row (telegraph + START) and the spells+controls row assemble the
+    // fixed bottom action-bar zone: nothing in it can overlap anything else.
+    this.dockBar = el('div', 'eld-dockbar hidden')
+    this.dockBar.append(this.telegraphEl, this.startBtn)
+    const spellRow = el('div', 'eld-spellrow')
+    spellRow.append(spells, rc)
+    dock.append(this.dockBar, spellRow, this.heroRow, towers)
     this.root.append(dock)
+    this.dockEl = dock
 
     // synergy panel (element team bonuses) — hidden until a synergy is active
     this.synPanel = el('div', 'eld-syn hidden')
@@ -609,11 +649,26 @@ export class BattleHud {
     this.synPanel.append(this.synList)
     this.root.append(this.synPanel)
 
+    // chat/log feed — the docked home for every conversational line
+    this.chat = new ChatFeed(() => this.cb.onSelectDeselect())
+    this.root.append(this.chat.root)
+
     // fx layer
     this.fxLayer = el('div', 'eld-fx')
     this.root.append(this.fxLayer)
 
     document.body.appendChild(this.root)
+
+    // publish the dock's live height as --dock-h so the upgrade sheet and chat
+    // feed anchor EXACTLY above the action bar, whatever rows it shows
+    this.dockRO = new ResizeObserver(() => this.updateDockH())
+    this.dockRO.observe(this.dockEl)
+    this.updateDockH()
+  }
+
+  private updateDockH(): void {
+    const h = Math.ceil(this.dockEl.getBoundingClientRect().height)
+    if (h > 0) this.root.style.setProperty('--dock-h', `${h}px`)
   }
 
   private iconDiv(t: string): HTMLElement {
@@ -687,9 +742,11 @@ export class BattleHud {
         ? `☠ ${tg.keeperName}`
         : `${tg.boss ? '☠ BOSS · ' : 'INCOMING: '}${tg.armor}${elemPart}`
       this.telegraphEl.classList.remove('hidden')
+      this.dockBar.classList.remove('hidden')
     } else {
       this.startBtn.classList.add('hidden')
       this.telegraphEl.classList.add('hidden')
+      this.dockBar.classList.add('hidden')
     }
 
     // tower buttons
@@ -1042,6 +1099,7 @@ export class BattleHud {
   // ------------------------------------------------------------- upgrade panel
   showUpgrade(sim: Sim, id: number): void {
     this.hideUpgrade()
+    this.chat.collapse() // one contextual panel at a time (portrait drawer yields)
     const t = sim.towerById(id)
     if (!t) return
     const def = t.def
@@ -1469,6 +1527,18 @@ export class BattleHud {
     const d = el('div', 'eld-wavebanner', msg)
     this.fxLayer.append(d)
     window.setTimeout(() => d.remove(), 1750)
+    this.chat.add(null, msg, 'event') // the feed keeps the history
+  }
+
+  // ------------------------------------------------------------- chat feed
+  /** Route a conversational line (hero bark / Morose taunt) to the docked feed. */
+  chatBark(speaker: string, text: string): void {
+    this.chat.add(speaker, text)
+  }
+
+  /** A plain event line in the feed (no speaker). */
+  chatEvent(text: string): void {
+    this.chat.add(null, text, 'event')
   }
 
   // ELEMENTAL REACTION slam. Single element reused so back-to-back reactions
@@ -1512,12 +1582,15 @@ export class BattleHud {
     d.style.color = hex(color)
     this.fxLayer.append(d)
     window.setTimeout(() => d.remove(), 1650)
+    this.chat.add(null, msg, 'event') // the pop is brief; the feed remembers
   }
 
   dispose(): void {
     dismissTip()
     this.hideUpgrade()
     this.clearOverlay()
+    this.dockRO?.disconnect()
+    this.dockRO = null
     this.root.remove()
     this.styleEl.remove()
   }
