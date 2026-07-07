@@ -18,7 +18,7 @@ import { NORMAL_MODE, BADGE_META, BADGE_ORDER, type RunMode, type Challenge } fr
 import { unlockCodex, lockedMoroseFragments, codexFreshCount, unlockCodexBatch, CODEX_ON_REALM_ENTER, CODEX_ON_REALM_CLEAR } from '../game/codex'
 import { CodexPanel } from './CodexPanel'
 import { playCutscene } from './Cutscene'
-import { getCutscene, isCutsceneSeen, REALM_FINALE_CUTSCENE, REALM_CAMPFIRE_CUTSCENE } from '../game/cutscenes'
+import { getCutscene, isCutsceneSeen, markCutsceneSeen, REALM_FINALE_CUTSCENE, REALM_CAMPFIRE_CUTSCENE } from '../game/cutscenes'
 import { heroById } from '../game/heroes'
 import { glyphIcon, iconMarkup } from './icons'
 import { attachTip, dismissTip } from './tooltip'
@@ -505,6 +505,13 @@ export class WorldMap {
       if (camp && !isCutsceneSeen(camp)) queue.push(camp)
     }
     if (queue.length === 0 || this.leaving) { then(); return }
+    // Migrated save catching up several realms at once: don't flood the player
+    // with a back-to-back reel. Fast-forward all but the two most recent beats
+    // (mark them seen so they never re-queue) and play only the freshest.
+    if (queue.length > 2) {
+      for (const id of queue.slice(0, queue.length - 2)) markCutsceneSeen(id)
+      queue.splice(0, queue.length - 2)
+    }
     const playNext = (k: number): void => {
       if (k >= queue.length || this.leaving) { then(); return }
       playCutscene(queue[k], () => playNext(k + 1))

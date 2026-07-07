@@ -1266,6 +1266,7 @@ export class BattleScene extends Phaser.Scene {
   // silent. Pure delivery: reads the keeper event the sim already emits.
   private keeperTold = new Set<string>() // reveal/heroLine fired, per keeper id
   private keeperRedeemed = new Set<string>()
+  private keeperTimers: number[] = [] // delayed stingers, cleared on teardown
   private handleKeeperEvent(ev: Extract<SimEvent, { t: 'keeper' }>): void {
     if (ev.echo) return // an echo is a memory of the fight, not the fight
     const k = KEEPER_BY_ID[ev.keeperId]
@@ -1277,7 +1278,7 @@ export class BattleScene extends Phaser.Scene {
       this.hud.moroseVeil(1.6)
       // the twisted hero answers, if they are on the line
       if (this.partyIds.includes(k.heroId)) {
-        window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark(k.heroId, k.barks.heroLine) }, 2100)
+        this.keeperTimers.push(window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark(k.heroId, k.barks.heroLine) }, 2100))
       }
     } else if (ev.kind === 'phase') {
       if (ev.phase === 2) this.hud.chatBark(k.id, k.barks.phase2)
@@ -1293,7 +1294,7 @@ export class BattleScene extends Phaser.Scene {
       battleSfx.reaction()
       if (unlockCodexBatch(CODEX_ON_KEEPER_REDEEM[k.id]) > 0) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       // Morose's thread stinger, a beat later — his reaction degrades across the six
-      window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark('morose', k.barks.morose) }, 2600)
+      this.keeperTimers.push(window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark('morose', k.barks.morose) }, 2600))
     }
   }
 
@@ -1305,6 +1306,8 @@ export class BattleScene extends Phaser.Scene {
     this.camCtl = null
     window.removeEventListener('resize', this.onResize)
     window.clearTimeout(this.pairTimer)
+    for (const t of this.keeperTimers) window.clearTimeout(t)
+    this.keeperTimers = []
     this.script = null
     this.takeoverEl?.remove()
     this.takeoverEl = null
