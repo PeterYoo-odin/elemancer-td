@@ -95,9 +95,11 @@ function castHeroSpells(sim: Sim): void {
 // bound (a competent human ⇒ win). A bot LOSS ⇒ the level's curve is unfair and
 // the build fails, naming the level so the generator can be retuned.
 // ---------------------------------------------------------------------------
-const BOT_PARTY = [{ heroId: 'glacia', level: 16 }, { heroId: 'volt', level: 16 }, { heroId: 'ember', level: 16 }]
+// Starter heroes only (ember/glacia/sylvan are the fresh-save roster) — the proof
+// must not lean on champions a new player hasn't unlocked.
+const BOT_PARTY = [{ heroId: 'ember', level: 16 }, { heroId: 'glacia', level: 16 }, { heroId: 'sylvan', level: 16 }]
 
-function botSpend(sim: Sim, placeRef: { i: number }): void {
+function botSpend(sim: Sim, placeRef: { i: number }, allowed: string[]): void {
   for (const t of sim.towers) {
     if (!t.active) continue
     const uc = sim.upgradeCostFor(t)
@@ -106,14 +108,17 @@ function botSpend(sim: Sim, placeRef: { i: number }): void {
   for (const c of sim.buildCells()) {
     if (sim.gold < 40) break
     if (!sim.canPlace(c.col, c.row)) continue
-    for (let a = 0; a < TOWER_ORDER.length; a++) {
-      const kind = TOWER_ORDER[(placeRef.i + a) % TOWER_ORDER.length]
+    for (let a = 0; a < allowed.length; a++) {
+      const kind = allowed[(placeRef.i + a) % allowed.length] as (typeof TOWER_ORDER)[number]
       if (sim.gold >= sim.placeCost(kind) && sim.placeTower(kind, c.col, c.row)) { placeRef.i++; break }
     }
   }
 }
 
-function autoPlay(level: LevelDef): { won: boolean; lives: number; wave: number } {
+// `allowed` = only the towers the player would actually OWN by this point in the
+// ladder (base cannon/frost/flame + whatever earlier levels unlocked). This makes
+// the beatability proof a MIN-RESOURCE lower bound, not "beatable with endgame kit".
+function autoPlay(level: LevelDef, allowed: string[]): { won: boolean; lives: number; wave: number } {
   const seed = (0xA5EED ^ (level.index * 40503) ^ 0x1234) >>> 0
   const sim = new Sim({
     level, mods: { ...NEUTRAL }, seed, endless: false,
@@ -126,9 +131,9 @@ function autoPlay(level: LevelDef): { won: boolean; lives: number; wave: number 
   while (tick < budget) {
     if (sim.state === 'won' || sim.state === 'lost') break
     if (sim.state === 'draft') { sim.chooseDraft(0); continue }
-    if (sim.state === 'prep') { botSpend(sim, placeRef); sim.startWave() }
+    if (sim.state === 'prep') { botSpend(sim, placeRef, allowed); sim.startWave() }
     if (sim.state === 'active') {
-      if (tick % 150 === 0) botSpend(sim, placeRef)
+      if (tick % 150 === 0) botSpend(sim, placeRef, allowed)
       if (tick % 150 === 0) castHeroSpells(sim)
     }
     sim.step(); tick++
@@ -385,15 +390,19 @@ LEVELS.forEach((lvl, i) => {
   }
 })
 
-// beatability: the fair bot must WIN every live level.
+// beatability: the fair, MIN-RESOURCE bot must WIN every live level using only the
+// towers actually unlocked by that point in the ladder + starter heroes.
 let beatFails = 0
 let hardest = { id: '', lives: 1e9 }
+const owned = new Set<string>(['cannon', 'frost', 'flame']) // fresh-save base towers
 for (const lvl of LEVELS) {
-  const r = autoPlay(lvl)
-  if (!r.won) { fail(`level ${lvl.id} (${lvl.name}) UNBEATABLE by fair auto-player — reached wave ${r.wave}, ${r.lives} lives`); beatFails++ }
+  const allowed = TOWER_ORDER.filter((k) => owned.has(k))
+  const r = autoPlay(lvl, allowed)
+  if (!r.won) { fail(`level ${lvl.id} (${lvl.name}) UNBEATABLE by min-resource auto-player — reached wave ${r.wave}, ${r.lives} lives`); beatFails++ }
   else if (r.lives < hardest.lives) hardest = { id: lvl.id, lives: r.lives }
+  if (lvl.unlockTower) owned.add(lvl.unlockTower) // its reward is available on the NEXT level
 }
-if (beatFails === 0) console.log(`  all ${LEVELS.length} live levels beatable — tightest clear: ${hardest.id} @ ${hardest.lives} lives left`)
+if (beatFails === 0) console.log(`  all ${LEVELS.length} live levels beatable (base towers + unlocks only) — tightest: ${hardest.id} @ ${hardest.lives} lives`)
 
 if (failures > 0) {
   console.error(`\nSIMCHECK FAILED — ${failures} violation(s).`)
