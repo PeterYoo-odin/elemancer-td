@@ -11,10 +11,21 @@
 
 import { Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES } from '../src/sim/index'
 import { NEUTRAL } from '../src/game/workshop'
-import { LEVELS } from '../src/game/levels'
+import { LEVELS, pathCellsFor, type LevelDef } from '../src/game/levels'
+import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
+import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
 import { runScriptedDemo } from '../src/game/attractScript'
 import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
+
+// Stress runs are DECOUPLED from the campaign ladder: we build a bespoke max-size
+// level (6-lane serpentine) so regenerating LEVELS can never starve the ≥200
+// concurrent-entity assertion. Endless mode ignores `waves`, so only the path
+// (and its build cells) matter here.
+const STRESS_LEVEL: LevelDef = {
+  id: 'stress', index: 3, name: 'Stress Arena', blurb: '', lanes: [0, 2, 4, 6, 8, 10],
+  startGold: 5_000_000, startLives: 10_000_000, baseCoins: 0, palette: LEVELS[0].palette, waves: [],
+}
 
 const COMBO_MAX = 6
 const TARGET_WAVES = 60
@@ -45,9 +56,9 @@ const PARTIES: Array<Array<{ heroId: string; level: number }>> = [
   [{ heroId: 'sylvan', level: 10 }, { heroId: 'volt', level: 10 }, { heroId: 'glacia', level: 6 }],
 ]
 
-function makeSim(seed: number, levelIndex = 3, party = 0): Sim {
+function makeSim(seed: number, _levelIndex = 3, party = 0): Sim {
   return new Sim({
-    level: LEVELS[levelIndex],
+    level: STRESS_LEVEL,
     mods: { ...NEUTRAL },
     seed,
     endless: true,
@@ -74,6 +85,55 @@ function castHeroSpells(sim: Sim): void {
   for (const h of sim.deployedHeroes()) {
     if (h.spellCd <= 0) sim.castHeroSpell(h.id, h.x, h.y - 40)
   }
+}
+
+// ---------------------------------------------------------------------------
+// BEATABILITY AUTO-PLAYER — proves every LIVE campaign level is winnable with
+// the level's REAL resources (not the god-mode stress harness). A strong-but-fair
+// bot: deploy party, greedily place/upgrade a rotating tower spread (guarantees
+// anti-air via storm/arcane), cast ready hero spells. A bot WIN is a valid lower
+// bound (a competent human ⇒ win). A bot LOSS ⇒ the level's curve is unfair and
+// the build fails, naming the level so the generator can be retuned.
+// ---------------------------------------------------------------------------
+const BOT_PARTY = [{ heroId: 'glacia', level: 16 }, { heroId: 'volt', level: 16 }, { heroId: 'ember', level: 16 }]
+
+function botSpend(sim: Sim, placeRef: { i: number }): void {
+  for (const t of sim.towers) {
+    if (!t.active) continue
+    const uc = sim.upgradeCostFor(t)
+    if (uc !== null && sim.gold >= uc) sim.upgradeTower(t.id)
+  }
+  for (const c of sim.buildCells()) {
+    if (sim.gold < 40) break
+    if (!sim.canPlace(c.col, c.row)) continue
+    for (let a = 0; a < TOWER_ORDER.length; a++) {
+      const kind = TOWER_ORDER[(placeRef.i + a) % TOWER_ORDER.length]
+      if (sim.gold >= sim.placeCost(kind) && sim.placeTower(kind, c.col, c.row)) { placeRef.i++; break }
+    }
+  }
+}
+
+function autoPlay(level: LevelDef): { won: boolean; lives: number; wave: number } {
+  const seed = (0xA5EED ^ (level.index * 40503) ^ 0x1234) >>> 0
+  const sim = new Sim({
+    level, mods: { ...NEUTRAL }, seed, endless: false,
+    startGold: level.startGold, startLives: level.startLives, party: BOT_PARTY,
+  })
+  deployParty(sim)
+  const placeRef = { i: 0 }
+  let tick = 0
+  const budget = 60 * 60 * 20 // ~20 min sim time — generous headroom for a fair level
+  while (tick < budget) {
+    if (sim.state === 'won' || sim.state === 'lost') break
+    if (sim.state === 'draft') { sim.chooseDraft(0); continue }
+    if (sim.state === 'prep') { botSpend(sim, placeRef); sim.startWave() }
+    if (sim.state === 'active') {
+      if (tick % 150 === 0) botSpend(sim, placeRef)
+      if (tick % 150 === 0) castHeroSpells(sim)
+    }
+    sim.step(); tick++
+  }
+  return { won: sim.state === 'won', lives: sim.lives, wave: sim.waveIndex }
 }
 
 // Fill build cells with a rotating tower kind. mode 'max' pushes them to a maxed
@@ -190,8 +250,7 @@ function checkIds(sim: Sim, retired: Set<number>, tick: number): void {
 }
 
 function runOne(seed: number, mode: 'max' | 'base' | 'flood', party = 0): { maxEntities: number; wavesReached: number } {
-  // flood uses the longest 6-lane path (index 5) to maximise concurrency
-  const sim = makeSim(seed, mode === 'flood' ? 5 : 3, party)
+  const sim = makeSim(seed, 3, party)
   if (mode !== 'flood') deployParty(sim) // heroes before towers claim the build cells
   saturateTowers(sim, mode)
   if (mode === 'max') fusionsForged += fuseSome(sim) // dual-aura fusion towers under stress
@@ -292,6 +351,49 @@ const demo2 = runScriptedDemo()
 if (demo.fingerprint !== demo2.fingerprint) fail(`demo replay diverged: ${demo.fingerprint} vs ${demo2.fingerprint}`)
 console.log(`  demo ok — won t=${demo.clock.toFixed(1)}s, lives=${demo.lives}, first SHATTER @${demo.shatterAt.toFixed(1)}s, ` +
   `reactions=${demo.reactions}, maxCombo=${demo.maxCombo}, score=${demo.score}`)
+
+// ---------------------------------------------------------------------------
+//  CAMPAIGN LADDER — the generated ladder must be DETERMINISTIC, well-formed
+//  (contiguous in-bounds paths, in-bounds terrain, contiguous indices) and every
+//  LIVE level must be provably BEATABLE by the fair auto-player.
+// ---------------------------------------------------------------------------
+console.log(`\ncampaign ladder — ${LEVELS.length} live levels across ${new Set(LEVELS.map((l) => l.palette.path)).size}+ realms…`)
+
+// determinism: rebuilding the campaign yields an identical ladder (ids + waves).
+function campaignFingerprint(): string {
+  const c = buildCampaign()
+  return c.levels.map((l) => `${l.id}:${l.waves.length}:${(l.path ?? []).length}:${(l.terrain ?? []).length}`).join('|')
+}
+if (campaignFingerprint() !== campaignFingerprint()) fail('campaign generator is non-deterministic')
+if (GENERATOR_MAX_PER_WORLD < 80) fail('generator ceiling too low to scale to hundreds/world')
+
+// well-formedness: contiguous indices + contiguous in-bounds paths + in-bounds terrain.
+LEVELS.forEach((lvl, i) => {
+  if (lvl.index !== i) fail(`level ${lvl.id} index ${lvl.index} != position ${i} (isLevelUnlocked would break)`)
+  const cells = pathCellsFor(lvl)
+  if (cells.length < 2) fail(`level ${lvl.id} path too short (${cells.length})`)
+  for (let ci = 0; ci < cells.length; ci++) {
+    const [c, r] = cells[ci]
+    if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) fail(`level ${lvl.id} path cell off-grid @${ci}: ${c},${r}`)
+    if (ci > 0) {
+      const [pc, pr] = cells[ci - 1]
+      if (Math.abs(c - pc) + Math.abs(r - pr) > 1) fail(`level ${lvl.id} path not contiguous @${ci}: ${pc},${pr}→${c},${r}`)
+    }
+  }
+  for (const t of lvl.terrain ?? []) {
+    if (t.col < 0 || t.col >= GRID_COLS || t.row < 0 || t.row >= GRID_ROWS) fail(`level ${lvl.id} terrain off-grid: ${t.col},${t.row}`)
+  }
+})
+
+// beatability: the fair bot must WIN every live level.
+let beatFails = 0
+let hardest = { id: '', lives: 1e9 }
+for (const lvl of LEVELS) {
+  const r = autoPlay(lvl)
+  if (!r.won) { fail(`level ${lvl.id} (${lvl.name}) UNBEATABLE by fair auto-player — reached wave ${r.wave}, ${r.lives} lives`); beatFails++ }
+  else if (r.lives < hardest.lives) hardest = { id: lvl.id, lives: r.lives }
+}
+if (beatFails === 0) console.log(`  all ${LEVELS.length} live levels beatable — tightest clear: ${hardest.id} @ ${hardest.lives} lives left`)
 
 if (failures > 0) {
   console.error(`\nSIMCHECK FAILED — ${failures} violation(s).`)

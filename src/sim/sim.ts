@@ -8,7 +8,8 @@
 
 import { ENEMIES, type EnemyDef, type EnemyKind } from '../game/enemies'
 import { TOWERS, type TowerBranch, type TowerDef, type TowerKind, type TowerLevel } from '../game/towers'
-import { serpentine, type LevelDef, type Wave } from '../game/levels'
+import { type LevelDef, type Wave } from '../game/levels'
+import { pathCellsFor, terrainDmgMul, terrainRngMul, terrainNoBuild, type TerrainKind } from '../game/paths'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import type { RunModifiers } from '../game/workshop'
 import { RNG } from './rng'
@@ -85,6 +86,7 @@ export interface SimConfig {
   startGold: number
   startLives: number
   party?: Array<{ heroId: string; level: number }> // slice-6 hero loadout (optional)
+  towerCap?: number // per-level challenge: max simultaneous towers (undefined = no cap)
 }
 
 export interface SimEnemy {
@@ -282,6 +284,7 @@ export class Sim {
 
   // path / grid
   grid: string[][] = []
+  terrain: TerrainKind[][] = [] // per-cell terrain flag ('' = none); read by canPlace/effDamage/effRange
   private occupied: (SimTower | null)[][] = []
   private waypoints: { x: number; y: number }[] = []
   private segments: Array<{ ax: number; ay: number; bx: number; by: number; len: number }> = []
@@ -418,22 +421,30 @@ export class Sim {
 
   // ---- path / grid --------------------------------------------------------
   private buildGrid(): void {
-    const pathCells = serpentine(this.config.level.lanes)
+    const pathCells = pathCellsFor(this.config.level)
     this.grid = []
+    this.terrain = []
     this.occupied = []
     this.occupiedHero = []
     for (let r = 0; r < ROWS; r++) {
       const gr: string[] = []
+      const trow: TerrainKind[] = []
       const orow: (SimTower | null)[] = []
       const hrow: (SimHero | null)[] = []
       for (let c = 0; c < COLS; c++) {
         gr.push('blocked')
+        trow.push('')
         orow.push(null)
         hrow.push(null)
       }
       this.grid.push(gr)
+      this.terrain.push(trow)
       this.occupied.push(orow)
       this.occupiedHero.push(hrow)
+    }
+    // Lay down authored terrain flags (only on in-bounds cells; non-build tiles ignored downstream).
+    for (const tc of this.config.level.terrain ?? []) {
+      if (tc.row >= 0 && tc.row < ROWS && tc.col >= 0 && tc.col < COLS) this.terrain[tc.row][tc.col] = tc.kind
     }
     const onPath = new Set<string>()
     for (const [c, r] of pathCells) {
@@ -504,7 +515,20 @@ export class Sim {
 
   canPlace(col: number, row: number): boolean {
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return false
+    if (terrainNoBuild(this.terrain[row]?.[col] ?? '')) return false // fog-of-placement
     return this.grid[row][col] === 'build' && this.occupied[row][col] === null && this.occupiedHero[row][col] === null
+  }
+
+  terrainAt(col: number, row: number): TerrainKind {
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return ''
+    return this.terrain[row]?.[col] ?? ''
+  }
+
+  // Count of active towers on the field (for the tower-cap challenge).
+  private activeTowerCount(): number {
+    let n = 0
+    for (const t of this.towers) if (t.active) n++
+    return n
   }
 
   towerAt(col: number, row: number): SimTower | null {
@@ -1132,6 +1156,7 @@ export class Sim {
   // ---- towers -------------------------------------------------------------
   placeTower(kind: TowerKind, col: number, row: number): SimTower | null {
     if (!this.canPlace(col, row)) return null
+    if (this.config.towerCap !== undefined && this.activeTowerCount() >= this.config.towerCap) return null
     const cost = this.placeCost(kind)
     if (this.gold < cost) return null
     this.spendGold(cost)
@@ -1295,7 +1320,8 @@ export class Sim {
 
   effRange(t: SimTower): number {
     const fus = t.fusedElem !== '' ? FUSION_RNG : 1
-    return clamp(this.stats(t).range * TILE * t.buffRng * fus * this.config.mods.rangeMult, TILE * 0.5, TILE * 12)
+    const terr = terrainRngMul(this.terrain[t.row]?.[t.col] ?? '')
+    return clamp(this.stats(t).range * TILE * t.buffRng * fus * this.config.mods.rangeMult * terr, TILE * 0.5, TILE * 12)
   }
   effCooldown(t: SimTower): number {
     return clamp(this.stats(t).cooldown * this.config.mods.cooldownMult * this.upgrades.fireRateMult, 0.05, 10)
@@ -1305,7 +1331,8 @@ export class Sim {
     const elem = t.def.element ? this.upgrades.elementDmg[t.def.element] : 1
     const res = this.resTowerMult.get(t.kind) ?? 1
     const fus = t.fusedElem !== '' ? FUSION_DMG : 1
-    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem * res * fus
+    const terr = terrainDmgMul(this.terrain[t.row]?.[t.col] ?? '', t.def.element)
+    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem * res * fus * terr
     return clamp(dmg, 0, 1e7)
   }
   // DPS shown in the UI (splash/chain not counted, single-target baseline).

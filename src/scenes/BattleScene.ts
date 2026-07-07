@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import { TOWERS, type TowerKind } from '../game/towers'
-import { LEVELS, levelById, serpentine, starsForClear, DEMO_LEVEL, type LevelDef } from '../game/levels'
+import { LEVELS, levelById, pathCellsFor, starsForClear, DEMO_LEVEL, type LevelDef } from '../game/levels'
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
 import { NEUTRAL } from '../game/workshop'
@@ -224,7 +224,7 @@ export class BattleScene extends Phaser.Scene {
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
-    const pathCells = serpentine(this.level.lanes) // ordered spawn→base, for tile orientation
+    const pathCells = pathCellsFor(this.level) // ordered spawn→base, for tile orientation
     this.view = new BattleView3D(this.sim, this.level.palette, accent, pathCells)
     this.view.mount(document.body)
 
