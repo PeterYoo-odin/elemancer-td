@@ -21,6 +21,7 @@ import { RARITY_COLOR } from '../game/heroes'
 import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
+import { TERRAIN_META } from '../game/paths'
 import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
 import { appSettings } from '../ui/settings'
@@ -551,7 +552,15 @@ export class BattleView3D {
         dummy.scale.setScalar(1)
         dummy.updateMatrix()
         inst.setMatrixAt(i, dummy.matrix)
-        inst.setColorAt(i, kind === 'build' ? buildC : (c + r) % 2 === 0 ? grassA : grassB)
+        // Terrain tiles read at a glance: blend the build colour toward the hazard hue
+        // (lava/high-ground/fog/…) so the tower-stat effect is visible on the board.
+        const terr = this.sim.terrainAt(c, r)
+        const base = kind === 'build' ? buildC : (c + r) % 2 === 0 ? grassA : grassB
+        if (kind === 'build' && terr !== '' && TERRAIN_META[terr]) {
+          inst.setColorAt(i, base.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55))
+        } else {
+          inst.setColorAt(i, base)
+        }
       })
       inst.instanceMatrix.needsUpdate = true
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true
