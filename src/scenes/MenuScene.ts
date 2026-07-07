@@ -3,6 +3,7 @@ import { economy } from '../game/economy'
 import { FrontPage } from '../ui/FrontPage'
 import { showOdinSplash } from '../ui/OdinSplash'
 import { music } from '../ui/music'
+import { playCutsceneOnce } from '../ui/Cutscene'
 
 // Main menu / hub. The visuals live in FrontPage (an HTML/CSS overlay, like
 // BattleHud); this scene owns its lifecycle, routes navigation to the other
@@ -25,7 +26,9 @@ export class MenuScene extends Phaser.Scene {
       // level 1 with the live coach (first tower <20s). The world map opens after.
       onPlay: () => {
         const fresh = economy.totalStars() === 0 && Object.keys(economy.data.firstClears).length === 0
-        if (fresh) this.scene.start('Battle', { levelId: 'l1' })
+        // First-ever Play: the OPENING motion-comic (skippable, once) sets the
+        // stakes before the first battle. Returning players go to the map.
+        if (fresh) playCutsceneOnce('opening', () => this.scene.start('Battle', { levelId: 'l1' }))
         else this.scene.start('Map')
       },
       onHeroes: () => this.scene.start('Heroes'),

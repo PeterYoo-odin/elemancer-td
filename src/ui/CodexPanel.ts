@@ -3,7 +3,7 @@
 // notes, locked pages show only a hint of how to earn them. Opened from the
 // world map; one tap on ✕ (or the backdrop) closes it.
 
-import { CODEX, CODEX_CATEGORY_LABEL, codexUnlockedCount, isCodexUnlocked, clearCodexFresh, REACTION_ORDER, REACTION_TOTAL, reactionsDiscoveredCount, isReactionDiscovered, type CodexCategory } from '../game/codex'
+import { CODEX, CODEX_CATEGORY_LABEL, CODEX_CATEGORY_ORDER, codexUnlockedCount, isCodexUnlocked, clearCodexFresh, REACTION_ORDER, REACTION_TOTAL, reactionsDiscoveredCount, isReactionDiscovered } from '../game/codex'
 import { REACTIONS } from '../sim/reactions'
 import { playUiTick } from './sfx'
 import { iconMarkup, reactionIcon, hexOf } from './icons'
@@ -28,7 +28,9 @@ const CSS = `
   background: rgba(255,255,255,.06); color: #efe9ff; font: inherit; font-size: 17px; font-weight: 800; cursor: pointer; }
 .ecdx-close:active { transform: scale(.92); }
 .ecdx-body { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px 22px; }
-.ecdx-cat { margin-top: 16px; font-size: 11px; font-weight: 900; letter-spacing: .3em; color: #b8a5e8; }
+.ecdx-cat { margin-top: 18px; font-size: 11px; font-weight: 900; letter-spacing: .3em; color: #b8a5e8;
+  display: flex; align-items: baseline; gap: 8px; }
+.ecdx-catn { font-size: 10px; font-weight: 800; letter-spacing: .1em; color: #8578ab; }
 .ecdx-e { margin-top: 10px; border-radius: 14px; padding: 12px 14px;
   background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.02));
   border: 1px solid rgba(255,255,255,.1); }
@@ -71,10 +73,12 @@ export class CodexPanel {
     }
     clearCodexFresh()
 
-    const cats: CodexCategory[] = ['heroes', 'world', 'morose', 'field']
-    const sections = cats
+    const sections = CODEX_CATEGORY_ORDER
       .map((cat) => {
-        const rows = CODEX.filter((e) => e.category === cat)
+        const inCat = CODEX.filter((e) => e.category === cat)
+        if (inCat.length === 0) return ''
+        const filled = inCat.filter((e) => isCodexUnlocked(e.id)).length
+        const rows = inCat
           .map((e) => {
             const open = isCodexUnlocked(e.id)
             const title = open ? e.title : '??? '
@@ -83,7 +87,7 @@ export class CodexPanel {
             return `<div class="ecdx-e${open ? '' : ' lk'}"><div class="et">${mark} ${esc(title)}</div><div class="ex">${esc(body)}</div></div>`
           })
           .join('')
-        return `<div class="ecdx-cat">${CODEX_CATEGORY_LABEL[cat].toUpperCase()}</div>${rows}`
+        return `<div class="ecdx-cat">${CODEX_CATEGORY_LABEL[cat].toUpperCase()} <span class="ecdx-catn">${filled}/${inCat.length}</span></div>${rows}`
       })
       .join('')
 

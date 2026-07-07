@@ -11,15 +11,23 @@ import { showOdinSplash } from './ui/OdinSplash'
 import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
 import { readLaunchParams } from './game/seedcode'
+import { playCutscene } from './ui/Cutscene'
 
 // The Odin Platforms boot splash goes up first (a DOM overlay above the canvas)
 // and is gated behind a tap so the thunderclap is allowed to play. Phaser boots
 // and preloads assets underneath it; BootScene waits on both before the menu.
 // GROWTH DEEP-LINKS skip it entirely: ?attract=1 must run hands-free (headless
 // trailer capture), and ?seed=/?demo= links promise <5s to interactive.
+// DEV / QA deep-link: ?cutscene=<id> plays any motion-comic directly over the
+// game (opening · realm-<id> · finale-<id> · campfire-N · ending). Lets us verify
+// every cutscene — skippable, typed-text, reduce-motion — without a full playthrough.
+const cutId = new URLSearchParams(location.search).get('cutscene')
+
 const launch = readLaunchParams()
-if (launch.attract || launch.demo || launch.seed !== null) markSplashDone()
+if (launch.attract || launch.demo || launch.seed !== null || cutId) markSplashDone()
 else showOdinSplash({ gate: true, onDone: markSplashDone })
+
+if (cutId) playCutscene(cutId)
 
 // The same "TAP TO ENTER" gesture unlocks music playback; scenes then declare
 // the theme they want (menu/map vs battle) and the mixer crossfades.

@@ -15,8 +15,10 @@ import { barkEngine } from '../game/barks'
 import { showBark, dismissBark, speakerInfo } from './barkUi'
 import { REALM_ENTRY, storyForLevel } from '../game/story'
 import { NORMAL_MODE, BADGE_META, BADGE_ORDER, type RunMode, type Challenge } from '../game/modes'
-import { unlockCodex, lockedMoroseFragments, codexFreshCount } from '../game/codex'
+import { unlockCodex, lockedMoroseFragments, codexFreshCount, unlockCodexBatch, CODEX_ON_REALM_ENTER, CODEX_ON_REALM_CLEAR } from '../game/codex'
 import { CodexPanel } from './CodexPanel'
+import { playCutscene } from './Cutscene'
+import { getCutscene, isCutsceneSeen, REALM_FINALE_CUTSCENE, REALM_CAMPFIRE_CUTSCENE } from '../game/cutscenes'
 import { heroById } from '../game/heroes'
 import { glyphIcon, iconMarkup } from './icons'
 import { attachTip, dismissTip } from './tooltip'
@@ -476,7 +478,38 @@ export class WorldMap {
       }))
     }
 
-    this.reveal()
+    // MOTION-COMIC MILESTONES: a just-restored realm plays its full-bloom finale
+    // + a campfire before the map reveals; the Hollow's clear plays the ending.
+    // All skippable, seen-gated (once each), and reduce-motion aware.
+    this.playPendingStory(() => this.reveal())
+  }
+
+  // Queue any unseen finale / campfire / ending for realms already restored, play
+  // them in order, then continue (usually into reveal()). Idempotent: cutscene
+  // "seen" flags mean each fires exactly once; codex clear-batches are unlocked
+  // here too (safe to re-run).
+  private playPendingStory(then: () => void): void {
+    const queue: string[] = []
+    for (const realm of REALMS) {
+      const ids = realm.levelIds
+      const finaleLvl = ids[ids.length - 1]
+      if (!finaleLvl || economy.starsFor(finaleLvl) < 1) continue // realm not yet restored
+      unlockCodexBatch(CODEX_ON_REALM_CLEAR[realm.id])
+      if (realm.id === 'hollow') {
+        if (getCutscene('ending') && !isCutsceneSeen('ending')) queue.push('ending')
+        continue
+      }
+      const fin = REALM_FINALE_CUTSCENE[realm.id]
+      const camp = REALM_CAMPFIRE_CUTSCENE[realm.id]
+      if (fin && !isCutsceneSeen(fin)) queue.push(fin)
+      if (camp && !isCutsceneSeen(camp)) queue.push(camp)
+    }
+    if (queue.length === 0 || this.leaving) { then(); return }
+    const playNext = (k: number): void => {
+      if (k >= queue.length || this.leaving) { then(); return }
+      playCutscene(queue[k], () => playNext(k + 1))
+    }
+    playNext(0)
   }
 
   private openCodex(): void {
@@ -828,6 +861,19 @@ export class WorldMap {
     unlockCodex('world-greying')
     if (realmIdx >= 1) unlockCodex('world-maddervane')
     if (realmIdx >= 2) unlockCodex('world-keepers')
+    unlockCodexBatch(CODEX_ON_REALM_ENTER[realm.id])
+
+    // MOTION-COMIC realm intro: the richer version of the entry moment. Plays once
+    // per realm (the Hollow's intro IS the Morose confrontation). Marks the realm
+    // "seen" up front so the map won't re-trigger, and the cutscene marks itself
+    // seen on finish. Falls through to the light DOM banner if already played.
+    const cutId = 'realm-' + realm.id
+    if (getCutscene(cutId) && !isCutsceneSeen(cutId)) {
+      const seenNow = readJson<string[]>(SEEN_KEY, [])
+      if (!seenNow.includes(realm.id)) writeJson(SEEN_KEY, [...seenNow, realm.id])
+      playCutscene(cutId)
+      return
+    }
 
     // the realm-entry moment: Maddervane names the wound, Morose taunts,
     // the realm's hero answers (3 lines, one tap, never gates anything)

@@ -20,7 +20,8 @@ import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
 import { barkEngine } from '../game/barks'
-import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL } from '../game/codex'
+import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL, unlockCodexBatch, unlockEnemyCodex, CODEX_ON_KEEPER_REDEEM } from '../game/codex'
+import { KEEPER_BY_ID } from '../game/keepers'
 import { realmForLevel } from '../game/levels'
 import { playMoroseHush } from '../ui/sfx'
 import { battleSfx } from '../ui/battleSfx'
@@ -1103,6 +1104,8 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
         battleSfx.kill(this.sim.comboCount, ev.boss)
         if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); this.tryBark('kill') }
+        // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
+        if (ev.kind !== 'keeper' && unlockEnemyCodex(ev.kind)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         break
       case 'shieldBreak':
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
@@ -1242,7 +1245,11 @@ export class BattleScene extends Phaser.Scene {
         } else {
           playMoroseHush()
           this.tryBark('moroseSteal')
+          if (unlockCodex('field-morose-steal')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         }
+        break
+      case 'keeper':
+        this.handleKeeperEvent(ev)
         break
       case 'banner':
         this.hud.banner(ev.msg, ev.color)
@@ -1250,6 +1257,43 @@ export class BattleScene extends Phaser.Scene {
       case 'text':
         this.floatAt(ev.x, ev.y, ev.msg, ev.color, ev.size)
         break
+    }
+  }
+
+  // A fallen Keeper's fight is a REDEMPTION, not a kill — so the boss speaks:
+  // reveal → (the twisted hero answers) → the grey cracks (phase 2/3) → the
+  // colour returns. Echoes are grey memories, not the friend, so they stay
+  // silent. Pure delivery: reads the keeper event the sim already emits.
+  private keeperTold = new Set<string>() // reveal/heroLine fired, per keeper id
+  private keeperRedeemed = new Set<string>()
+  private handleKeeperEvent(ev: Extract<SimEvent, { t: 'keeper' }>): void {
+    if (ev.echo) return // an echo is a memory of the fight, not the fight
+    const k = KEEPER_BY_ID[ev.keeperId]
+    if (!k) return
+    if (ev.kind === 'reveal') {
+      if (this.keeperTold.has(k.id)) return
+      this.keeperTold.add(k.id)
+      this.hud.chatBark(k.id, k.barks.reveal)
+      this.hud.moroseVeil(1.6)
+      // the twisted hero answers, if they are on the line
+      if (this.partyIds.includes(k.heroId)) {
+        window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark(k.heroId, k.barks.heroLine) }, 2100)
+      }
+    } else if (ev.kind === 'phase') {
+      if (ev.phase === 2) this.hud.chatBark(k.id, k.barks.phase2)
+      else if (ev.phase === 3) this.hud.chatBark(k.id, k.barks.phase3)
+    } else if (ev.kind === 'redeemed') {
+      if (this.keeperRedeemed.has(k.id)) return
+      this.keeperRedeemed.add(k.id)
+      // THE payoff beat: the grey breaks, the Keeper's true name returns in colour
+      this.hud.chatBark(k.id, k.barks.redeemed)
+      this.hud.banner(`✦ ${k.trueName.toUpperCase()} — REDEEMED`, k.enemy.accent)
+      if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.3)
+      this.view.bloomPulse(0.45)
+      battleSfx.reaction()
+      if (unlockCodexBatch(CODEX_ON_KEEPER_REDEEM[k.id]) > 0) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+      // Morose's thread stinger, a beat later — his reaction degrades across the six
+      window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark('morose', k.barks.morose) }, 2600)
     }
   }
 

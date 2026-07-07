@@ -52,6 +52,14 @@ export const NARRATOR_SPEAKERS: Record<string, Speaker> = {
   maddervane: { name: 'Maddervane', color: 0xffc46b, glyph: '🏮' },
   morose: { name: 'Morose, the Hollow King', color: 0x9a94b8, glyph: '👑' },
   bloom: { name: 'Bloom', color: 0xffb36b, glyph: '🌸' }, // Bramble's twin (shares the slot)
+  // The six fallen Keepers — corrupted names while greyed, so the boss's own
+  // lines render in-voice in the battle feed (redemption re-colours the badge).
+  kaelen: { name: 'Kaelen, the Ashen Court', color: 0xff8a4c, glyph: '🜂' },
+  maravelle: { name: 'Maravelle, the Still Oracle', color: 0x7fe3ff, glyph: '❆' },
+  vorn: { name: 'Admiral Vorn, the Becalmed', color: 0xffd95c, glyph: '⚓' },
+  wessa: { name: 'Wessa, the Overgrown', color: 0x6fe08a, glyph: '🜃' },
+  aurelin: { name: 'High Cantor Aurelin', color: 0xffe27a, glyph: '☼' },
+  vesper: { name: 'Vesper, Margrave of Moths', color: 0xb06bff, glyph: '🜁' },
 }
 
 // ----------------------------------------------------------------------------
