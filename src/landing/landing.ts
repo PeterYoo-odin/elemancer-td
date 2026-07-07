@@ -4,19 +4,15 @@
 // so the landing bundle stays tiny and the copy can never drift from the game.
 
 import './landing.css'
-import { canonicalSeed, seedToCode } from '../game/seedcode'
+import { dailySeed, seedToCode } from '../game/seedcode'
 import { HEROES, HERO_ORDER } from '../game/heroes'
 
 // ---------------------------------------------------------------------------
 //  Today's seed — client-side + deterministic: every visitor worldwide derives
 //  the same code for the same UTC day (live top-5 arrives with ranked servers).
+//  `dailySeed()` is shared from seedcode.ts so this widget and the in-game Daily
+//  screen can never derive different codes for the same day.
 // ---------------------------------------------------------------------------
-
-/** UTC day index → seed. Knuth-hash the day so consecutive days don't share words. */
-function dailySeed(utcDayIndex: number): number {
-  const mixed = (Math.imul(utcDayIndex, 2654435761) ^ 0x9e3779b9) >>> 0
-  return canonicalSeed(mixed)
-}
 
 function gameUrl(query: string): string {
   return new URL(`./${query}`, location.href).toString()

@@ -19,11 +19,12 @@ import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
 import { barkEngine } from '../game/barks'
-import { unlockCodex } from '../game/codex'
+import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL } from '../game/codex'
 import { realmForLevel } from '../game/levels'
 import { playMoroseHush } from '../ui/sfx'
 import { battleSfx } from '../ui/battleSfx'
-import { canonicalSeed, seedToCode, seedLink } from '../game/seedcode'
+import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
+import { recordDailyResult } from '../game/daily'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
 import { ftue, LEVEL_LESSONS, deathLesson } from '../game/onboarding'
@@ -58,6 +59,7 @@ export interface BattleLaunchData {
   speed?: number // ?speed= capture control (attract)
   captions?: boolean // ?captions=0 disables the reel captions
   loop?: boolean // ?loop=1 restarts the reel after the end card
+  daily?: boolean // launched from the in-game Daily screen — log the result locally
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -66,6 +68,7 @@ export class BattleScene extends Phaser.Scene {
   private demoMode = false
   private attract = false
   private seedOverride: number | undefined
+  private isDaily = false
   private captionsOn = true
   private loopReel = false
   private seed = 0
@@ -133,6 +136,7 @@ export class BattleScene extends Phaser.Scene {
     this.endless = !this.demoMode && !!data?.endless
     this.levelId = this.demoMode ? 'demo' : data?.levelId ?? 'l1'
     this.seedOverride = data?.seedOverride
+    this.isDaily = !!data?.daily
     this.gameSpeed = this.attract ? Math.min(8, Math.max(0.25, data?.speed ?? 1)) : 1
     this.captionsOn = data?.captions !== false
     this.loopReel = !!data?.loop
@@ -1001,7 +1005,11 @@ export class BattleScene extends Phaser.Scene {
       if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${res.best ? ' · NEW BEST!' : ''}`, endless: true, share: this.buildShare(false) })
+        // Daily runs also log a PURELY LOCAL best-for-today (habit loop; no backend).
+        let dailyPb = false
+        if (this.isDaily) dailyPb = recordDailyResult(utcDayIndex(), this.sim.waveIndex + 1)
+        const bestTag = res.best ? ' · NEW BEST!' : dailyPb ? ' · DAILY PB!' : ''
+        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${bestTag}`, endless: true, share: this.buildShare(false) })
       } else {
         // DEATH TEACHES: diagnose the loss into one actionable lesson, and the
         // retry button replays the SAME seed — the player knows the whole plan.
@@ -1184,6 +1192,11 @@ export class BattleScene extends Phaser.Scene {
           this.hitstopT = Math.max(this.hitstopT, 0.06)
         }
         if (unlockCodex('field-reactions')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+        // CROWN-JEWEL depth, made legible: log this reaction to the discovery
+        // tracker and celebrate the FIRST time each of the nine is seen.
+        if (recordReaction(ev.key)) {
+          this.hud.banner(`NEW REACTION · ${reactionsDiscoveredCount()}/${REACTION_TOTAL} DISCOVERED`, ev.color)
+        }
         this.tryBark('reaction')
         break
       case 'fuse':

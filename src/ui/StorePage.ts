@@ -31,6 +31,7 @@ import {
 import { uiDyeAccent } from '../game/skins'
 import { heroArtUrl } from './heroArt'
 import { playUiTick } from './sfx'
+import { currencyIcon, glyphIcon } from './icons'
 
 export interface StorePageHandlers {
   onBack(): void
@@ -181,8 +182,9 @@ function injectCss(): void {
   document.head.appendChild(style)
 }
 
-const DIA = '\u{1F48E}'
-const PRISM = '✦'
+const DIA = currencyIcon('diamond', { size: 14 })
+const PRISM = currencyIcon('prism', { size: 14 })
+const COIN = currencyIcon('coin', { size: 14 })
 
 function priceLabel(sku: Sku): string {
   return sku.currency === 'prisms' ? `${sku.price} ${PRISM}` : `${sku.price} ${DIA}`
@@ -190,7 +192,7 @@ function priceLabel(sku: Sku): string {
 
 function rewardLabel(r: PassReward): string {
   const bits: string[] = []
-  if (r.coins) bits.push(`${r.coins} 🪙`)
+  if (r.coins) bits.push(`${r.coins} ${COIN}`)
   if (r.diamonds) bits.push(`<b>${r.diamonds} ${DIA}</b>`)
   if (r.prisms) bits.push(`${r.prisms} ${PRISM}`)
   if (r.sku) bits.push(`<span class="exl">${skuById(r.sku)?.name ?? r.sku}</span>`)
@@ -217,7 +219,7 @@ export class StorePage {
       <div class="est-head">
         <button class="est-back" data-act="back" aria-label="Back">‹</button>
         <div class="est-title">STORE</div>
-        <div class="est-chip c1">🪙 <span data-coins>0</span></div>
+        <div class="est-chip c1">${COIN} <span data-coins>0</span></div>
         <div class="est-chip c2">${DIA} <span data-dia>0</span></div>
         <div class="est-chip c3">${PRISM} <span data-prism>0</span></div>
       </div>
@@ -277,7 +279,7 @@ export class StorePage {
     if (this.confirmId !== id) {
       this.confirmId = id
       btn.classList.add('confirm')
-      btn.textContent = `SURE? ${priceLabel(sku)}`
+      btn.innerHTML = `SURE? ${priceLabel(sku)}`
       window.clearTimeout(this.confirmTimer)
       this.confirmTimer = window.setTimeout(() => {
         this.confirmId = null
@@ -372,20 +374,20 @@ export class StorePage {
       const heroId = sku.slot.split(':')[1]
       const art = heroArtUrl(heroId)
       if (art) return `<div class="est-sw" style="background-image:url('${art}'); filter:${sku.heroTint.css}"></div>`
-      return `<div class="est-sw">🎭</div>`
+      return `<div class="est-sw">${glyphIcon('🎭', { size: 24 })}</div>`
     }
     if (sku.spellColor !== undefined) {
       const c = '#' + sku.spellColor.toString(16).padStart(6, '0')
       const glyph = sku.spellKey === 'meteor' ? '☄' : sku.spellKey === 'freeze' ? '❄' : '💰'
-      return `<div class="est-sw" style="color:${c}; text-shadow:0 0 12px ${c}">${glyph}</div>`
+      return `<div class="est-sw" style="filter:drop-shadow(0 0 10px ${c})">${glyphIcon(glyph, { size: 26, color: c })}</div>`
     }
     if (sku.dyeAccent) return `<div class="est-sw"><div class="swb" style="background:radial-gradient(circle at 35% 30%, #fff, ${sku.dyeAccent} 55%, #201640)"></div></div>`
     if (sku.bannerCss) return `<div class="est-sw"><div class="swb" style="background:${sku.bannerCss}"></div></div>`
-    if (sku.kind === 'frame') return `<div class="est-sw">🖼️</div>`
-    if (sku.kind === 'prestige') return `<div class="est-sw">👑</div>`
-    if (sku.id === 'conv-idle2x') return `<div class="est-sw">⏳</div>`
-    if (sku.id === 'conv-autocollect') return `<div class="est-sw">🧲</div>`
-    return `<div class="est-sw">🎒</div>`
+    if (sku.kind === 'frame') return `<div class="est-sw">${glyphIcon('🖼️', { size: 24 })}</div>`
+    if (sku.kind === 'prestige') return `<div class="est-sw" style="color:#ffd54a">${glyphIcon('👑', { size: 24 })}</div>`
+    if (sku.id === 'conv-idle2x') return `<div class="est-sw">${glyphIcon('⏳', { size: 24 })}</div>`
+    if (sku.id === 'conv-autocollect') return `<div class="est-sw">${glyphIcon('🧲', { size: 24 })}</div>`
+    return `<div class="est-sw">${glyphIcon('🎒', { size: 24 })}</div>`
   }
 
   private skuCard(sku: Sku): string {

@@ -6,6 +6,7 @@ import { BattleScene } from './scenes/BattleScene'
 import { WorkshopScene } from './scenes/WorkshopScene'
 import { ShopScene } from './scenes/ShopScene'
 import { HeroesScene } from './scenes/HeroesScene'
+import { DailyScene } from './scenes/DailyScene'
 import { showOdinSplash } from './ui/OdinSplash'
 import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
@@ -36,7 +37,7 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 1280,
   },
   render: { antialias: true, pixelArt: false },
-  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene],
+  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene],
 }
 
 new Phaser.Game(config)

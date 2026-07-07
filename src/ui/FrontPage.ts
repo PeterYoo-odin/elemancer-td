@@ -18,6 +18,7 @@ export interface FrontPageHandlers {
   onWorkshop(): void
   onShop(): void
   onEndless(): void
+  onDaily(): void
   onReplayIntro(): void
 }
 
@@ -32,6 +33,7 @@ const ICONS = {
   infinity:
     'M17.7 7.2c-1.9 0-3.5 1-5.7 3.1C9.8 8.2 8.2 7.2 6.3 7.2A4.7 4.7 0 0 0 1.5 12a4.7 4.7 0 0 0 4.8 4.8c1.9 0 3.5-1 5.7-3.1 2.2 2.1 3.8 3.1 5.7 3.1a4.7 4.7 0 0 0 4.8-4.8 4.7 4.7 0 0 0-4.8-4.8zM6.3 14.6A2.6 2.6 0 0 1 3.7 12a2.6 2.6 0 0 1 2.6-2.6c1.2 0 2.5.9 4.1 2.6-1.6 1.7-2.9 2.6-4.1 2.6zm11.4 0c-1.2 0-2.5-.9-4.1-2.6 1.6-1.7 2.9-2.6 4.1-2.6a2.6 2.6 0 0 1 2.6 2.6 2.6 2.6 0 0 1-2.6 2.6z',
   gear: 'M19.4 13a7.8 7.8 0 0 0 .1-1 7.8 7.8 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.7l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a7.6 7.6 0 0 0-1.7-1L14.4 2.5a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4L9 5.1a7.6 7.6 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.7L4.5 11a7.8 7.8 0 0 0 0 2l-2.2 1.6a.5.5 0 0 0-.1.7l2 3.4c.1.2.4.3.6.2l2.5-1a7.6 7.6 0 0 0 1.7 1l.4 2.6c0 .2.3.4.5.4h4c.2 0 .5-.2.5-.4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.7zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z',
+  calendar: 'M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1.5A1.5 1.5 0 0 1 21 5.5v14A1.5 1.5 0 0 1 19.5 21h-15A1.5 1.5 0 0 1 3 19.5v-14A1.5 1.5 0 0 1 4.5 4H6V3a1 1 0 0 1 1-1zM5 10v9h14v-9H5zm3 2h2.2v2.2H8V12z',
 }
 
 function svg(path: string): string {
@@ -403,6 +405,11 @@ export class FrontPage {
           <span class="efp-btxt"><span class="efp-blabel">ENDLESS</span><span class="efp-bsub">Fair play &middot; no boosts</span></span>
           <span class="efp-pill">RANKED</span>
         </button>
+        <button class="efp-btn efp-in" style="animation-delay:.66s; --a:#ffd54a" data-act="daily">
+          <span class="efp-ic">${svg(ICONS.calendar)}</span>
+          <span class="efp-btxt"><span class="efp-blabel">DAILY SEED</span><span class="efp-bsub">One shared run &middot; beat your best</span></span>
+          <span class="efp-chev">&#8250;</span>
+        </button>
       </div>
 
       <div class="efp-foot efp-in" style="animation-delay:.68s">
@@ -461,6 +468,7 @@ export class FrontPage {
       else if (act === 'workshop') this.leave(() => this.handlers.onWorkshop())
       else if (act === 'shop') this.leave(() => this.handlers.onShop())
       else if (act === 'endless') this.leave(() => this.handlers.onEndless())
+      else if (act === 'daily') this.leave(() => this.handlers.onDaily())
     })
   }
 

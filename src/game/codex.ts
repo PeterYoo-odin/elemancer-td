@@ -151,3 +151,54 @@ export function codexFreshCount(): number {
 export function clearCodexFresh(): void {
   freshCount = 0
 }
+
+// ============================================================================
+//  REACTIONS DISCOVERED — the crown-jewel combo depth, made legible. Tracks
+//  which of the nine elemental reactions the player has ever detonated. Its own
+//  localStorage key (never in SaveData, like the codex above); the battle view
+//  records a key each time a reaction fires and the codex surfaces the count.
+// ============================================================================
+
+import type { ReactionKey } from '../sim/reactions'
+
+/** The nine reactions, in the order the codex lists them. */
+export const REACTION_ORDER: ReactionKey[] = [
+  'thermal', 'shatter', 'flashover', 'wildfire', 'overgrow', 'eclipse', 'conduct', 'blight', 'amplify',
+]
+export const REACTION_TOTAL = REACTION_ORDER.length
+
+const REACTIONS_KEY = 'chromancer_reactions_v1'
+
+function readReactions(): Set<string> {
+  try {
+    const raw = localStorage.getItem(REACTIONS_KEY)
+    const arr = raw ? (JSON.parse(raw) as unknown) : []
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+let reactionsSeen = readReactions()
+
+/** Record a detonated reaction. Returns true if it was NEWLY discovered. */
+export function recordReaction(key: ReactionKey): boolean {
+  if (reactionsSeen.has(key)) return false
+  reactionsSeen.add(key)
+  try {
+    localStorage.setItem(REACTIONS_KEY, JSON.stringify([...reactionsSeen]))
+  } catch {
+    // private mode — discovery won't persist, gameplay unaffected
+  }
+  return true
+}
+
+export function isReactionDiscovered(key: ReactionKey): boolean {
+  return reactionsSeen.has(key)
+}
+
+export function reactionsDiscoveredCount(): number {
+  let n = 0
+  for (const k of REACTION_ORDER) if (reactionsSeen.has(k)) n++
+  return n
+}

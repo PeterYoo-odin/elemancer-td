@@ -66,6 +66,30 @@ export function randomSeed(): number {
 }
 
 // ---------------------------------------------------------------------------
+//  DAILY SEED — one deterministic run per UTC day, shared by every device.
+//  Lives here (not in the landing page) so the marketing widget and the in-game
+//  Daily screen derive the SAME code from the SAME day and can never drift.
+// ---------------------------------------------------------------------------
+
+/** UTC day index → seed. Knuth-hash the day so consecutive days don't share words. */
+export function dailySeed(utcDayIndex: number): number {
+  const mixed = (Math.imul(utcDayIndex, 2654435761) ^ 0x9e3779b9) >>> 0
+  return canonicalSeed(mixed)
+}
+
+/** The UTC day index for an epoch-ms instant (defaults to now). */
+export function utcDayIndex(nowMs: number = Date.now()): number {
+  return Math.floor(nowMs / 86_400_000)
+}
+
+/** Today's daily seed + human-memorable code (browser/local clock). */
+export function todaysDaily(nowMs: number = Date.now()): { day: number; seed: number; code: string } {
+  const day = utcDayIndex(nowMs)
+  const seed = dailySeed(day)
+  return { day, seed, code: seedToCode(seed) }
+}
+
+// ---------------------------------------------------------------------------
 //  Seed links + URL launch params (browser-only helpers)
 // ---------------------------------------------------------------------------
 

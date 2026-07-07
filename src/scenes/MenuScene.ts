@@ -32,6 +32,7 @@ export class MenuScene extends Phaser.Scene {
       onWorkshop: () => this.scene.start('Workshop'),
       onShop: () => this.scene.start('Shop'),
       onEndless: () => this.scene.start('Battle', { endless: true }),
+      onDaily: () => this.scene.start('Daily'),
       // Replay from settings: the user has interacted, so no tap gate needed.
       onReplayIntro: () => showOdinSplash({ gate: false }),
     })
@@ -56,13 +57,13 @@ export class MenuScene extends Phaser.Scene {
     if (idle.coins > 0) {
       const mins = Math.round(idle.seconds / 60)
       title = 'WHILE YOU WERE AWAY'
-      lines.push(`You earned ${idle.coins} 🪙 coins`)
+      lines.push(`You earned ${idle.coins} coins`)
       lines.push(mins >= 60 ? `over ${(mins / 60).toFixed(1)}h${idle.capped ? ' (max)' : ''}` : `over ${mins} min`)
     }
     if (daily > 0) {
       if (!title) title = 'DAILY BONUS'
       else lines.push('')
-      lines.push(`Daily bonus: +${daily} 💎 diamonds`)
+      lines.push(`Daily bonus: +${daily} diamonds`)
     }
     if (lines.length) {
       this.front.showRewards(title, lines)

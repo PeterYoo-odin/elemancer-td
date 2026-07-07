@@ -13,6 +13,7 @@ import { heroArtUrl } from './heroArt'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
 import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
+import { elementIcon, glyphIcon, currencyIcon } from './icons'
 
 function hex(c: number): string {
   return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
@@ -22,6 +23,18 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   if (cls) e.className = cls
   if (text !== undefined) e.textContent = text
   return e
+}
+
+/** Like el(), but the content is inline-SVG icon markup (innerHTML, not text). */
+function iconEl<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, markup: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag)
+  e.className = cls
+  e.innerHTML = markup
+  return e
+}
+
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 const RARITY_LABEL: Record<HeroRarity, string> = { common: 'COMMON', rare: 'RARE', epic: 'EPIC' }
@@ -288,9 +301,9 @@ export class HeroCollection {
   private renderWallet(): void {
     this.walletEl.innerHTML = ''
     const shards = el('div', 'hc-cur')
-    shards.append(el('span', 'ci', '🔹'), el('span', undefined, String(economy.heroShards)))
+    shards.append(iconEl('span', 'ci', currencyIcon('shard', { size: 15 })), el('span', undefined, String(economy.heroShards)))
     const coins = el('div', 'hc-cur')
-    coins.append(el('span', 'ci', '🪙'), el('span', undefined, String(economy.coins)))
+    coins.append(iconEl('span', 'ci', currencyIcon('coin', { size: 15 })), el('span', undefined, String(economy.coins)))
     this.walletEl.append(shards, coins)
   }
 
@@ -308,7 +321,7 @@ export class HeroCollection {
           // zoomed face crop of the painted portrait
           slot.style.background = `url('${art}') 50% 12% / 210% auto no-repeat`
         } else {
-          slot.textContent = def.glyph
+          slot.innerHTML = elementIcon(def.element, { size: 34, color: '#fff' })
           slot.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
         }
         slot.style.borderColor = hex(def.color)
@@ -339,7 +352,7 @@ export class HeroCollection {
 
     const top = el('div', 'hc-top')
     top.append(el('div', 'hc-rarity', RARITY_LABEL[def.rarity]))
-    const elem = el('div', 'hc-elem', def.element)
+    const elem = iconEl('div', 'hc-elem', `${elementIcon(def.element, { size: 12, color: '#fff' })} ${def.element}`)
     elem.style.background = hex(def.color)
     top.append(elem)
     frame.append(top)
@@ -354,7 +367,7 @@ export class HeroCollection {
       img.loading = 'lazy'
       portrait.append(img)
     } else {
-      portrait.append(el('div', 'hc-glyph', def.glyph))
+      portrait.append(iconEl('div', 'hc-glyph', elementIcon(def.element, { size: 44 })))
     }
     portrait.append(el('div', 'hc-lvl', `Lv ${st.level}`))
     portrait.style.cursor = 'pointer'
@@ -393,7 +406,7 @@ export class HeroCollection {
     // spell
     const spell = heroSpellScaled(def.spell, st.level)
     const spellEl = el('div', 'hc-spell')
-    const sg = el('div', 'hc-sglyph', def.spell.glyph)
+    const sg = iconEl('div', 'hc-sglyph', glyphIcon(def.spell.glyph, { size: 20, color: '#fff' }))
     sg.style.background = hex(def.color)
     const sinfo = el('div', 'hc-sinfo')
     const dmgTxt = spell.damage ? ` (${Math.round(spell.damage)})` : ''
@@ -404,7 +417,7 @@ export class HeroCollection {
     // SIGNATURE — the one mechanic nobody else has (awakens at Lv 3)
     const awake = signatureAwake(st.level)
     const sigEl = el('div', `hc-sig${awake ? ' awake' : ''}`)
-    sigEl.append(el('div', 'sg', def.signature.glyph))
+    sigEl.append(iconEl('div', 'sg', glyphIcon(def.signature.glyph, { size: 20, color: hex(def.color) })))
     const siginfo = el('div')
     siginfo.append(el('div', 'sn2', def.signature.name), el('div', 'sb2', def.signature.blurb))
     sigEl.append(siginfo)
@@ -441,7 +454,7 @@ export class HeroCollection {
         this.burstHeroId = def.id
         const newLevel = economy.heroState(def.id).level
         // crossing the awaken threshold is a MOMENT — celebrate the signature
-        if (newLevel === SIGNATURE_UNLOCK_LEVEL) this.toast(`${def.signature.glyph} ${def.signature.name.toUpperCase()} AWAKENED!`, def.color)
+        if (newLevel === SIGNATURE_UNLOCK_LEVEL) this.toast(`${def.signature.name.toUpperCase()} AWAKENED!`, def.color)
         else this.toast(`${def.name} → Lv ${newLevel}!`, def.color)
         this.render()
       } else this.toast('Not enough shards', 0xff5b7a)
@@ -505,13 +518,15 @@ export class HeroCollection {
       img.draggable = false
       port.append(img)
     } else {
-      port.textContent = def.glyph
+      port.innerHTML = elementIcon(def.element, { size: 52 })
     }
     const hh = el('div')
     hh.append(el('div', 'hcd-hn', def.name), el('div', 'hcd-ht', `${def.title} · Lv ${st.level}`))
     const tags = el('div', 'hcd-tags')
     for (const t of [def.element, def.role, def.damageType, RARITY_LABEL[def.rarity]]) {
-      const tag = el('div', 'hcd-tag', String(t))
+      const tag = t === def.element
+        ? iconEl('div', 'hcd-tag', `${elementIcon(def.element, { size: 12, color: hex(def.color) })} ${def.element}`)
+        : el('div', 'hcd-tag', String(t))
       tag.style.color = hex(def.color)
       tags.append(tag)
     }
@@ -525,16 +540,16 @@ export class HeroCollection {
     // signature
     const sig = el('div', 'hcd-sec')
     sig.append(el('div', 'h', 'SIGNATURE'))
-    sig.append(el('div', 't', `${def.signature.glyph} ${def.signature.name}`))
+    sig.append(iconEl('div', 't', `${glyphIcon(def.signature.glyph, { size: 15, color: hex(def.color) })} ${esc(def.signature.name)}`))
     sig.append(el('div', 'd', def.signature.detail))
-    if (!awake) sig.append(el('div', 'lock', `🔒 Dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}. Level ${def.name} up to unleash it.`))
+    if (!awake) sig.append(iconEl('div', 'lock', `${glyphIcon('🔒', { size: 13 })} Dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}. Level ${esc(def.name)} up to unleash it.`))
     frame.append(sig)
 
     // spell (level-scaled)
     const sp = heroSpellScaled(def.spell, st.level)
     const spellSec = el('div', 'hcd-sec')
     spellSec.append(el('div', 'h', 'ACTIVE SPELL'))
-    spellSec.append(el('div', 't', `${sp.glyph} ${sp.name}`))
+    spellSec.append(iconEl('div', 't', `${glyphIcon(def.spell.glyph, { size: 15, color: hex(def.color) })} ${esc(sp.name)}`))
     const bits: string[] = []
     if (sp.damage) bits.push(`${Math.round(sp.damage)} dmg`)
     if (sp.radius) bits.push(`${sp.radius} tile radius`)
@@ -552,11 +567,11 @@ export class HeroCollection {
     const pc = (m: number): string => `+${Math.round((m - 1) * 100)}%`
     const resSec = el('div', 'hcd-sec')
     resSec.append(el('div', 'h', 'ELEMENT RESONANCE'))
-    resSec.append(el('div', 't', `🔗 ${rInfo.towerName} Resonance`))
+    resSec.append(iconEl('div', 't', `${glyphIcon('🔗', { size: 15, color: hex(def.color) })} ${esc(rInfo.towerName)} Resonance`))
     resSec.append(el('div', 'd',
       `Field ${def.name} beside 2+ ${rInfo.towerName} towers: ${pc(rInfo.t1Tower)} tower damage & ${pc(rInfo.t1Hero)} hero damage. ` +
       `At ${rInfo.t2Count}+ towers it deepens to ${pc(rInfo.t2Tower)} / ${pc(rInfo.t2Hero)}.`))
-    if (!awake) resSec.append(el('div', 'lock', `🔒 Requires the signature awake (Lv ${SIGNATURE_UNLOCK_LEVEL}).`))
+    if (!awake) resSec.append(iconEl('div', 'lock', `${glyphIcon('🔒', { size: 13 })} Requires the signature awake (Lv ${SIGNATURE_UNLOCK_LEVEL}).`))
     frame.append(resSec)
 
     // stats grid (current → next level delta)
