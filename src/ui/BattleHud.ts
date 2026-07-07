@@ -13,6 +13,8 @@ import { heroStats, heroSpellScaled, signatureAwake, SIGNATURE_UNLOCK_LEVEL } fr
 import { resonanceInfo } from '../game/resonance'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
+import { playUiTick } from './sfx'
+import { battleSfx } from './battleSfx'
 
 export interface HudCallbacks {
   onStart(): void
@@ -192,6 +194,12 @@ const CSS = `
 @keyframes eldcombo { 0%{ transform:translate(-50%,-50%) scale(.2) rotate(-8deg);} 28%{ transform:translate(-50%,-78%) scale(1.35) rotate(4deg);}
   46%{ transform:translate(-50%,-88%) scale(1.05) rotate(-1deg);}
   100%{ transform:translate(calc(-50% + var(--dx)),-165%) scale(1) rotate(0); opacity:0; } }
+/* CRIT (strong-hit) numbers: leap higher, land bigger, glow in their own colour */
+.eld-float.crit { text-shadow:0 2px 3px rgba(0,0,0,.7), 0 0 16px currentColor; }
+@keyframes eldcrit { 0%{ transform:translate(-50%,-50%) scale(.2) rotate(-5deg);}
+  16%{ transform:translate(-50%,-128%) scale(1.55) rotate(3deg);}
+  32%{ transform:translate(-50%,-108%) scale(1.1) rotate(0deg);}
+  100%{ transform:translate(calc(-50% + var(--dx)),-215%) scale(1); opacity:0; } }
 .eld-banner { position:absolute; left:50%; top:34%; transform:translateX(-50%); font-size:40px; font-weight:900;
   text-shadow:0 3px 0 rgba(0,0,0,.55); animation:eldbanner 1.6s ease-out forwards; white-space:nowrap; }
 @keyframes eldbanner { 0%{ opacity:0; transform:translateX(-50%) scale(.6);} 15%{ opacity:1; transform:translateX(-50%) scale(1);}
@@ -449,9 +457,9 @@ export class BattleHud {
     // right controls
     const rc = el('div', 'eld-rc')
     this.pauseBtn = el('button', 'pe', '❚❚')
-    this.pauseBtn.onclick = () => this.cb.onPause()
+    this.pauseBtn.onclick = () => { playUiTick(); this.cb.onPause() }
     this.speedBtn = el('button', 'pe', '1×')
-    this.speedBtn.onclick = () => this.cb.onSpeed()
+    this.speedBtn.onclick = () => { playUiTick(); this.cb.onSpeed() }
     rc.append(this.pauseBtn, this.speedBtn)
     this.root.append(rc)
     attachTip(this.pauseBtn, () => ({
@@ -465,7 +473,7 @@ export class BattleHud {
 
     // start
     this.startBtn = el('button', 'eld-start pe', 'START ▶')
-    this.startBtn.onclick = () => this.cb.onStart()
+    this.startBtn.onclick = () => { playUiTick(); this.cb.onStart() }
     this.root.append(this.startBtn)
     attachTip(this.startBtn, () => ({
       tag: 'PREP PHASE', title: 'Start the wave', accent: '#3ad07a',
@@ -493,7 +501,7 @@ export class BattleHud {
       const mask = el('div', 'cdmask')
       const txt = el('div', 'cdtxt', '')
       b.append(mask, txt)
-      b.onclick = () => this.cb.onSpellButton(key)
+      b.onclick = () => { playUiTick(); this.cb.onSpellButton(key) }
       spells.append(b)
       this.spellBtns.set(key, { root: b, mask, txt })
       attachTip(b, () => this.spellTip(key))
@@ -511,7 +519,7 @@ export class BattleHud {
       const lock = el('div', 'lock', '🔒')
       lock.style.display = 'none'
       b.append(gem, nm, cost, tt, lock)
-      b.onclick = () => this.cb.onTowerButton(kind)
+      b.onclick = () => { playUiTick(); this.cb.onTowerButton(kind) }
       towers.append(b)
       this.towerBtns.set(kind, { root: b, cost, lock })
       attachTip(b, () => this.towerTip(kind))
@@ -676,7 +684,7 @@ export class BattleHud {
       badge.style.color = '#ffe27a'
       const name = el('div', 'hname', def.name)
       b.append(lvl, port, badge, name)
-      b.onclick = () => this.cb.onHeroButton(entry.heroId)
+      b.onclick = () => { playUiTick(); this.cb.onHeroButton(entry.heroId) }
       this.heroRow.append(b)
       this.heroBtns.set(entry.heroId, { root: b, port, lvl, mask, cdtxt, badge })
       attachTip(b, () => this.heroTip(entry.heroId))
@@ -1287,16 +1295,18 @@ export class BattleHud {
     window.setTimeout(() => target.classList.remove(cls), ms)
   }
 
-  floatText(x: number, y: number, msg: string, color: number, size: number, combo = false): void {
-    const d = el('div', 'eld-float', msg)
+  floatText(x: number, y: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm'): void {
+    const d = el('div', 'eld-float' + (style === 'crit' ? ' crit' : ''), msg)
     d.style.left = `${x}px`
     d.style.top = `${y}px`
     d.style.fontSize = `${size}px`
     d.style.color = hex(color)
     d.style.setProperty('--dx', `${Math.round((Math.random() - 0.5) * 56)}px`)
-    d.style.animation = `${combo ? 'eldcombo' : 'eldfloat'} ${combo ? 1 : 0.9}s ease-out forwards`
+    const anim = style === 'combo' ? 'eldcombo' : style === 'crit' ? 'eldcrit' : 'eldfloat'
+    const dur = style === 'norm' ? 0.9 : 1
+    d.style.animation = `${anim} ${dur}s ease-out forwards`
     this.fxLayer.append(d)
-    window.setTimeout(() => d.remove(), combo ? 1050 : 950)
+    window.setTimeout(() => d.remove(), dur * 1000 + 60)
   }
 
   // coins burst from a kill and arc into the gold counter, popping it on arrival
@@ -1323,6 +1333,7 @@ export class BattleHud {
       anim.onfinish = () => {
         c.remove()
         this.popClass(this.goldStat, 'pop', 320)
+        battleSfx.coin(i) // staggered finishes → a natural rising arpeggio
       }
     }
   }

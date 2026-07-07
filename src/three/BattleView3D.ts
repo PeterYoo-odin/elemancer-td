@@ -21,6 +21,7 @@ import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import { models } from './models'
+import { appSettings } from '../ui/settings'
 
 const TILE_PX = 80
 const CX = MAP_X + MAP_W / 2 // 360
@@ -267,6 +268,9 @@ export class BattleView3D {
   private pushAmp = 0 // current push-in strength 0..1
   private pushTarget = 0
   private portalPulse = 0 // portal scale-punch on spawns
+  private bloomAmp = 0 // decaying bloom surge (big moments literally glow brighter)
+  // accessibility: reduce-motion users keep every FX read, minus the camera violence
+  private motionOk = !appSettings.reducedMotion()
 
   // ambient motes (second small Points cloud for depth/atmosphere)
   private motes!: THREE.Points
@@ -843,12 +847,20 @@ export class BattleView3D {
   // Screenshake, scaled to impact: amplitudes stack via max (never spiral), decay
   // fast. Reserve ≥0.12 for big moments — small hits should stay readable.
   shake(amp: number): void {
+    if (!this.motionOk) return
     this.shakeAmp = Math.min(0.3, Math.max(this.shakeAmp, amp))
   }
 
   // Subtle dolly toward the board (boss spawns / big spells); eases in then releases.
   pushIn(strength = 1): void {
+    if (!this.motionOk) return
     this.pushTarget = Math.min(1, Math.max(this.pushTarget, strength))
+  }
+
+  // Bloom surge: big moments (victory bloom, fusion, boss kill, first reaction)
+  // push the post-process glow itself, then it settles back. Stacks via max.
+  bloomPulse(amp: number): void {
+    this.bloomAmp = Math.min(0.9, Math.max(this.bloomAmp, amp))
   }
 
   resize(): void {
@@ -1992,6 +2004,13 @@ export class BattleView3D {
     this.updateParticles(dt)
     this.updateMotes()
     this.updateTransients(dt)
+
+    // bloom surge decay (0.62 = the calibrated base set in the constructor)
+    if (this.bloomAmp > 0) {
+      this.bloomAmp = Math.max(0, this.bloomAmp - dt * 0.55)
+      this.bloom.strength = 0.62 + this.bloomAmp
+    }
+
     this.composer.render()
   }
 

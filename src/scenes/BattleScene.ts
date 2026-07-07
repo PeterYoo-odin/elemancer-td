@@ -22,6 +22,7 @@ import { showBark, dismissBark } from '../ui/barkUi'
 import { unlockCodex } from '../game/codex'
 import { realmForLevel } from '../game/levels'
 import { playMoroseHush } from '../ui/sfx'
+import { battleSfx } from '../ui/battleSfx'
 import { canonicalSeed, seedToCode, seedLink } from '../game/seedcode'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
@@ -316,6 +317,7 @@ export class BattleScene extends Phaser.Scene {
     // wave-start flourish on the prep→active transition
     if (this.sim.state === 'active' && this.lastSimState === 'prep') {
       this.hud.waveBanner(`WAVE ${this.sim.waveIndex + 1}`)
+      battleSfx.waveStart()
       // the mini-Keeper gets a proper entrance in the demo
       if (this.demoMode && this.sim.waveIndex === this.level.waves.length - 1) {
         window.setTimeout(() => this.hud.banner('CINDRAL, EMBER OF KAELEN', 0xff4db8), 900)
@@ -324,6 +326,10 @@ export class BattleScene extends Phaser.Scene {
       if (this.demoMode && !this.attract && this.sim.waveIndex === 2) {
         this.hud.banner('ADD A STORM TOWER BY THE FROST — ⚡ SHATTER!', 0xffe14a)
       }
+    }
+    // wave-clear resolve chime on the way out of combat (prep or draft next)
+    if (this.lastSimState === 'active' && (this.sim.state === 'prep' || this.sim.state === 'draft')) {
+      battleSfx.waveClear()
     }
     this.lastSimState = this.sim.state
 
@@ -836,7 +842,7 @@ export class BattleScene extends Phaser.Scene {
   private pickDraft(i: number): void {
     if (this.sim.state !== 'draft') return
     const card = this.sim.draftOffer[i]
-    if (card) this.hud.flash(card.color, 0.4)
+    if (card) { this.hud.flash(card.color, 0.4); battleSfx.draftPick() }
     this.sim.chooseDraft(i)
     this.hud.hideDraft()
     this.draftShown = false
@@ -943,15 +949,19 @@ export class BattleScene extends Phaser.Scene {
     // hands-free reel: bloom, then its own end card (prove-it + PLAY CTA)
     if (this.attract) {
       if (win && !appSettings.reducedMotion()) this.greyBloomT = 1.4
+      if (win) { this.view.bloomPulse(0.5); battleSfx.victory() }
       window.setTimeout(() => this.showAttractEnd(win), win ? 2400 : 800)
       if (win) this.tryBark('victory')
       return
     }
     if (win) {
       if (this.levelId === 'l1') ftue.markDone('l1-core') // graduated — never coach again
-      // victory colour-BLOOM: the level snaps back to full colour with an overshoot
+      // victory colour-BLOOM: the level snaps back to full colour with an overshoot,
+      // the post-process glow itself surges, and the swell sings it home
       // (reduce-motion users still get full colour, just without the pulse)
       if (!appSettings.reducedMotion()) this.greyBloomT = 1.4
+      this.view.bloomPulse(0.5)
+      battleSfx.victory()
       const stars = starsForClear(this.sim.lives, this.sim.startLives)
       const result = economy.awardCampaign(this.level.id, stars, this.level.baseCoins)
       const shards = this.awardHeroes(20 + stars * 12, 55 + stars * 30)
@@ -972,6 +982,7 @@ export class BattleScene extends Phaser.Scene {
       this.tryBark('victory') // post-victory beat: Color Bloom + one line over the card
     } else {
       this.hud.flash(0xff3b6b, 0.5)
+      battleSfx.defeat()
       if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
@@ -1030,9 +1041,9 @@ export class BattleScene extends Phaser.Scene {
   // ======================================================================
   //  SIM EVENTS → JUICE
   // ======================================================================
-  private floatAt(simX: number, simY: number, msg: string, color: number, size: number, combo = false, h = 0.8): void {
+  private floatAt(simX: number, simY: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm', h = 0.8): void {
     const s = this.view.projectToScreen(simX, simY, h)
-    if (s.visible) this.hud.floatText(s.x, s.y, msg, color, size, combo)
+    if (s.visible) this.hud.floatText(s.x, s.y, msg, color, size, style)
   }
 
   private handleEvent(ev: SimEvent): void {
@@ -1041,32 +1052,42 @@ export class BattleScene extends Phaser.Scene {
         const n = Math.max(1, Math.round(ev.amount))
         const color = ev.eff === 'strong' ? 0x8dff4a : ev.eff === 'weak' ? 0xb8b0d0 : 0xffffff
         const arrow = ev.eff === 'strong' ? ' ↑' : ev.eff === 'weak' ? ' ↓' : ''
-        const size = (ev.eff === 'strong' ? 24 : 20) + Math.min(26, ev.combo * 3)
-        this.floatAt(ev.x, ev.y, `${n}${arrow}`, color, size, ev.combo > 0)
+        // numbers GROW with the blow: base by effectiveness, plus combo and raw amount
+        const size = (ev.eff === 'strong' ? 24 : 20) + Math.min(26, ev.combo * 3) + Math.min(10, Math.round(n / 12))
+        const style = ev.eff === 'strong' ? 'crit' : ev.combo > 0 ? 'combo' : 'norm'
+        this.floatAt(ev.x, ev.y, `${n}${arrow}`, color, size, style)
         break
       }
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.tryBark('kill') }
+        battleSfx.kill(this.sim.comboCount, ev.boss)
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); this.tryBark('kill') }
         break
       case 'shieldBreak':
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
         this.view.fxAoe(ev.x, ev.y, ev.radius + 20, 0x9fdcff, 0.9)
+        this.view.shake(0.05)
+        this.hitstopT = Math.max(this.hitstopT, 0.04)
+        battleSfx.shieldBreak()
         break
       case 'leak':
         this.hud.flash(0xff3b3b, 0.4)
+        this.view.shake(0.08)
+        battleSfx.leak(ev.boss)
         this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
       case 'towerFire':
         this.view.fxMuzzle(ev.x, ev.y, ev.tx, ev.ty, ev.color, ev.kind)
+        battleSfx.shot(ev.kind)
         break
       case 'hit':
         this.view.fxHit(ev.x, ev.y, ev.color)
+        battleSfx.hit()
         break
       case 'chain':
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
         // (renamed from SHATTER — that name now belongs to the Water+Storm reaction)
-        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12) }
+        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12); battleSfx.reaction() }
         if (ev.count > 1) {
           const last = ev.points[ev.points.length - 1]
           this.floatAt(last[0], last[1], `CHAIN ×${ev.count}`, 0xffe14a, 20)
@@ -1076,8 +1097,8 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, ev.alpha)
         break
       case 'combo':
-        this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), true, 1.1)
-        if (ev.milestone) this.hud.flash(comboHue(ev.count), 0.25)
+        this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), 'combo', 1.1)
+        if (ev.milestone) { this.hud.flash(comboHue(ev.count), 0.25); battleSfx.combo(ev.count) }
         if (ev.milestone && ev.count >= 10) this.tryBark('kill')
         break
       case 'heal':
@@ -1092,14 +1113,17 @@ export class BattleScene extends Phaser.Scene {
         break
       case 'place':
         this.view.fxPlace(ev.x, ev.y, ev.color, ev.radius)
+        battleSfx.place()
         break
       case 'upgrade':
         this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, 0.9)
         this.floatAt(ev.x, ev.y, ev.label, ev.color, 26)
+        if (!ev.label.startsWith('⚛')) battleSfx.upgrade() // fusion has its own forge voice
         if (this.selectedId != null) this.hud.showUpgrade(this.sim, this.selectedId)
         break
       case 'spell':
         this.view.fxSpell(ev.key, ev.x, ev.y, ev.radius, ev.color)
+        battleSfx.spell(ev.key === 'meteor')
         if (ev.key === 'meteor') this.hud.flash(0xffb15c, 0.35)
         else if (ev.key === 'freeze') { this.hud.flash(0x9fdcff, 0.4); if (ev.count > 0) this.hud.banner(`FROZEN ×${ev.count}!`, ev.color) }
         else this.floatAt(ev.x, ev.y, `+${ev.count} GOLD!`, 0xffd54a, 30)
@@ -1107,22 +1131,27 @@ export class BattleScene extends Phaser.Scene {
       case 'heroDeploy':
         this.view.fxHeroDeploy(ev.x, ev.y, ev.color, ev.radius)
         this.hud.flash(ev.color, 0.25)
+        battleSfx.heroDeploy()
         break
       case 'heroFire':
         this.view.fxHeroFire(ev.x, ev.y, ev.tx, ev.ty, ev.color)
+        battleSfx.shot('hero')
         break
       case 'heroSpell':
         this.view.fxHeroSpell(ev.effect, ev.x, ev.y, ev.radius, ev.color)
         this.hud.flash(ev.color, 0.4)
         this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
+        battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute')
         break
       case 'reaction':
         this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
-        this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, true, 1.1)
+        this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)
+        battleSfx.reaction()
         // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
         if (this.demoMode && ev.key === 'shatter' && !this.shatterBloomDone) {
           this.shatterBloomDone = true
           if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.0)
+          this.view.bloomPulse(0.35)
           window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 450)
         }
         // the campaign's scripted first-wow: the FIRST-EVER reaction blooms colour
@@ -1131,6 +1160,7 @@ export class BattleScene extends Phaser.Scene {
           this.firstWowDone = true
           ftue.recordFirstWow(this.battleT)
           if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.2)
+          this.view.bloomPulse(0.4)
           window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 500)
         }
         if (this.reactCalloutCd <= 0) {
@@ -1146,9 +1176,11 @@ export class BattleScene extends Phaser.Scene {
         // erupts in both colours, and the new tower's name slams on screen.
         this.view.fxReaction(ev.px, ev.py, 60, ev.color2, ev.color)
         this.view.fxReaction(ev.x, ev.y, 110, ev.color, ev.color2)
+        this.view.bloomPulse(0.35)
         this.hud.flash(ev.color, 0.3)
         this.hud.reactionCallout(`⚛ ${ev.name}`, ev.color)
         this.hitstopT = Math.max(this.hitstopT, 0.1)
+        battleSfx.fusion()
         if (unlockCodex('field-fusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         this.tryBark('fusion')
         break

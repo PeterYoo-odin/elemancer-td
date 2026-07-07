@@ -24,6 +24,11 @@ export function unlockAudio(): void {
   ensure()
 }
 
+/** Shared context for sibling audio modules (battleSfx layers into the same output). */
+export function audioContext(): AudioContext | null {
+  return ensure()
+}
+
 function noiseBuffer(ac: AudioContext, seconds: number): AudioBuffer {
   const buf = ac.createBuffer(1, Math.ceil(ac.sampleRate * seconds), ac.sampleRate)
   const d = buf.getChannelData(0)
