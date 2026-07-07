@@ -9,6 +9,7 @@
 import { appSettings } from './settings'
 import { playUiTick } from './sfx'
 import { music } from './music'
+import { keyartBackdropUrl } from './heroArt'
 
 export interface FrontPageHandlers {
   onPlay(): void
@@ -51,6 +52,12 @@ const CSS = `
   transition: opacity .28s ease;
 }
 .efp.efp-leave { opacity: 0; pointer-events: none; }
+/* painted key art behind everything (fades in once decoded + de-marked) */
+.efp-keyart { position: absolute; inset: 0; pointer-events: none; background-size: cover;
+  background-position: 50% 22%; opacity: 0; transition: opacity .9s ease; }
+.efp-keyart.on { opacity: .58; }
+.efp-keyart::after { content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(12,8,26,.66) 0%, rgba(12,8,26,.22) 24%, rgba(12,8,26,.30) 52%, rgba(9,6,20,.86) 80%, rgba(7,5,16,.97) 100%); }
 .efp-motes { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .efp-vig { position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0,0,0,.42) 100%); }
@@ -331,6 +338,7 @@ export class FrontPage {
     if (appSettings.reducedMotion()) this.root.classList.add('efp-reduced')
 
     this.root.innerHTML = `
+      <div class="efp-keyart" data-keyart></div>
       <canvas class="efp-motes"></canvas>
       <div class="efp-vig"></div>
 
@@ -392,6 +400,14 @@ export class FrontPage {
     document.body.appendChild(this.root)
 
     this.motes = new Motes(this.root.querySelector<HTMLCanvasElement>('.efp-motes')!)
+
+    // painted key art fades in behind the UI once decoded (cached after first visit)
+    void keyartBackdropUrl().then((url) => {
+      const k = this.root.querySelector<HTMLElement>('[data-keyart]')
+      if (!url || !k || !this.root.isConnected) return
+      k.style.backgroundImage = `url('${url}')`
+      requestAnimationFrame(() => k.classList.add('on'))
+    })
     this.coinEl = this.root.querySelector<HTMLElement>('[data-coin]')!
     this.diaEl = this.root.querySelector<HTMLElement>('[data-dia]')!
     this.bestEl = this.root.querySelector<HTMLElement>('[data-best]')!

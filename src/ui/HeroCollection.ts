@@ -9,6 +9,7 @@
 // currency/save authority) and re-renders. Disposed fully by the scene on exit.
 
 import { economy } from '../game/economy'
+import { heroArtUrl } from './heroArt'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
 import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
@@ -94,9 +95,11 @@ const CSS = `
 .hc-top { display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
 .hc-rarity { font-size:10px; font-weight:900; letter-spacing:1.5px; color:var(--rar); }
 .hc-elem { font-size:10px; font-weight:900; letter-spacing:.5px; padding:2px 7px; border-radius:9px; color:#fff; background:var(--elem); box-shadow:0 1px 4px rgba(0,0,0,.4); }
-.hc-portrait { position:relative; height:96px; border-radius:12px; display:grid; place-items:center;
+.hc-portrait { position:relative; height:118px; border-radius:12px; display:grid; place-items:center; overflow:hidden;
   background:linear-gradient(160deg, var(--elem), var(--accent)); box-shadow:inset 0 3px 10px rgba(255,255,255,.28), inset 0 -6px 14px rgba(0,0,0,.4); z-index:1; }
 .hc-glyph { font-size:52px; filter:drop-shadow(0 3px 4px rgba(0,0,0,.5)); }
+/* painted portrait (cream card background reads fine inside the frame) */
+.hc-art { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:50% 16%; }
 .hc-lvl { position:absolute; bottom:6px; right:6px; background:rgba(10,6,22,.85); border:1px solid rgba(255,255,255,.3);
   border-radius:9px; font-size:12px; font-weight:900; padding:2px 8px; color:#ffe27a; }
 .hc-name { font-size:19px; font-weight:900; line-height:1; z-index:1; }
@@ -161,8 +164,10 @@ const CSS = `
   color:#fff; background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.25); cursor:pointer; }
 .hcd-x:active { transform:scale(.9); }
 .hcd-head { display:flex; gap:12px; align-items:center; z-index:1; }
-.hcd-port { width:84px; height:84px; flex:0 0 auto; border-radius:16px; display:grid; place-items:center; font-size:44px;
+.hcd-port { position:relative; width:96px; height:96px; flex:0 0 auto; border-radius:16px; display:grid; place-items:center; font-size:44px; overflow:hidden;
+  border:2px solid var(--rar);
   background:linear-gradient(160deg, var(--elem), var(--accent)); box-shadow:inset 0 3px 10px rgba(255,255,255,.28), inset 0 -6px 14px rgba(0,0,0,.4), 0 0 16px -4px var(--elem); }
+.hcd-art { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:50% 12%; }
 .hcd-hn { font-size:24px; font-weight:900; line-height:1.05; }
 .hcd-ht { font-size:12px; font-weight:700; color:#c9b6ff; }
 .hcd-tags { display:flex; gap:5px; flex-wrap:wrap; margin-top:5px; }
@@ -272,8 +277,14 @@ export class HeroCollection {
       if (id && HEROES[id]) {
         const def = HEROES[id]
         slot.classList.add('filled')
-        slot.textContent = def.glyph
-        slot.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+        const art = heroArtUrl(id)
+        if (art) {
+          // zoomed face crop of the painted portrait
+          slot.style.background = `url('${art}') 50% 12% / 210% auto no-repeat`
+        } else {
+          slot.textContent = def.glyph
+          slot.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+        }
         slot.style.borderColor = hex(def.color)
         slot.style.color = hex(def.color)
       } else {
@@ -308,7 +319,17 @@ export class HeroCollection {
     frame.append(top)
 
     const portrait = el('div', 'hc-portrait')
-    portrait.append(el('div', 'hc-glyph', def.glyph))
+    const art = heroArtUrl(def.id)
+    if (art) {
+      const img = el('img', 'hc-art')
+      img.src = art
+      img.alt = def.name
+      img.draggable = false
+      img.loading = 'lazy'
+      portrait.append(img)
+    } else {
+      portrait.append(el('div', 'hc-glyph', def.glyph))
+    }
     portrait.append(el('div', 'hc-lvl', `Lv ${st.level}`))
     portrait.style.cursor = 'pointer'
     portrait.onclick = () => this.openDetail(def)
@@ -449,7 +470,17 @@ export class HeroCollection {
 
     // header
     const head = el('div', 'hcd-head')
-    const port = el('div', 'hcd-port', def.glyph)
+    const port = el('div', 'hcd-port')
+    const artUrl = heroArtUrl(def.id)
+    if (artUrl) {
+      const img = el('img', 'hcd-art')
+      img.src = artUrl
+      img.alt = def.name
+      img.draggable = false
+      port.append(img)
+    } else {
+      port.textContent = def.glyph
+    }
     const hh = el('div')
     hh.append(el('div', 'hcd-hn', def.name), el('div', 'hcd-ht', `${def.title} · Lv ${st.level}`))
     const tags = el('div', 'hcd-tags')

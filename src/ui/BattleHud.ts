@@ -9,6 +9,7 @@ import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/t
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
 import { RARITY_COLOR } from '../game/heroes'
+import { heroArtUrl } from './heroArt'
 import { heroStats, heroSpellScaled, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
@@ -789,10 +790,16 @@ export class BattleHud {
       const b = el('div', 'eld-hero pe')
       const lvl = el('div', 'hlvl', 'L' + entry.level)
       const port = el('div', 'hport')
-      port.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+      const art = heroArtUrl(entry.heroId)
+      if (art) {
+        // painted portrait, zoomed to the face (the chip is only 50px)
+        port.style.background = `url('${art}') 50% 12% / 210% auto no-repeat, linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+      } else {
+        port.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+        port.append(el('span', 'hglyph', def.glyph))
+      }
       port.style.borderColor = hex(RARITY_COLOR[def.rarity])
       port.style.color = hex(def.color)
-      port.append(el('span', 'hglyph', def.glyph))
       const mask = el('div', 'hcd')
       const cdtxt = el('div', 'hcdtxt', '')
       port.append(mask, cdtxt)

@@ -22,6 +22,7 @@ import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import { models } from './models'
 import { appSettings } from '../ui/settings'
+import { heroCutout } from '../ui/heroArt'
 
 const TILE_PX = 80
 const CX = MAP_X + MAP_W / 2 // 360
@@ -115,22 +116,31 @@ interface ProjSlot {
   prevZ: number
 }
 
-// A deployed hero: an element-tinted robed figure with a floating element crystal,
-// a rarity-coloured ground ring, a glow light and a billboard level badge.
+// A deployed hero: the painted-portrait cutout as a billboard token (falls back
+// to the element-tinted robed figure while it loads / if keying fails), plus a
+// floating element crystal, rarity ground ring, glow light and level badge.
 interface HeroSlot {
   group: THREE.Group
-  figure: THREE.Group // yaw toward the current target
+  figure: THREE.Group // low-poly fallback; hidden once the painted art lands
   bodyMat: THREE.MeshStandardMaterial
   orb: THREE.Mesh
   orbMat: THREE.MeshStandardMaterial
   ring: THREE.Mesh
   ringMat: THREE.MeshBasicMaterial
   glow: THREE.PointLight
+  badge: THREE.Sprite
   badgeTex: THREE.CanvasTexture
   badgeMat: THREE.SpriteMaterial
+  art: THREE.Sprite | null // painted billboard token (async)
+  artMat: THREE.SpriteMaterial | null
   color: number
   heroId: string
 }
+
+// painted cutout textures, keyed by heroId — shared across battles, never disposed
+// (7 small canvases; re-uploaded automatically when a new renderer context starts)
+const heroArtTexCache = new Map<string, THREE.CanvasTexture>()
+const HERO_ART_H = 1.55 // world-units tall — reads over towers without looming
 
 interface Transient {
   obj: THREE.Object3D
@@ -1519,7 +1529,36 @@ export class BattleView3D {
     g.add(badge.sprite)
 
     this.scene.add(g)
-    return { group: g, figure, bodyMat, orb, orbMat, ring, ringMat, glow, badgeTex: badge.tex, badgeMat: badge.mat, color: def.color, heroId: h.heroId }
+    const slot: HeroSlot = {
+      group: g, figure, bodyMat, orb, orbMat, ring, ringMat, glow,
+      badge: badge.sprite, badgeTex: badge.tex, badgeMat: badge.mat,
+      art: null, artMat: null, color: def.color, heroId: h.heroId,
+    }
+
+    // swap the low-poly figure for the painted billboard token once the cached
+    // background-keyed cutout is ready (first battle pays one decode; after
+    // that it resolves instantly). Keying failure → keep the figure.
+    heroCutout(h.heroId).then((cut) => {
+      if (!cut || this.disposed || this.heroViews.get(h.id) !== slot) return
+      let tex = heroArtTexCache.get(h.heroId)
+      if (!tex) {
+        tex = new THREE.CanvasTexture(cut.canvas)
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.anisotropy = 4
+        heroArtTexCache.set(h.heroId, tex)
+      }
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, alphaTest: 0.05, depthWrite: false })
+      const sprite = new THREE.Sprite(mat)
+      sprite.scale.set(HERO_ART_H * cut.aspect, HERO_ART_H, 1)
+      sprite.position.y = HERO_ART_H / 2 + 0.05
+      sprite.userData.y0 = sprite.position.y
+      g.add(sprite)
+      figure.visible = false
+      slot.badge.position.y = HERO_ART_H + 0.32 // clear the taller token
+      slot.art = sprite
+      slot.artMat = mat
+    })
+    return slot
   }
 
   private updateHeroSlot(s: HeroSlot, h: SimHero): void {
@@ -1533,8 +1572,10 @@ export class BattleView3D {
       s.bodyMat.emissiveIntensity = 0.12
       s.orbMat.emissiveIntensity = 0.2
       s.glow.intensity = 0.08
+      if (s.artMat) s.artMat.color.setHex(0x777486) // painted token drains to grey
       return
     }
+    if (s.artMat) s.artMat.color.setHex(0xffffff)
     s.bodyMat.color.setHex(s.color)
     s.bodyMat.emissive.setHex(s.color)
     const flashing = h.fireFlash > 0
@@ -1551,6 +1592,7 @@ export class BattleView3D {
     s.ringMat.dispose()
     s.badgeMat.dispose()
     s.badgeTex.dispose()
+    s.artMat?.dispose() // material only — the cutout texture is cached for reuse
   }
 
   private syncProjectiles(): void {
@@ -2020,6 +2062,7 @@ export class BattleView3D {
       s.orb.rotation.y += dt * 2.2
       s.orb.rotation.x += dt * 1.1
       s.figure.position.y = Math.abs(Math.sin(this.clockT * 2 + s.group.position.x)) * 0.05
+      if (s.art) s.art.position.y = (s.art.userData.y0 as number) + Math.abs(Math.sin(this.clockT * 2 + s.group.position.x)) * 0.05
       s.ring.rotation.z += dt * 0.7
       s.ringMat.opacity = 0.72 + Math.sin(this.clockT * 3 + s.group.position.z) * 0.22
       s.glow.intensity = Math.max(s.glow.intensity, 0.9 + Math.sin(this.clockT * 2.4) * 0.18)
