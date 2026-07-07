@@ -9,7 +9,7 @@
 // x/y in map bounds, dist∈[0,pathLength], comboMult∈[1,COMBO_MAX], every damage
 // number finite & ≥0, all coords/cooldowns finite.
 
-import { Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H } from '../src/sim/index'
+import { Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES } from '../src/sim/index'
 import { NEUTRAL } from '../src/game/workshop'
 import { LEVELS } from '../src/game/levels'
 import { TOWER_ORDER } from '../src/game/towers'
@@ -22,6 +22,7 @@ const STEP_BUDGET = 60 * 60 * 200 // generous cap (~200 min of sim time)
 
 let failures = 0
 let reactionEvents = 0 // elemental reactions must actually fire during the stress runs
+let fusionsForged = 0 // fusion towers must be forged (and survive) the stress runs
 const seen: Record<string, number> = {}
 function fail(msg: string): void {
   const key = msg.slice(0, 60)
@@ -99,9 +100,25 @@ function saturateTowers(sim: Sim, mode: 'max' | 'base' | 'flood'): void {
       sim.upgradeTower(t.id)
       sim.upgradeTower(t.id)
       sim.chooseBranch(t.id, i % 2)
+      // exercise EVERY targeting mode (incl. Weak + Primed reaction-hunting)
+      sim.setTargeting(t.id, TARGET_MODES[i % TARGET_MODES.length])
     }
     i++
   }
+}
+
+// Forge a few FUSION towers from adjacent eligible max pairs (exercises the
+// fusion path: absorb partner, freed tile, alternating dual auras, +damage).
+function fuseSome(sim: Sim, cap = 6): number {
+  let fused = 0
+  for (const t of sim.towers) {
+    if (fused >= cap) break
+    if (!t.active || t.fusedElem !== '') continue
+    const opts = sim.fusionOptions(t)
+    if (opts.length === 0) continue
+    if (sim.fuseTowers(t.id, opts[0].partner.id)) fused++
+  }
+  return fused
 }
 
 function validate(sim: Sim, tick: number): void {
@@ -132,6 +149,7 @@ function validate(sim: Sim, tick: number): void {
     if (!t.active) continue
     if (!finite(t.x) || !finite(t.y) || !finite(t.cd) || !finite(t.aimAngle)) fail(`tower field non-finite @${tick}`)
     if (!finite(sim.effDps(t)) || sim.effDps(t) < 0) fail(`tower DPS bad: ${sim.effDps(t)} @${tick}`)
+    if (t.fusedElem !== '' && (!finite(t.fusedColor) || t.fusionName === '' || t.fusionKey === '')) fail(`fused tower state incoherent @${tick}`)
   }
   for (const p of sim.projectiles) {
     if (!p.active) continue
@@ -176,6 +194,7 @@ function runOne(seed: number, mode: 'max' | 'base' | 'flood', party = 0): { maxE
   const sim = makeSim(seed, mode === 'flood' ? 5 : 3, party)
   if (mode !== 'flood') deployParty(sim) // heroes before towers claim the build cells
   saturateTowers(sim, mode)
+  if (mode === 'max') fusionsForged += fuseSome(sim) // dual-aura fusion towers under stress
   let tick = 0
   let maxEntities = 0
   const retired = new Set<number>()
@@ -235,6 +254,9 @@ if (peak < 200) fail(`stress too light — only ${peak} concurrent enemies (need
 // mixed-element towers + heroes MUST detonate elemental reactions during the runs
 if (reactionEvents === 0) fail('no elemental reactions fired across all stress runs')
 else console.log(`  elemental reactions fired: ${reactionEvents}`)
+// and the fusion path must actually forge dual-aura towers under stress
+if (fusionsForged === 0) fail('no fusion towers were forged across the max-mode stress runs')
+else console.log(`  fusion towers forged: ${fusionsForged}`)
 
 // ---------------------------------------------------------------------------
 //  SEED CODEC — the shareable WORD-WORD-NN space must round-trip exactly.

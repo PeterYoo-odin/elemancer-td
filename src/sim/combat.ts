@@ -9,8 +9,10 @@ export type Element = 'Fire' | 'Water' | 'Nature' | 'Light' | 'Dark' | 'Storm'
 export type StatusKind = 'slow' | 'burn' | 'poison' | 'stun' | 'armorTear'
 
 // Per-tower targeting priority (player-switchable at runtime).
-export type TargetMode = 'First' | 'Last' | 'Close' | 'Strong'
-export const TARGET_MODES: TargetMode[] = ['First', 'Last', 'Close', 'Strong']
+// Weak finishes kills (lowest HP); Primed hunts enemies already painted with a
+// reactive element — the deliberate-detonation mode for reaction builds.
+export type TargetMode = 'First' | 'Last' | 'Close' | 'Strong' | 'Weak' | 'Primed'
+export const TARGET_MODES: TargetMode[] = ['First', 'Last', 'Close', 'Strong', 'Weak', 'Primed']
 
 export const DAMAGE_TYPES: DamageType[] = ['Pierce', 'Siege', 'Magic', 'Physical']
 export const ARMOR_TYPES: ArmorType[] = ['Unarmored', 'Light', 'Heavy', 'Fortified', 'Warded']

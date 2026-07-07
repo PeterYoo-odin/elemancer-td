@@ -27,7 +27,7 @@ import {
   type TargetMode,
 } from './combat'
 import { COLS, ROWS, TILE, FIXED_DT, MAX_STEPS_PER_FRAME, cellCenter } from './layout'
-import { reactionFor, type AuraElement, type ReactionDef, type ReactionKey } from './reactions'
+import { AURA_COLOR, FUSION_NAMES, REACTIONS, reactionFor, type AuraElement, type ReactionDef, type ReactionKey } from './reactions'
 import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
 import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
 import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
@@ -52,6 +52,14 @@ const REACT_LOCK = 1.1 // per-enemy cooldown after a reaction (paces the firewor
 const AMPLIFY_TAKEN = 1.25 // damage multiplier on AMPLIFY-marked enemies
 const AMPLIFY_DURATION = 4
 const MAX_ZONES = 48 // burning-ground pool cap (oldest recycled beyond this)
+
+// ---- FUSION TOWERS (two adjacent max towers → one dual-element tower) -------
+// The host keeps its verb/branch and gains the partner's element, alternating
+// auras every volley (solo reactions). The absorbed tower's tile is FREED —
+// late-game board consolidation is part of the payoff.
+const FUSION_COST = 300
+const FUSION_DMG = 1.75 // fused towers hit much harder (they ate a whole tower)
+const FUSION_RNG = 1.15 // and see a little further
 
 // Aura an attacking tower paints (Arcane tags its OWN element so it combos with all).
 const TOWER_AURA: Record<TowerKind, AuraElement | undefined> = {
@@ -133,6 +141,13 @@ export interface SimTower {
   targeting: TargetMode
   fireFlash: number
   greyUntil: number // Morose intrusion: while clock < greyUntil the tower sleeps
+  // FUSION state ('' = unfused). A fused tower alternates its own aura with
+  // fusedElem every volley, so it primes AND detonates its reaction solo.
+  fusedElem: AuraElement | ''
+  fusionKey: ReactionKey | ''
+  fusionName: string
+  fusedColor: number // partner element colour, for the view's fusion crown
+  auraFlip: boolean // which of the two elements the NEXT volley paints
 }
 
 // A deployed hero: a CHARACTER on a build tile. Auto-attacks through the same
@@ -214,6 +229,7 @@ export type SimEvent =
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
   | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
+  | { t: 'fuse'; towerId: number; name: string; x: number; y: number; px: number; py: number; color: number; color2: number }
   | { t: 'morose'; kind: 'warn' | 'greyTower' | 'stealDraft'; towerId: number; x: number; y: number; duration: number }
 
 interface SpawnItem {
@@ -295,6 +311,7 @@ export class Sim {
     maxCombo: 0, // highest comboCount reached
     reactions: 0, // total elemental reactions detonated
     reactionCounts: {} as Record<string, number>, // reaction NAME -> times fired
+    fusions: 0, // fusion towers forged this run
     goldEarned: 0, // all battle-gold income (kills + clears + bonuses)
   }
 
@@ -855,7 +872,7 @@ export class Sim {
       t = {
         id: this.nextId++, active: false, def, kind, level: 0, branch: -1, col, row,
         x: cc.x, y: cc.y, cd: 0, buffDmg: 1, buffRng: 1, aimAngle: 0, targeting: def.defaultTargeting, fireFlash: 0,
-        greyUntil: 0,
+        greyUntil: 0, fusedElem: '', fusionKey: '', fusionName: '', fusedColor: 0, auraFlip: false,
       }
       this.towers.push(t)
     }
@@ -875,6 +892,11 @@ export class Sim {
     t.targeting = def.defaultTargeting
     t.fireFlash = 0
     t.greyUntil = 0
+    t.fusedElem = ''
+    t.fusionKey = ''
+    t.fusionName = ''
+    t.fusedColor = 0
+    t.auraFlip = false
     this.occupied[row][col] = t
     this.recomputeBuffs()
     this.recomputeResonances()
@@ -929,6 +951,64 @@ export class Sim {
     if (t) t.targeting = mode
   }
 
+  // ---- FUSION TOWERS -------------------------------------------------------
+  // A host can fuse with an ADJACENT max-tier tower whose aura forms a reaction
+  // pair with its own (Arcane is the wildcard). Both must be unfused and awake.
+  fusionCost(): number {
+    return Math.max(1, Math.round(FUSION_COST * this.config.mods.towerCostMult * this.upgrades.towerCostMult))
+  }
+
+  fusionOptions(t: SimTower): Array<{ partner: SimTower; key: ReactionKey; name: string; cost: number; color: number; color2: number }> {
+    const out: Array<{ partner: SimTower; key: ReactionKey; name: string; cost: number; color: number; color2: number }> = []
+    const ownAura = TOWER_AURA[t.kind]
+    if (!t.active || !ownAura || !this.isMax(t) || t.fusedElem !== '') return out
+    for (const p of this.towers) {
+      if (!p.active || p === t || p.fusedElem !== '') continue
+      if (!adjacentCell(t, p)) continue
+      if (!this.isMax(p)) continue
+      const pAura = TOWER_AURA[p.kind]
+      if (!pAura) continue
+      const def = reactionFor(ownAura, pAura)
+      if (!def) continue
+      out.push({ partner: p, key: def.key, name: FUSION_NAMES[def.key], cost: this.fusionCost(), color: def.color, color2: def.color2 })
+    }
+    return out
+  }
+
+  // Fuse host + partner: partner's tile is freed, host becomes the fusion tower.
+  fuseTowers(hostId: number, partnerId: number): boolean {
+    const t = this.towerById(hostId)
+    if (!t) return false
+    const opt = this.fusionOptions(t).find((o) => o.partner.id === partnerId)
+    if (!opt) return false
+    const cost = this.fusionCost()
+    if (this.gold < cost) return false
+    this.spendGold(cost)
+    const p = opt.partner
+    const pAura = TOWER_AURA[p.kind]!
+    // absorb the partner: free its cell, retire its slot
+    p.active = false
+    this.occupied[p.row][p.col] = null
+    // the host becomes the fusion tower (keeps its verb, gains the second element)
+    t.fusedElem = pAura
+    t.fusionKey = opt.key
+    t.fusionName = opt.name
+    t.fusedColor = AURA_COLOR[pAura]
+    t.auraFlip = false
+    this.runStats.fusions++
+    this.recomputeBuffs()
+    this.recomputeResonances()
+    this.emit({ t: 'fuse', towerId: t.id, name: opt.name, x: t.x, y: t.y, px: p.x, py: p.y, color: opt.color, color2: opt.color2 })
+    this.emit({ t: 'banner', msg: `⚛ ${opt.name.toUpperCase()} FORGED!`, color: opt.color })
+    this.emit({ t: 'upgrade', x: t.x, y: t.y, color: opt.color, radius: this.effRange(t), label: `⚛ ${opt.name.toUpperCase()}` })
+    return true
+  }
+
+  // The reaction a fused tower detonates (for the UI); null when unfused.
+  fusionReaction(t: SimTower): ReactionDef | null {
+    return t.fusionKey !== '' ? REACTIONS[t.fusionKey] : null
+  }
+
   towerById(id: number): SimTower | null {
     for (const t of this.towers) if (t.active && t.id === id) return t
     return null
@@ -943,7 +1023,8 @@ export class Sim {
   }
 
   effRange(t: SimTower): number {
-    return clamp(this.stats(t).range * TILE * t.buffRng * this.config.mods.rangeMult, TILE * 0.5, TILE * 12)
+    const fus = t.fusedElem !== '' ? FUSION_RNG : 1
+    return clamp(this.stats(t).range * TILE * t.buffRng * fus * this.config.mods.rangeMult, TILE * 0.5, TILE * 12)
   }
   effCooldown(t: SimTower): number {
     return clamp(this.stats(t).cooldown * this.config.mods.cooldownMult * this.upgrades.fireRateMult, 0.05, 10)
@@ -952,12 +1033,21 @@ export class Sim {
     const s = this.stats(t)
     const elem = t.def.element ? this.upgrades.elementDmg[t.def.element] : 1
     const res = this.resTowerMult.get(t.kind) ?? 1
-    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem * res
+    const fus = t.fusedElem !== '' ? FUSION_DMG : 1
+    const dmg = s.damage * t.buffDmg * this.config.mods.towerDamageMult * this.upgrades.allDmg * elem * res * fus
     return clamp(dmg, 0, 1e7)
   }
   // DPS shown in the UI (splash/chain not counted, single-target baseline).
   effDps(t: SimTower): number {
     return clamp(this.effDamage(t) / Math.max(0.05, this.effCooldown(t)), 0, 1e7)
+  }
+
+  // The aura this tower's NEXT volley paints. Fused towers alternate between
+  // their own element and the absorbed one (auraFlip toggles per volley).
+  private towerAura(t: SimTower): AuraElement | undefined {
+    const own = TOWER_AURA[t.kind]
+    if (t.fusedElem === '' || !own) return own
+    return t.auraFlip ? t.fusedElem : own
   }
 
   private towerAttack(t: SimTower, damageOverride?: number): AttackStats {
@@ -969,7 +1059,7 @@ export class Sim {
       dmgType,
       element: t.def.element,
       armorPen,
-      aura: TOWER_AURA[t.kind],
+      aura: this.towerAura(t),
     }
   }
 
@@ -1102,6 +1192,9 @@ export class Sim {
       }
       else if (t.kind === 'storm') this.stormBolt(t, target)
       else this.arcaneZap(t, target)
+
+      // fusion: NEXT volley paints the other element (whole volley shares one aura)
+      if (t.fusedElem !== '') t.auraFlip = !t.auraFlip
     }
   }
 
@@ -1125,6 +1218,8 @@ export class Sim {
         case 'Last': score = -e.dist; break
         case 'Close': score = -d2; break
         case 'Strong': score = e.hp; break
+        case 'Weak': score = -e.hp; break
+        case 'Primed': score = (this.wouldDetonate(t, e) ? 1e7 : 0) + e.dist; break
         default: score = e.dist
       }
       if (score > bestScore) {
@@ -1133,6 +1228,17 @@ export class Sim {
       }
     }
     return best
+  }
+
+  // Primed targeting: would this tower's next hit detonate a reaction on e?
+  // Elementless towers (cannon) instead hunt AMPLIFY-marked enemies (they take
+  // bonus damage) — every tower gets something real out of the mode.
+  private wouldDetonate(t: SimTower, e: SimEnemy): boolean {
+    const aura = this.towerAura(t)
+    if (!aura) return e.amplifyUntil > this.clock
+    if (this.clock < e.reactLockUntil) return false
+    if (e.auraElem === '' || e.auraUntil <= this.clock || e.auraElem === aura) return false
+    return reactionFor(e.auraElem as AuraElement, aura) !== null
   }
 
   private fireProjectile(t: SimTower, target: SimEnemy): void {
@@ -2079,7 +2185,7 @@ export class Sim {
       ? this.config.level.waves.length
       : this.waveIndex
     const s = this.runStats.kills * 20 + this.runStats.reactions * 45 + this.runStats.maxCombo * 30
-      + this.runStats.bossKills * 400 + wavesCleared * 250 + Math.max(0, this.lives) * 60
+      + this.runStats.bossKills * 400 + this.runStats.fusions * 300 + wavesCleared * 250 + Math.max(0, this.lives) * 60
     return clamp(Math.round(s), 0, 1e9)
   }
   private spendGold(n: number): void {

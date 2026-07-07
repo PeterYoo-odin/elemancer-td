@@ -4,7 +4,7 @@
 // taps fall through to the canvas; only real controls opt back in (.pe).
 
 import type { Sim, SimHero } from '../sim'
-import { GRID, WHEEL, DAMAGE_TYPES, type ArmorType, type DamageType, type Element } from '../sim'
+import { GRID, WHEEL, DAMAGE_TYPES, REACTIONS, type ArmorType, type DamageType, type Element, type ReactionKey } from '../sim'
 import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/towers'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
@@ -24,6 +24,7 @@ export interface HudCallbacks {
   onSelectDeselect(): void // tap the "close panel" affordance
   onUpgrade(id: number): void
   onBranch(id: number, idx: number): void
+  onFuse(id: number, partnerId: number): void // forge a fusion tower with an adjacent max tower
   onTargeting(id: number): void
   onDraft(index: number): void
   onQuit(): void
@@ -889,7 +890,7 @@ export class BattleHud {
     wrap.style.boxShadow = `0 12px 34px rgba(0,0,0,.55), 0 0 22px ${hex(def.color)}55`
 
     const row1 = el('div', 'row1')
-    const tierName = sim.isMax(t) ? def.branches[t.branch].name : `Lv ${t.level + 1}`
+    const tierName = t.fusedElem !== '' ? `⚛ ${t.fusionName}` : sim.isMax(t) ? def.branches[t.branch].name : `Lv ${t.level + 1}`
     row1.append(el('div', 'tt', `${def.name} · ${tierName}`), el('div', 'stars', starStr(sim.powerTier(t))))
     const stars = row1.querySelector('.stars') as HTMLElement
     stars.classList.add('pe')
@@ -903,7 +904,9 @@ export class BattleHud {
       }
     })
     const cur = sim.stats(t)
-    const typeLine = `${def.damageType}${def.element ? ' · ' + def.element : ''}`
+    const typeLine = t.fusedElem !== ''
+      ? `${def.damageType} · ${TOWER_AURA_LABEL[t.kind] ?? def.element ?? ''}+${t.fusedElem}`
+      : `${def.damageType}${def.element ? ' · ' + def.element : ''}`
     const dpsLine = def.support ? `BUFF +${Math.round(((cur as { buffDamage?: number }).buffDamage ?? 0) * 100)}%` : `DPS ${Math.round(sim.effDps(t))}`
     const stat = el('div', 'stat pe', `${dpsLine}   ·   RNG ${(sim.effRange(t) / 80).toFixed(1)}   ·   ${typeLine}`)
     attachTip(stat, () => {
@@ -954,8 +957,10 @@ export class BattleHud {
           { k: 'Last', v: 'newest arrival', c: mode === 'Last' ? '#8dff4a' : undefined },
           { k: 'Close', v: 'nearest to this tower', c: mode === 'Close' ? '#8dff4a' : undefined },
           { k: 'Strong', v: 'highest health', c: mode === 'Strong' ? '#8dff4a' : undefined },
+          { k: 'Weak', v: 'lowest health — finishes kills', c: mode === 'Weak' ? '#8dff4a' : undefined },
+          { k: 'Primed', v: 'primed for a reaction with THIS tower', c: mode === 'Primed' ? '#8dff4a' : undefined },
         ],
-        foot: 'Tap to cycle. Snipers love Strong; slows love First.',
+        foot: 'Tap to cycle. Snipers love Strong; slows love First; reaction builds live on Primed.',
       }
     })
     ctl.append(tgt)
@@ -994,8 +999,68 @@ export class BattleHud {
         br.append(btn)
       })
       ctl.append(br)
+    } else if (t.fusedElem !== '') {
+      const fused = el('div', 'maxlbl pe', `⚛ ${t.fusionName.toUpperCase()}`)
+      fused.style.color = hex(t.fusedColor)
+      attachTip(fused, () => {
+        const tt = this.simRef?.towerById(id)
+        if (!tt || tt.fusedElem === '') return null
+        const r = this.simRef?.fusionReaction(tt)
+        return {
+          tag: 'FUSION TOWER', title: tt.fusionName, accent: hex(tt.fusedColor),
+          body: `Two towers forged into one. Every volley alternates elements (${TOWER_AURA_LABEL[tt.kind] ?? '?'} ⇄ ${tt.fusedElem}), so it primes AND detonates ${r?.name ?? 'its reaction'} entirely on its own.`,
+          rows: [
+            { k: 'Reaction', v: r?.name ?? '—', c: r ? hex(r.color) : undefined },
+            { k: 'Effect', v: FUSE_EFFECT[tt.fusionKey as ReactionKey] ?? '', c: '#8dff4a' },
+            { k: 'Power', v: '+75% damage · +15% range', c: '#ffd54a' },
+          ],
+          foot: 'The absorbed tower\'s tile was freed — fusion consolidates your board.',
+        }
+      })
+      ctl.append(fused)
     } else {
-      ctl.append(el('div', 'maxlbl', 'MAX ★'))
+      const opts = sim.fusionOptions(t)
+      if (opts.length > 0) {
+        const br = el('div', 'branches')
+        for (const o of opts.slice(0, 2)) {
+          const afford = sim.gold >= o.cost
+          const btn = el('button', 'br pe' + (afford ? '' : ' no'))
+          btn.style.background = `linear-gradient(180deg, ${hex(o.color)}, ${hex(o.color2)}66), linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
+          btn.append(
+            el('span', undefined, `⚛ FUSE → ${o.name}`),
+            el('span', 'bb', `absorb ${o.partner.def.name} · solo ${REACTIONS[o.key].name}`),
+            el('span', 'bc', `$${o.cost}`),
+          )
+          const pid = o.partner.id
+          btn.onclick = () => this.cb.onFuse(t.id, pid)
+          attachTip(btn, () => ({
+            tag: 'FORGE A FUSION TOWER', title: o.name, accent: hex(o.color),
+            body: `Absorbs the adjacent ${o.partner.def.name} (its tile is FREED). This tower keeps its ${sim.isMax(t) ? def.branches[t.branch].name : def.name} behaviour, hits +75% harder, sees +15% further — and alternates both elements every volley, detonating ${REACTIONS[o.key].name} all by itself.`,
+            rows: [
+              { k: 'Reaction', v: REACTIONS[o.key].name, c: hex(o.color) },
+              { k: 'Effect', v: FUSE_EFFECT[o.key], c: '#8dff4a' },
+              { k: 'Cost', v: `$${o.cost}`, c: '#ffe27a' },
+            ],
+            foot: 'Choose the host wisely — the fused tower keeps the HOST\'s attack style.',
+          }))
+          br.append(btn)
+        }
+        ctl.append(br)
+      } else {
+        const max = el('div', 'maxlbl pe', 'MAX ★')
+        attachTip(max, () => ({
+          tag: 'FULLY UPGRADED', title: 'MAX — but not the end', accent: '#ffd54a',
+          body: 'Build ANOTHER max-tier tower of a reactive element on an adjacent tile and a ⚛ FUSE option appears here.',
+          rows: [
+            { k: 'Flame + Frost', v: 'Thermal Core', c: '#ffb15c' },
+            { k: 'Frost + Storm', v: 'Shatterspire', c: '#9fdcff' },
+            { k: 'Flame + Storm', v: 'Flashover Crown', c: '#ff6a3c' },
+            { k: 'Arcane + any', v: 'Prism Nexus', c: '#d6a6ff' },
+          ],
+          foot: 'A fusion tower detonates its elemental reaction entirely on its own.',
+        }))
+        ctl.append(max)
+      }
     }
 
     wrap.append(close, row1, stat, evs, ctl)
@@ -1286,6 +1351,22 @@ export class BattleHud {
 }
 
 // ---- helpers (view-only) ----
+// Aura each tower paints (mirror of the sim's TOWER_AURA, labels for the panel).
+const TOWER_AURA_LABEL: Partial<Record<TowerKind, string>> = {
+  flame: 'Fire', frost: 'Water', storm: 'Storm', arcane: 'Arcane',
+}
+// One-line effect summary per reaction (fusion panel legibility).
+const FUSE_EFFECT: Record<ReactionKey, string> = {
+  thermal: 'armor break + burst',
+  shatter: 'burst · ×2 vs armored',
+  flashover: 'AoE explosion',
+  wildfire: 'burn spreads to the pack',
+  overgrow: 'heavy area root',
+  eclipse: 'brief area stun',
+  conduct: 'bonus chain arcs',
+  blight: 'poison DoT area',
+  amplify: '+25% damage taken mark',
+}
 function starStr(n: number): string { return '★'.repeat(n) + '☆'.repeat(5 - n) }
 function rateStr(cooldown: number): string {
   return `${(1 / Math.max(0.05, cooldown)).toFixed(1)}/s`

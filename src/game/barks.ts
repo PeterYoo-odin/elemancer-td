@@ -16,6 +16,7 @@ export type BarkTrigger =
   | 'deploy'      // this hero just took the field (hero = speaker)
   | 'kill'        // a satisfying kill (boss / big combo) — rate-limited hard
   | 'reaction'    // an elemental reaction detonated — rate-limited hard
+  | 'fusion'      // two max towers forged into one fusion tower (rare, earned)
   | 'lowLives'    // lives fell below the danger line (once per battle)
   | 'victory'     // level won (fires over the result screen)
   | 'defeat'      // level lost — Morose condoles
@@ -144,6 +145,14 @@ export const BARKS: Bark[] = [
   { id: 'pair-lumi-fizz-2', trigger: 'pair', speaker: 'glacia', pair: ['glacia', 'volt'], text: 'Fizz\'s next experiment succeeds. The one after that is very loud.' },
   { id: 'pair-ashka-sera-1', trigger: 'pair', speaker: 'ember', pair: ['ember', 'aurelia'], text: 'Dawnhalo. Race you to the body count. …It\'s not a sin if you WIN.' },
 
+  // ===== FUSION FORGED — two colours refusing to stay apart (the Greying's opposite)
+  { id: 'fuse-ashka-1', trigger: 'fusion', speaker: 'ember', text: 'Two fires in one blade. NOW we\'re talking.' },
+  { id: 'fuse-lumi-1', trigger: 'fusion', speaker: 'glacia', text: 'Two colours, one tower. I foresaw it. I am still impressed.' },
+  { id: 'fuse-fizz-1', trigger: 'fusion', speaker: 'volt', text: 'DUAL-ELEMENT LATTICE ACHIEVED! This violates at least three of my own laws!' },
+  { id: 'fuse-thorn-1', trigger: 'fusion', speaker: 'sylvan', text: 'Two trees grown into one trunk. The moss calls it marriage.' },
+  { id: 'fuse-galea-1', trigger: 'fusion', speaker: 'zephyra', text: 'Two ships lashed into a MAN-O-WAR! Fire everything!' },
+  { id: 'fuse-madder-1', trigger: 'fusion', speaker: 'maddervane', text: 'Mixing pigments on the canvas itself. Bold, little brush. He used to do that.' },
+
   // ===== MADDERVANE — mentor; everything is a paint metaphor
   { id: 'madder-walk-1', trigger: 'walk', speaker: 'maddervane', text: 'Grey is just color holding its breath, little brush. Our job\'s to make it exhale.' },
   { id: 'madder-walk-2', trigger: 'walk', speaker: 'maddervane', text: 'See how the hills take the light back? That\'s your work drying, little brush.' },
@@ -182,6 +191,7 @@ export interface BarkContext {
 const TRIGGER_GAP: Partial<Record<BarkTrigger, number>> = {
   kill: 26,
   reaction: 22,
+  fusion: 0, // rare, player-initiated — always worth a line
   deploy: 2,
   pair: 30,
   lowLives: 9999, // once per battle (resetBattle clears it)

@@ -13,8 +13,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
-import type { Sim, SimEnemy, SimHero, SimTower } from '../sim'
-import { COLS, ROWS, MAP_X, MAP_Y, MAP_W, MAP_H, worldToCell } from '../sim'
+import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
+import { COLS, ROWS, MAP_X, MAP_Y, MAP_W, MAP_H, AURA_COLOR, worldToCell } from '../sim'
 import { TOWERS, type TowerKind } from '../game/towers'
 import { RARITY_COLOR } from '../game/heroes'
 import type { SpellEffect } from '../game/heroes'
@@ -65,6 +65,10 @@ interface EnemySlot {
   burning: boolean
   emberAcc: number // throttles burning-ember emission
   isAir: boolean
+  // PRIMED aura pip — a small orbiting crystal in the painted element's colour,
+  // so "one more different-element hit detonates" is readable at a glance.
+  auraPip: THREE.Mesh | null
+  auraPipMat: THREE.MeshBasicMaterial | null
 }
 
 interface TowerSlot {
@@ -92,6 +96,8 @@ interface TowerSlot {
   baseRange: number
   greyed: boolean // Morose intrusion: frozen mid-gesture under a grey veil
   greyVeil: THREE.Mesh | null // lazily created shroud (shared geo/mat)
+  fused: boolean // fusion tower: precessing halo in the absorbed element's colour
+  fusionRing: THREE.Mesh | null
 }
 
 interface ProjSlot {
@@ -215,6 +221,8 @@ export class BattleView3D {
   // burning-ground zones (Scorch branch): glowing pulsing discs + throttled embers
   private zoneViews = new Map<number, { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; emberAcc: number; phase: number }>()
   private zoneGeo!: THREE.CircleGeometry
+  private auraPipGeo!: THREE.OctahedronGeometry
+  private fusionRingGeo!: THREE.TorusGeometry
 
   private transients: Transient[] = []
   private buffLinesGroup: THREE.Group
@@ -965,6 +973,7 @@ export class BattleView3D {
     return {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
+      auraPip: null, auraPipMat: null,
     }
   }
 
@@ -1090,7 +1099,7 @@ export class BattleView3D {
       group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
       aimYaw: -t.aimAngle, targetYaw: -t.aimAngle, recoilT: 0, lastFireFlash: 0,
       dropT: 0.0001, dropDone: false, pulseT: 0, phase: (t.x * 13.37 + t.y * 7.77) % (Math.PI * 2), turretY0: 0, baseRange: 0,
-      greyed: false, greyVeil: null,
+      greyed: false, greyVeil: null, fused: false, fusionRing: null,
     }
     this.assembleTower(slot, t)
     this.scene.add(g)
@@ -1277,6 +1286,28 @@ export class BattleView3D {
     // hit squash impulse
     if (e.hitFlash > 0 && s.hitT <= 0) s.hitT = 0.14
 
+    // PRIMED aura pip — orbiting crystal in the painted element's colour. One
+    // different-element hit will detonate; the pip says so without a tooltip.
+    const primed = e.auraElem !== '' && e.auraUntil > clock
+    if (primed) {
+      if (!s.auraPip) {
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+        this.disposables.push(mat)
+        const pip = new THREE.Mesh(this.auraPipGeo, mat)
+        s.auraPip = pip
+        s.auraPipMat = mat
+        s.group.add(pip)
+      }
+      s.auraPip.visible = true
+      s.auraPipMat!.color.set(AURA_COLOR[e.auraElem as AuraElement] ?? 0xffffff)
+      const a = clock * 3.2 + s.walkT
+      const orbit = s.radius + 0.24
+      s.auraPip.position.set(Math.cos(a) * orbit, s.radius + 0.5, Math.sin(a) * orbit)
+      s.auraPip.rotation.y = clock * 4
+    } else if (s.auraPip) {
+      s.auraPip.visible = false
+    }
+
     // HP bar (centred plane; scales symmetrically — clean at this size)
     const ratio = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)))
     s.hpFill.scale.x = Math.max(0.001, ratio)
@@ -1326,6 +1357,36 @@ export class BattleView3D {
         }
       }
       s.glow.intensity = greyed ? 0.05 : 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
+
+      // FUSION halo: a precessing ring in the absorbed element's colour, plus a
+      // one-time forge celebration the moment the fusion lands.
+      const fused = t.fusedElem !== ''
+      if (fused !== s.fused) {
+        s.fused = fused
+        if (fused) {
+          if (!s.fusionRing) {
+            const mat = new THREE.MeshBasicMaterial({ color: t.fusedColor, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+            this.disposables.push(mat)
+            s.fusionRing = new THREE.Mesh(this.fusionRingGeo, mat)
+            s.fusionRing.rotation.order = 'YXZ'
+            s.group.add(s.fusionRing)
+          }
+          ;(s.fusionRing.material as THREE.MeshBasicMaterial).color.set(t.fusedColor)
+          s.fusionRing.visible = true
+          s.pulseT = 1
+          this.pushRing(t.x, t.y, 90, t.fusedColor, 1)
+          this.emitParticles(wx(t.x), GROUND + s.turretY0 + 0.6, wz(t.y), t.fusedColor, 22, 2.8)
+          this.pushIn(0.6)
+        } else if (s.fusionRing) {
+          s.fusionRing.visible = false
+        }
+      }
+      if (s.fused && s.fusionRing) {
+        const ck = this.sim.clock
+        s.fusionRing.position.y = s.turretY0 + 0.42 + Math.sin(ck * 1.7 + s.phase) * 0.06
+        s.fusionRing.rotation.y = ck * 2.1 + s.phase
+        s.fusionRing.rotation.x = Math.PI / 2 + 0.42
+      }
     }
     for (const [id, s] of this.towerViews) {
       if (!active.has(id)) {
@@ -1957,6 +2018,10 @@ export class BattleView3D {
     this.heroOrbGeo = new THREE.IcosahedronGeometry(0.16, 0)
     this.heroRingGeo = new THREE.RingGeometry(0.5, 0.6, 32)
     this.disposables.push(this.heroBodyGeo, this.heroHeadGeo, this.heroOrbGeo, this.heroRingGeo)
+    // primed-aura pip (enemies) + fusion halo (towers)
+    this.auraPipGeo = new THREE.OctahedronGeometry(0.11, 0)
+    this.fusionRingGeo = new THREE.TorusGeometry(0.44, 0.045, 8, 26)
+    this.disposables.push(this.auraPipGeo, this.fusionRingGeo)
   }
 
   // ---------------------------------------------------------------- teardown

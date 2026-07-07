@@ -10,7 +10,7 @@ import { LEVELS, levelById, serpentine, starsForClear, DEMO_LEVEL, type LevelDef
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
 import { NEUTRAL } from '../game/workshop'
-import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, cellCenter, type SimEvent } from '../sim'
+import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
 import type { ShareCardOpts } from '../ui/ShareCard'
@@ -195,6 +195,7 @@ export class BattleScene extends Phaser.Scene {
       onSelectDeselect: () => this.deselect(),
       onUpgrade: (id) => { if (this.sim.upgradeTower(id)) this.hud.showUpgrade(this.sim, id) },
       onBranch: (id, idx) => { if (this.sim.chooseBranch(id, idx)) this.hud.showUpgrade(this.sim, id) },
+      onFuse: (id, partnerId) => { if (this.sim.fuseTowers(id, partnerId)) this.hud.showUpgrade(this.sim, id) },
       onTargeting: (id) => this.cycleTargeting(id),
       onDraft: (i) => this.pickDraft(i),
       onQuit: () => this.quitBattle(),
@@ -590,8 +591,7 @@ export class BattleScene extends Phaser.Scene {
   private cycleTargeting(id: number): void {
     const t = this.sim.towerById(id)
     if (!t) return
-    const modes = ['First', 'Last', 'Close', 'Strong'] as const
-    const next = modes[(modes.indexOf(t.targeting) + 1) % modes.length]
+    const next = TARGET_MODES[(TARGET_MODES.indexOf(t.targeting) + 1) % TARGET_MODES.length]
     this.sim.setTargeting(id, next)
     this.hud.showUpgrade(this.sim, id)
   }
@@ -667,9 +667,10 @@ export class BattleScene extends Phaser.Scene {
     for (const [name, n] of Object.entries(rs.reactionCounts)) {
       if (n > bestN) { bestN = n; bestName = name }
     }
-    const comboHighlight = bestName
+    let comboHighlight = bestName
       ? `${bestName} ×${bestN} · combo ×${rs.maxCombo}`
       : rs.maxCombo > 1 ? `combo ×${rs.maxCombo}` : `${rs.kills} restored`
+    if (rs.fusions > 0) comboHighlight += ` · ⚛ ×${rs.fusions}`
     const deployed = this.sim.deployedHeroes()
     const heroName = deployed[0]?.def.name ?? this.sim.partyLoadout()[0]?.def.name ?? 'No hero'
     const totalWaves = this.endless ? Infinity : this.level.waves.length
@@ -888,6 +889,17 @@ export class BattleScene extends Phaser.Scene {
         }
         if (unlockCodex('field-reactions')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         this.tryBark('reaction')
+        break
+      case 'fuse':
+        // FUSION FORGED — an earned spectacle: the partner flares out, the host
+        // erupts in both colours, and the new tower's name slams on screen.
+        this.view.fxReaction(ev.px, ev.py, 60, ev.color2, ev.color)
+        this.view.fxReaction(ev.x, ev.y, 110, ev.color, ev.color2)
+        this.hud.flash(ev.color, 0.3)
+        this.hud.reactionCallout(`⚛ ${ev.name}`, ev.color)
+        this.hitstopT = Math.max(this.hitstopT, 0.1)
+        if (unlockCodex('field-fusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+        this.tryBark('fusion')
         break
       case 'morose':
         // THE signature moment: Morose reaches into the battle and condoles.

@@ -61,3 +61,31 @@ export function reactionFor(a: AuraElement, b: AuraElement): ReactionDef | null 
   const rk = PAIR[key]
   return rk ? REACTIONS[rk] : null
 }
+
+// ---- FUSION TOWERS ---------------------------------------------------------
+// Two ADJACENT max-tier towers whose auras form a reaction pair can FUSE: the
+// host absorbs its partner (freeing the tile), keeps its own verb/branch, and
+// alternates BOTH elements shot-to-shot — a single tower that detonates its
+// reaction solo. Named per reaction so each fusion reads as a new tower.
+export const FUSION_NAMES: Record<ReactionKey, string> = {
+  thermal: 'Thermal Core',
+  shatter: 'Shatterspire',
+  flashover: 'Flashover Crown',
+  wildfire: 'Wildfire Bloom',
+  overgrow: 'Verdant Maw',
+  eclipse: 'Umbral Beacon',
+  conduct: 'Conduit Halo',
+  blight: 'Blight Chalice',
+  amplify: 'Prism Nexus',
+}
+
+// Aura colour for UI/view chips (element wheel colours + Arcane violet-white).
+export const AURA_COLOR: Record<AuraElement, number> = {
+  Fire: 0xff6a3c,
+  Water: 0x4ad9ff,
+  Nature: 0x8dff4a,
+  Light: 0xffe14a,
+  Dark: 0xc06bff,
+  Storm: 0x9ad0ff,
+  Arcane: 0xd6a6ff,
+}
