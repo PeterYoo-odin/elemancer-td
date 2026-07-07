@@ -8,8 +8,13 @@
     <link rel="icon" type="image/svg+xml" href="./brand/odin-icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Display face for the CHROMANCER wordmark; falls back to serif offline. -->
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&display=swap" rel="stylesheet" />
+    <!-- Cinzel: the CHROMANCER wordmark. Baloo 2 / Nunito: the HUD + UI face the
+         stylesheets already declare (loading them here is what makes the whole
+         game render with one cohesive typeface instead of system fallbacks). -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Baloo+2:wght@600;700;800&family=Nunito:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #020204; overflow: hidden; }
       #game { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }

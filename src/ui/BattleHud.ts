@@ -4,10 +4,13 @@
 // taps fall through to the canvas; only real controls opt back in (.pe).
 
 import type { Sim, SimHero } from '../sim'
-import { TOWERS, TOWER_ORDER, type TowerKind } from '../game/towers'
+import { GRID, WHEEL, DAMAGE_TYPES, type ArmorType, type DamageType, type Element } from '../sim'
+import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/towers'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
 import { RARITY_COLOR } from '../game/heroes'
+import { heroStats, heroSpellScaled } from '../game/heroProgress'
+import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 
 export interface HudCallbacks {
   onStart(): void
@@ -48,7 +51,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 const CSS = `
-.eld-hud, .eld-hud * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; }
+.eld-hud, .eld-hud * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+  font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; }
+.eld-hud .pe { touch-action: manipulation; }
 .eld-hud {
   position: fixed; inset: 0; z-index: 20; pointer-events: none;
   color: #fff; user-select: none; overflow: hidden;
@@ -120,6 +125,7 @@ const CSS = `
   box-shadow:0 0 12px currentColor, inset 0 2px 4px rgba(255,255,255,.4); }
 .eld-tower .tn { font-size:14px; font-weight:800; }
 .eld-tower .tc { font-size:14px; font-weight:800; color:#ffe27a; }
+.eld-tower .tc.no { color:#ff8a8a; }
 .eld-tower .tt { font-size:10px; color:#c9b6ff; letter-spacing:.5px; }
 .eld-tower .lock { position:absolute; inset:0; display:grid; place-items:center; font-size:26px; background:rgba(10,6,20,.55); border-radius:14px; }
 
@@ -271,6 +277,13 @@ const CSS = `
   22%{ opacity:1; transform:translateX(-50%) scale(1); letter-spacing:6px; }
   78%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-24px) scale(.96); } }
 
+/* one-time "the UI can explain itself" hint (first battle only) */
+.eld-hint { position:absolute; top:150px; left:50%; transform:translateX(-50%) translateY(-6px);
+  padding:8px 18px; border-radius:999px; background:rgba(16,10,32,.92); border:1px solid rgba(255,255,255,.18);
+  box-shadow:0 8px 22px rgba(0,0,0,.5); font-size:12.5px; font-weight:700; letter-spacing:.04em; color:#d9cff5;
+  white-space:nowrap; opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none; z-index:22; }
+.eld-hint.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
 /* Morose intrusion veil: the world's edges drain grey for a beat */
 .eld-morose { position:absolute; inset:0; pointer-events:none; z-index:29; opacity:0;
   background: radial-gradient(115% 95% at 50% 45%, transparent 42%, rgba(128,124,146,.52) 100%);
@@ -333,6 +346,12 @@ export class BattleHud {
   private lastGoldTarget = -1
   private lastAfford = new Map<TowerKind, boolean>()
 
+  // live refs so tooltip providers always read current numbers
+  private simRef: Sim | null = null
+  private ctxRef: HudContext | null = null
+  private hintEl: HTMLElement
+  private hintDone = false
+
   // motion-pass state: detect transitions so we ping/pop exactly once
   private goldStat!: HTMLElement
   private lifeStat!: HTMLElement
@@ -350,24 +369,52 @@ export class BattleHud {
 
     // top bar
     const top = el('div', 'eld-top')
-    const gold = el('div', 'eld-stat eld-gold')
+    const gold = el('div', 'eld-stat eld-gold pe')
     gold.append(this.iconDiv('$'), (this.goldVal = el('span', 'val', '0')))
-    const life = el('div', 'eld-stat eld-life')
+    const life = el('div', 'eld-stat eld-life pe')
     life.append(this.iconDiv('♥'), (this.livesVal = el('span', 'val', '0')))
-    const wave = el('div', 'eld-stat eld-wave')
+    const wave = el('div', 'eld-stat eld-wave pe')
     wave.append((this.waveVal = el('span', 'val', 'WAVE 1')))
     top.append(gold, life, wave)
     this.goldStat = gold
     this.lifeStat = life
     this.root.append(top)
+    attachTip(gold, () => ({
+      tag: 'RESOURCE',
+      title: 'Battle Gold',
+      accent: '#ffe27a',
+      body: 'Earned from kills, wave clears and early starts. Spend it on towers, upgrades and hero deploys — it resets every battle.',
+      foot: 'Fast kill streaks raise a combo multiplier that pays bonus gold.',
+    }))
+    attachTip(life, () => ({
+      tag: 'RESOURCE',
+      title: 'Lives',
+      accent: '#ff8fa5',
+      body: 'Every enemy that slips through steals a life. Lose them all and the level falls to the Greying.',
+      rows: this.simRef ? [{ k: 'Remaining', v: String(this.simRef.lives) }] : undefined,
+    }))
+    attachTip(wave, () => {
+      const sim = this.simRef
+      const ctx = this.ctxRef
+      if (!sim || !ctx) return { title: 'Waves', accent: '#a8e9ff' }
+      return {
+        tag: ctx.endless ? 'ENDLESS' : 'CAMPAIGN',
+        title: ctx.endless ? `Wave ${sim.waveIndex + 1} — no end in sight` : `Wave ${Math.min(sim.waveIndex + 1, ctx.totalWaves)} of ${ctx.totalWaves}`,
+        accent: '#a8e9ff',
+        body: ctx.endless
+          ? 'Survive as long as you can. Waves scale forever; banked rewards grow with every clear.'
+          : 'Clear every wave to reclaim this level. During prep, the incoming banner tells you what to build against.',
+      }
+    })
 
     const levelName = el('div', 'eld-levelname')
     levelName.id = 'eld-levelname'
     this.root.append(levelName)
 
     this.comboEl = el('div', 'eld-combo')
-    this.telegraphEl = el('div', 'eld-telegraph hidden')
+    this.telegraphEl = el('div', 'eld-telegraph hidden pe')
     this.root.append(this.comboEl, this.telegraphEl)
+    attachTip(this.telegraphEl, () => this.telegraphTip())
 
     // right controls
     const rc = el('div', 'eld-rc')
@@ -377,11 +424,30 @@ export class BattleHud {
     this.speedBtn.onclick = () => this.cb.onSpeed()
     rc.append(this.pauseBtn, this.speedBtn)
     this.root.append(rc)
+    attachTip(this.pauseBtn, () => ({
+      tag: 'CONTROL', title: 'Pause', accent: '#c9b6ff',
+      body: 'Freeze the battle and take a breath. Nothing moves until you resume.',
+    }))
+    attachTip(this.speedBtn, () => ({
+      tag: 'CONTROL', title: 'Battle speed', accent: '#c9b6ff',
+      body: 'Toggle between 1× and 2×. The simulation stays exact at both speeds — only time flows faster.',
+    }))
 
     // start
     this.startBtn = el('button', 'eld-start pe', 'START ▶')
     this.startBtn.onclick = () => this.cb.onStart()
     this.root.append(this.startBtn)
+    attachTip(this.startBtn, () => ({
+      tag: 'PREP PHASE', title: 'Start the wave', accent: '#3ad07a',
+      body: 'Send the wave in early and pocket +2 gold for every second left on the clock. Build first, then cash in the courage.',
+    }))
+
+    // one-time discoverability hint (the tooltip layer IS the manual)
+    this.hintEl = el('div', 'eld-hint')
+    const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+    this.hintEl.textContent = coarse ? '💡 Long-press anything to inspect it' : '💡 Hover anything to inspect it'
+    this.root.append(this.hintEl)
+    try { this.hintDone = localStorage.getItem('chromancer_tip_hint_v1') === '1' } catch { this.hintDone = true }
 
     // dock (spells + towers). The dock itself is pointer-transparent so board taps
     // behind the gradient still reach the canvas; only the buttons opt back in.
@@ -400,6 +466,7 @@ export class BattleHud {
       b.onclick = () => this.cb.onSpellButton(key)
       spells.append(b)
       this.spellBtns.set(key, { root: b, mask, txt })
+      attachTip(b, () => this.spellTip(key))
     }
     const towers = el('div', 'eld-towers')
     for (const kind of TOWER_ORDER) {
@@ -417,6 +484,7 @@ export class BattleHud {
       b.onclick = () => this.cb.onTowerButton(kind)
       towers.append(b)
       this.towerBtns.set(kind, { root: b, cost, lock })
+      attachTip(b, () => this.towerTip(kind))
     }
     // hero bar sits between the global spells and the towers (built lazily once the
     // party is known). Empty → CSS hides it, so a no-hero run looks unchanged.
@@ -426,7 +494,12 @@ export class BattleHud {
 
     // synergy panel (element team bonuses) — hidden until a synergy is active
     this.synPanel = el('div', 'eld-syn hidden')
-    this.synPanel.append(el('div', 'syn-h', 'SYNERGIES'))
+    const synHead = el('div', 'syn-h pe', 'SYNERGIES')
+    attachTip(synHead, () => ({
+      tag: 'TEAM BONUS', title: 'Element synergies', accent: '#c9b6ff',
+      body: 'Field heroes and towers that share an element to awaken team-wide bonuses. They stay active while the element stays on the board.',
+    }))
+    this.synPanel.append(synHead)
     this.synList = el('div', 'syn-list')
     this.synPanel.append(this.synList)
     this.root.append(this.synPanel)
@@ -450,6 +523,15 @@ export class BattleHud {
 
   // ------------------------------------------------------------- per-frame
   update(sim: Sim, ctx: HudContext): void {
+    this.simRef = sim
+    this.ctxRef = ctx
+    // first battle only: point at the tooltip layer once, then never nag again
+    if (!this.hintDone && sim.state === 'prep' && sim.waveIndex === 0) {
+      this.hintDone = true
+      try { localStorage.setItem('chromancer_tip_hint_v1', '1') } catch { /* private mode */ }
+      window.setTimeout(() => this.hintEl.classList.add('show'), 1600)
+      window.setTimeout(() => this.hintEl.classList.remove('show'), 8200)
+    }
     // animated gold counter (+ a pop when a meaningful chunk lands)
     if (sim.gold !== this.lastGoldTarget) {
       if (sim.gold >= this.lastGoldTarget + 8 && this.lastGoldTarget >= 0) this.popClass(this.goldStat, 'pop', 320)
@@ -496,6 +578,7 @@ export class BattleHud {
       const cost = sim.placeCost(kind)
       const afford = sim.gold >= cost
       ref.cost.textContent = unlocked ? `$${cost}` : ''
+      ref.cost.classList.toggle('no', unlocked && !afford)
       ref.lock.style.display = unlocked ? 'none' : 'grid'
       const def = TOWERS[kind]
       ref.root.style.borderColor = ctx.buildKind === kind ? hex(def.color) : '#444'
@@ -552,6 +635,7 @@ export class BattleHud {
       b.onclick = () => this.cb.onHeroButton(entry.heroId)
       this.heroRow.append(b)
       this.heroBtns.set(entry.heroId, { root: b, port, lvl, mask, cdtxt, badge })
+      attachTip(b, () => this.heroTip(entry.heroId))
     }
     this.heroBarBuilt = true
   }
@@ -609,7 +693,7 @@ export class BattleHud {
     if (bonuses.length === 0) { this.synPanel.classList.add('hidden'); return }
     this.synPanel.classList.remove('hidden')
     for (const b of bonuses) {
-      const chip = el('div', 'syn-chip')
+      const chip = el('div', 'syn-chip pe')
       chip.style.borderColor = hex(b.color)
       chip.style.color = hex(b.color)
       chip.append(el('span', 'si', b.icon))
@@ -617,6 +701,129 @@ export class BattleHud {
       st.append(el('div', 'sn', b.name), el('div', 'sd', b.desc))
       chip.append(st)
       this.synList.append(chip)
+      attachTip(chip, () => ({
+        tag: 'ACTIVE SYNERGY', title: b.name, accent: hex(b.color), body: b.desc,
+        foot: 'Awakened by fielding allies that share an element. It fades if they leave the board.',
+      }))
+    }
+  }
+
+  // ------------------------------------------------------------- tooltip content
+  // Providers run at show-time and read simRef, so every number is live.
+
+  private towerTip(kind: TowerKind): TipContent {
+    const def = TOWERS[kind]
+    const unlocked = this.ctxRef?.towerUnlocked(kind) ?? true
+    const cost = this.simRef ? this.simRef.placeCost(kind) : def.cost
+    const l0 = def.levels[0]
+    const rows: TipRow[] = []
+    if (def.support) rows.push({ k: 'Aura', v: `+${Math.round((l0.buffDamage ?? 0) * 100)}% dmg to neighbours`, c: '#c9b6ff' })
+    rows.push(
+      { k: 'Damage', v: String(l0.damage) },
+      { k: 'Rate', v: rateStr(l0.cooldown) },
+      { k: 'Range', v: `${l0.range} tiles` },
+      { k: 'DPS', v: `~${Math.round(l0.damage / l0.cooldown)}` },
+    )
+    const sw = gridCounters(def.damageType)
+    rows.push({ k: 'Strong vs', v: sw.strong.join(', ') || '—', c: '#8dff4a' })
+    rows.push({ k: 'Weak vs', v: sw.weak.join(', ') || '—', c: '#ff8a8a' })
+    if (def.antiAir) rows.push({ k: 'Air', v: 'hits flyers', c: '#9ad0ff' })
+    if (def.status) rows.push({ k: 'Applies', v: def.status.toUpperCase(), c: '#4ad9ff' })
+    return {
+      tag: `TOWER · ${def.damageType.toUpperCase()}${def.element ? ' · ' + def.element.toUpperCase() : ''}`,
+      title: unlocked ? `${def.name} — $${cost}` : `${def.name} — locked`,
+      accent: hex(def.color),
+      body: unlocked ? def.blurb : 'Sealed for now. Clear more of the campaign to unlock it.',
+      rows,
+      foot: `At Lv3 it chooses a path: ${def.branches[0].name} (${def.branches[0].blurb.toLowerCase()}) or ${def.branches[1].name} (${def.branches[1].blurb.toLowerCase()}).`,
+    }
+  }
+
+  private spellTip(key: SpellKey): TipContent {
+    const def = SPELLS[key]
+    const sim = this.simRef
+    const rows: TipRow[] = []
+    if (def.damage) rows.push({ k: 'Damage', v: String(def.damage) })
+    if (def.radius) rows.push({ k: 'Radius', v: `${def.radius} tiles` })
+    if (def.burnDps) rows.push({ k: 'Burn', v: `${def.burnDps}/s · ${def.burnDuration}s`, c: '#ff9a5c' })
+    if (def.stunDuration) rows.push({ k: 'Stun', v: `${def.stunDuration}s all enemies`, c: '#6bd6ff' })
+    if (def.gold) rows.push({ k: 'Gold', v: `+${def.gold} instantly`, c: '#ffe27a' })
+    rows.push({ k: 'Cooldown', v: `${Math.round(sim ? sim.spellMaxCd[key] : def.cooldown)}s` })
+    const left = sim ? sim.spellCd[key] : 0
+    if (left > 0) rows.push({ k: 'Ready in', v: `${Math.ceil(left)}s`, c: '#9d8fc5' })
+    return {
+      tag: def.targeted ? 'SPELL · TAP TO AIM' : 'SPELL · INSTANT',
+      title: def.name,
+      accent: hex(def.color),
+      body: def.blurb,
+      rows,
+    }
+  }
+
+  private heroTip(heroId: string): TipContent | null {
+    const sim = this.simRef
+    if (!sim) return null
+    const entry = sim.partyLoadout().find((e) => e.heroId === heroId)
+    if (!entry) return null
+    const def = entry.def
+    const st = heroStats(def, entry.level)
+    const sp = heroSpellScaled(def.spell, entry.level)
+    const fielded = sim.deployedHeroes().find((h) => h.heroId === heroId)
+    const rows: TipRow[] = [
+      { k: 'Damage', v: String(Math.round(st.damage)) },
+      { k: 'Rate', v: rateStr(st.cooldown) },
+      { k: 'Range', v: `${def.range} tiles` },
+    ]
+    if (st.buffDamage > 0) rows.push({ k: 'Aura', v: `+${Math.round(st.buffDamage * 100)}% dmg nearby`, c: '#c9b6ff' })
+    if (def.slowFactor) rows.push({ k: 'Chill', v: `${Math.round((1 - def.slowFactor) * 100)}% slow · ${def.slowDuration ?? 0}s`, c: '#6bd6ff' })
+    const bits: string[] = []
+    if (sp.damage) bits.push(`${Math.round(sp.damage)} dmg`)
+    if (sp.radius) bits.push(`${sp.radius} tiles`)
+    if (sp.stunDuration) bits.push(`${sp.stunDuration}s stun`)
+    if (sp.burnDps) bits.push(`${Math.round(sp.burnDps)}/s burn`)
+    if (sp.heal) bits.push(`+${sp.heal} lives`)
+    if (sp.chainCount) bits.push(`chains ×${sp.chainCount}`)
+    if (sp.buffMult) bits.push(`×${sp.buffMult} hero dmg`)
+    if (sp.executeMult) bits.push(`×${sp.executeMult} vs weakened`)
+    rows.push({ k: `✦ ${sp.name}`, v: bits.join(' · ') || sp.blurb, c: hex(def.color) })
+    rows.push(
+      fielded
+        ? fielded.spellCd > 0
+          ? { k: 'Status', v: `fielded · spell in ${Math.ceil(fielded.spellCd)}s`, c: '#9d8fc5' }
+          : { k: 'Status', v: 'spell READY — tap to cast', c: '#8dff4a' }
+        : { k: 'Deploy', v: `$${entry.cost} · tap, then tap a tile`, c: '#ffe27a' },
+    )
+    return {
+      tag: `HERO · ${def.element.toUpperCase()} · ${def.role.toUpperCase()} · ${def.rarity.toUpperCase()}`,
+      title: `${def.name} ${def.title} · L${entry.level}`,
+      accent: hex(def.color),
+      body: def.blurb,
+      rows,
+      foot: sp.blurb,
+    }
+  }
+
+  private telegraphTip(): TipContent | null {
+    const sim = this.simRef
+    if (!sim || sim.state !== 'prep') return null
+    const tg = sim.waveTelegraph()
+    const armor = tg.armor as ArmorType
+    const rows: TipRow[] = DAMAGE_TYPES.map((dt) => {
+      const m = GRID[dt]?.[armor] ?? 1
+      return { k: dt, v: `×${m}`, c: m >= 1.25 ? '#8dff4a' : m <= 0.75 ? '#ff8a8a' : '#d8d0ff' }
+    })
+    let foot: string | undefined
+    if (tg.element) {
+      const counters = (Object.keys(WHEEL) as Element[]).filter((e) => WHEEL[e].strong.includes(tg.element!))
+      foot = `${tg.element} foes take 1.5× from ${counters.join(' & ')} attacks — and 0.75× from what they resist.`
+    }
+    return {
+      tag: tg.boss ? 'INCOMING · ☠ BOSS WAVE' : 'INCOMING WAVE',
+      title: `${tg.armor} armor${tg.element ? ' · ' + tg.element : ''}`,
+      accent: tg.boss ? '#ff8fa5' : '#a8e9ff',
+      body: 'Damage-type multipliers against this wave. Build toward the green.',
+      rows,
+      foot,
     }
   }
 
@@ -633,17 +840,52 @@ export class BattleHud {
     const row1 = el('div', 'row1')
     const tierName = sim.isMax(t) ? def.branches[t.branch].name : `Lv ${t.level + 1}`
     row1.append(el('div', 'tt', `${def.name} · ${tierName}`), el('div', 'stars', starStr(sim.powerTier(t))))
+    const stars = row1.querySelector('.stars') as HTMLElement
+    stars.classList.add('pe')
+    attachTip(stars, () => {
+      const tt = this.simRef?.towerById(id)
+      if (!tt || !this.simRef) return null
+      return {
+        tag: 'POWER TIER', title: `${starStr(this.simRef.powerTier(tt))}`, accent: '#ffd54a',
+        body: 'A rough strength rating from this tower’s live DPS, buffs included. More stars, more hurt.',
+        rows: [{ k: 'Live DPS', v: String(Math.round(this.simRef.effDps(tt))) }],
+      }
+    })
     const cur = sim.stats(t)
     const typeLine = `${def.damageType}${def.element ? ' · ' + def.element : ''}`
     const dpsLine = def.support ? `BUFF +${Math.round(((cur as { buffDamage?: number }).buffDamage ?? 0) * 100)}%` : `DPS ${Math.round(sim.effDps(t))}`
-    const stat = el('div', 'stat', `${dpsLine}   ·   RNG ${(sim.effRange(t) / 80).toFixed(1)}   ·   ${typeLine}`)
+    const stat = el('div', 'stat pe', `${dpsLine}   ·   RNG ${(sim.effRange(t) / 80).toFixed(1)}   ·   ${typeLine}`)
+    attachTip(stat, () => {
+      const tt = this.simRef?.towerById(id)
+      if (!tt || !this.simRef) return null
+      const s = this.simRef.stats(tt)
+      const sw = gridCounters(s.damageType ?? def.damageType)
+      return {
+        tag: 'LIVE STATS', title: `${def.name} right now`, accent: hex(def.color),
+        body: def.support
+          ? 'This is a support tower: its aura multiplies the damage of every neighbouring tower and hero.'
+          : 'Effective numbers after upgrades, Arcane auras and run powers.',
+        rows: [
+          { k: 'DPS', v: String(Math.round(this.simRef.effDps(tt))) },
+          { k: 'Range', v: `${(this.simRef.effRange(tt) / 80).toFixed(1)} tiles` },
+          { k: 'Rate', v: rateStr(s.cooldown) },
+          { k: 'Strong vs', v: sw.strong.join(', ') || '—', c: '#8dff4a' },
+          { k: 'Weak vs', v: sw.weak.join(', ') || '—', c: '#ff8a8a' },
+        ],
+      }
+    })
 
     const domKind = dominantWaveKind(sim)
     const evsm = sim.effectivenessVs(t, domKind)
     const arrow = evsm.eff === 'strong' ? '↑↑' : evsm.eff === 'weak' ? '↓↓' : '→'
     const evColor = evsm.eff === 'strong' ? '#8dff4a' : evsm.eff === 'weak' ? '#ff8a8a' : '#d8d0ff'
-    const evs = el('div', 'evs', `vs ${ENEMIES[domKind].name} (${evsm.eff}): ${arrow} ${evsm.mult.toFixed(2)}×`)
+    const evs = el('div', 'evs pe', `vs ${ENEMIES[domKind].name} (${evsm.eff}): ${arrow} ${evsm.mult.toFixed(2)}×`)
     evs.style.color = evColor
+    attachTip(evs, () => ({
+      tag: 'COUNTER FORECAST', title: `vs ${ENEMIES[domKind].name}`, accent: evColor,
+      body: 'Your damage multiplier against the most common enemy in the incoming wave: damage type vs armor, times the element wheel.',
+      foot: 'There is no immunity — even a weak matchup always deals at least half damage.',
+    }))
 
     const close = el('button', 'close pe', '✕')
     close.onclick = () => this.cb.onSelectDeselect()
@@ -651,6 +893,20 @@ export class BattleHud {
     const ctl = el('div', 'ctl')
     const tgt = el('button', 'tgt pe', `🎯 ${t.targeting}`)
     tgt.onclick = () => { this.cb.onTargeting(t.id); this.showUpgrade(sim, id) }
+    attachTip(tgt, () => {
+      const tt = this.simRef?.towerById(id)
+      const mode = tt?.targeting ?? t.targeting
+      return {
+        tag: 'TARGETING', title: `Priority: ${mode}`, accent: '#a8e9ff',
+        rows: [
+          { k: 'First', v: 'furthest along the path', c: mode === 'First' ? '#8dff4a' : undefined },
+          { k: 'Last', v: 'newest arrival', c: mode === 'Last' ? '#8dff4a' : undefined },
+          { k: 'Close', v: 'nearest to this tower', c: mode === 'Close' ? '#8dff4a' : undefined },
+          { k: 'Strong', v: 'highest health', c: mode === 'Strong' ? '#8dff4a' : undefined },
+        ],
+        foot: 'Tap to cycle. Snipers love Strong; slows love First.',
+      }
+    })
     ctl.append(tgt)
 
     if (t.level < 2) {
@@ -658,6 +914,21 @@ export class BattleHud {
       const afford = sim.gold >= cost
       const up = el('button', 'up pe' + (afford ? '' : ' no'), `UPGRADE  $${cost}`)
       up.onclick = () => this.cb.onUpgrade(t.id)
+      attachTip(up, () => {
+        const tt = this.simRef?.towerById(id)
+        if (!tt || tt.level >= 2) return null
+        const a = def.levels[tt.level]
+        const b = def.levels[tt.level + 1]
+        return {
+          tag: 'UPGRADE PREVIEW', title: `Lv ${tt.level + 1} → Lv ${tt.level + 2}`, accent: hex(def.color),
+          rows: [
+            { k: 'Damage', v: `${a.damage} → ${b.damage}`, c: '#8dff4a' },
+            { k: 'Range', v: `${a.range} → ${b.range} tiles` },
+            { k: 'Rate', v: `${rateStr(a.cooldown)} → ${rateStr(b.cooldown)}` },
+            { k: 'Cost', v: `$${this.simRef?.upgradeCostFor(tt) ?? b.upgradeCost}`, c: '#ffe27a' },
+          ],
+        }
+      })
       ctl.append(up)
     } else if (t.level === 2) {
       const br = el('div', 'branches')
@@ -668,6 +939,7 @@ export class BattleHud {
         btn.style.background = `linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
         btn.append(el('span', undefined, b.name), el('span', 'bb', b.blurb), el('span', 'bc', `$${cost}`))
         btn.onclick = () => this.cb.onBranch(t.id, idx)
+        attachTip(btn, () => branchTip(def.name, b, cost, hex(def.color)))
         br.append(btn)
       })
       ctl.append(br)
@@ -681,6 +953,7 @@ export class BattleHud {
   }
 
   hideUpgrade(): void {
+    if (this.upgradeEl) dismissTip() // the tooltip's anchor is about to vanish
     this.upgradeEl?.remove()
     this.upgradeEl = null
   }
@@ -708,6 +981,13 @@ export class BattleHud {
       pk.style.color = hex(card.color)
       c.append(pk)
       c.onclick = () => this.cb.onDraft(i)
+      attachTip(c, () => ({
+        tag: `${card.rarity.toUpperCase()} POWER`,
+        title: card.title,
+        accent: hex(card.color),
+        body: card.desc,
+        foot: 'Drafted powers last the whole run and stack with everything else. Rarer means stronger.',
+      }))
       cards.append(c)
     })
     ov.append(cards)
@@ -779,7 +1059,11 @@ export class BattleHud {
   }
 
   hidePause(): void { this.clearOverlay() }
-  private clearOverlay(): void { this.overlayEl?.remove(); this.overlayEl = null }
+  private clearOverlay(): void {
+    if (this.overlayEl) dismissTip()
+    this.overlayEl?.remove()
+    this.overlayEl = null
+  }
 
   setPauseIcon(paused: boolean): void { this.pauseBtn.textContent = paused ? '▶' : '❚❚' }
   setSpeed(speed: number): void { this.speedBtn.textContent = `${speed}×` }
@@ -883,6 +1167,7 @@ export class BattleHud {
   }
 
   dispose(): void {
+    dismissTip()
     this.hideUpgrade()
     this.clearOverlay()
     this.root.remove()
@@ -892,6 +1177,47 @@ export class BattleHud {
 
 // ---- helpers (view-only) ----
 function starStr(n: number): string { return '★'.repeat(n) + '☆'.repeat(5 - n) }
+function rateStr(cooldown: number): string {
+  return `${(1 / Math.max(0.05, cooldown)).toFixed(1)}/s`
+}
+// Which armor types a damage type counters / struggles against (from the grid).
+function gridCounters(dt: DamageType): { strong: string[]; weak: string[] } {
+  const row = GRID[dt]
+  const strong: string[] = []
+  const weak: string[] = []
+  for (const [armor, mult] of Object.entries(row)) {
+    if (mult >= 1.25) strong.push(armor)
+    else if (mult <= 0.75) weak.push(armor)
+  }
+  return { strong, weak }
+}
+function branchTip(towerName: string, b: TowerBranch, cost: number, accent: string): TipContent {
+  const rows: TipRow[] = [
+    { k: 'Damage', v: String(b.damage) },
+    { k: 'Rate', v: rateStr(b.cooldown) },
+    { k: 'Range', v: `${b.range} tiles` },
+  ]
+  if (b.damageType) rows.push({ k: 'Becomes', v: `${b.damageType} damage`, c: '#a8e9ff' })
+  if (b.splash) rows.push({ k: 'Splash', v: `${b.splash} tiles`, c: '#ff9a5c' })
+  if (b.stunDuration) rows.push({ k: 'Stun', v: `${b.stunDuration}s`, c: '#6bd6ff' })
+  if (b.slowFactor !== undefined) rows.push({ k: 'Slow', v: `to ${Math.round(b.slowFactor * 100)}% speed`, c: '#6bd6ff' })
+  if (b.burnDps) rows.push({ k: 'Burn', v: `${b.burnDps}/s`, c: '#ff9a5c' })
+  if (b.zoneDps) rows.push({ k: 'Ground fire', v: `${b.zoneDps}/s · ${b.zoneDuration}s`, c: '#ff9a5c' })
+  if (b.seeking) rows.push({ k: 'Shots', v: 'homing — never miss', c: '#ff9a5c' })
+  if (b.chainCount !== undefined) rows.push({ k: 'Chains', v: b.chainCount === 0 ? 'no — one huge bolt' : `×${b.chainCount} jumps`, c: '#ffe14a' })
+  if (b.buffDamage) rows.push({ k: 'Aura', v: `+${Math.round(b.buffDamage * 100)}% dmg${b.buffReach ? ` · ${b.buffReach}-tile reach` : ''}`, c: '#c9b6ff' })
+  if (b.dealsDamage) rows.push({ k: 'Beam', v: 'also attacks while buffing', c: '#c9b6ff' })
+  if (b.armorPen) rows.push({ k: 'Armor pen', v: String(b.armorPen), c: '#a8e9ff' })
+  rows.push({ k: 'Cost', v: `$${cost}`, c: '#ffe27a' })
+  return {
+    tag: `${towerName.toUpperCase()} · FINAL FORM`,
+    title: b.name,
+    accent,
+    body: b.blurb,
+    rows,
+    foot: 'Permanent choice — the other path is sealed for this tower.',
+  }
+}
 function comboColor(count: number): number {
   const t = Math.min(1, count * 0.08)
   // gold → magenta ramp

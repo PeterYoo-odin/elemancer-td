@@ -17,6 +17,7 @@ import { REALM_ENTRY, LEVEL_STORY } from '../game/story'
 import { unlockCodex, lockedMoroseFragments, codexFreshCount } from '../game/codex'
 import { CodexPanel } from './CodexPanel'
 import { heroById } from '../game/heroes'
+import { attachTip, dismissTip } from './tooltip'
 
 export interface WorldMapHandlers {
   onPlay(levelId: string): void
@@ -411,6 +412,37 @@ export class WorldMap {
       if (nodeEl) this.onNodeTap(nodeEl)
     })
     this.caravanEl = this.root.querySelector<HTMLElement>('[data-caravan]')
+
+    // long-press / hover tooltips on the fixed chrome + every level node
+    const starChip = this.root.querySelector<HTMLElement>('.ewm-starchip')
+    if (starChip) {
+      attachTip(starChip, () => ({
+        tag: 'PROGRESS', title: `★ ${economy.totalStars()} of ${LEVELS.length * 3}`, accent: '#ffd54a',
+        body: 'Earn up to 3 stars per level by winning with lives to spare. Stars measure how much of Aetheria you have repainted — and unlock the road ahead.',
+      }))
+    }
+    const codexBtn = this.root.querySelector<HTMLElement>('[data-codex]')
+    if (codexBtn) {
+      attachTip(codexBtn, () => ({
+        tag: 'CODEX', title: 'The Cadet’s Sketchbook', accent: '#ffe08a',
+        body: 'Every page, legend and torn fragment the caravan has gathered on the road. New finds are marked until you read them.',
+      }))
+    }
+    for (const nodeEl of Array.from(this.root.querySelectorAll<HTMLElement>('.ewm-node'))) {
+      const node = this.nodes.find((n) => n.lvl.id === nodeEl.dataset.level)
+      if (!node) continue
+      attachTip(nodeEl, () => ({
+        tag: `LEVEL ${node.lvl.index + 1} · ${node.realm.name.toUpperCase()}`,
+        title: node.state === 'locked' ? 'Sealed by the Greying' : node.lvl.name,
+        accent: node.state === 'locked' ? '#8a80aa' : node.realm.ui.accent,
+        body:
+          node.state === 'locked'
+            ? 'The road does not reach this far yet. Clear the level before it to lift the grey.'
+            : node.state === 'done'
+              ? `Cleared with ${economy.starsFor(node.lvl.id)}/3 stars. Replay it to paint the rest back.`
+              : 'The caravan stands ready. Tap to ride out.',
+      }))
+    }
 
     this.reveal()
   }
@@ -860,6 +892,7 @@ export class WorldMap {
     window.cancelAnimationFrame(this.walkRaf)
     this.walkSkipFn = null
     dismissBark()
+    dismissTip()
     this.root.remove()
   }
 }
