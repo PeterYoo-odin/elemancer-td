@@ -8,7 +8,7 @@ import { economy } from '../game/economy'
 import { HERO_ORDER, heroById } from '../game/heroes'
 import {
   WYRM_ORDER, wyrmById, resolveBond, bondTier, bondTooltip, isPrismHero,
-  WYRM_ACT_REALMS, WYRM_MAX_LEVEL, RANKED_WYRM_LEVEL, TIER_LABEL, type BondTier,
+  WYRM_ACT_REALMS, WYRM_MAX_LEVEL, RANKED_WYRM_LEVEL, TIER_LABEL, wyrmBuffsTowers, type BondTier,
 } from '../game/wyrms'
 import { wyrmArtUrl } from './wyrmArt'
 import { heroArtUrl } from './heroArt'
@@ -208,7 +208,7 @@ export class BondPanel {
           <div class="wn">${wdef.emoji} ${esc(wdef.name)}</div>
           <div class="ws">${esc(wdef.title)} · ${esc(b.stageLabel)} Lv ${lvl}/${WYRM_MAX_LEVEL}</div>
           <div class="wl"><span class="k">Breath</span> ${Math.round(b.breathDamage)} ${wdef.element}, ${b.breathRadiusTiles.toFixed(1)}t/${b.breathCd.toFixed(1)}s
-            · <span class="k">Aura</span> +${Math.round((b.heroAmp - 1) * 100)}% hero, +${Math.round(b.towerBuff * 100)}% ${wdef.element} towers${b.status ? ` · ${b.status.toUpperCase()}` : ''}</div>
+            · <span class="k">Aura</span> +${Math.round((b.heroAmp - 1) * 100)}% hero${wyrmBuffsTowers(wdef.element) ? `, +${Math.round(b.towerBuff * 100)}% ${wdef.element} towers` : ''}${b.status ? ` · ${b.status.toUpperCase()}` : ''}</div>
           ${ultLine}
         </div>
       </div>`

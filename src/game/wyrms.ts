@@ -23,6 +23,18 @@
 
 import type { AuraElement } from '../sim/reactions'
 import { clamp, ELEMENT_COLOR, type Element } from '../sim/combat'
+import { TOWERS } from './towers'
+
+// Which wheel elements have a tower kind that shares them — so the aura's
+// "nearby same-element towers" bonus is REAL (no mystery stats). Derived from
+// the live tower roster: flame=Fire, frost=Water, storm=Storm, arcane=Light.
+// Nature/Dark have no matching tower, so their Wyrms only buff the hero.
+const TOWER_ELEMENTS: Set<Element> = new Set(
+  (Object.keys(TOWERS) as (keyof typeof TOWERS)[]).map((k) => TOWERS[k].element).filter((e): e is Element => !!e),
+)
+export function wyrmBuffsTowers(element: Element): boolean {
+  return TOWER_ELEMENTS.has(element)
+}
 
 export type WyrmId = 'pyrax' | 'glaciaxis' | 'voltaryx' | 'verdwyrm' | 'lumenwyrm' | 'umbrawyrm'
 export type BondTier = 'perfect' | 'good' | 'regular'
@@ -275,7 +287,11 @@ export function bondTooltip(b: BondResolution): string[] {
   lines.push(`${b.wyrm.emoji} ${b.wyrm.name} · ${b.tierLabel} (${b.tier.toUpperCase()})`)
   lines.push(`${b.stageLabel} · Lv ${b.level} — ${b.wyrm.breathName}`)
   lines.push(`Breath: ${Math.round(b.breathDamage)} ${b.wyrm.element} dmg, ${b.breathRadiusTiles.toFixed(1)}-tile burst every ${b.breathCd.toFixed(1)}s (feeds reactions)`)
-  lines.push(`Aura: ${pct(b.heroAmp)} bonded-hero damage · ${pctf(b.towerBuff)} nearby ${b.wyrm.element} towers`)
+  lines.push(
+    wyrmBuffsTowers(b.wyrm.element)
+      ? `Aura: ${pct(b.heroAmp)} bonded-hero damage · ${pctf(b.towerBuff)} nearby ${b.wyrm.element} towers`
+      : `Aura: ${pct(b.heroAmp)} bonded-hero damage (no ${b.wyrm.element} tower exists — hero-only)`,
+  )
   if (b.status) lines.push(`Breath also inflicts ${b.status.toUpperCase()}`)
   if (b.ult) lines.push(`★ ${b.ult.name} (fused ultimate): ${b.ult.blurb}`)
   else if (b.named) lines.push(`✦ ${b.named.name}: ${b.named.blurb}`)

@@ -13,6 +13,7 @@ import { RARITY_COLOR } from '../game/heroes'
 import { heroArtUrl } from './heroArt'
 import { heroStats, heroSpellScaled, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
+import { wyrmBuffsTowers } from '../game/wyrms'
 import { glyphIcon, iconMarkup, currencyIcon } from './icons'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
@@ -1094,7 +1095,9 @@ export class BattleHud {
       const w = entry.wyrm
       rows.push({ k: `${w.wyrm.emoji} ${w.wyrm.name}`, v: `${w.tierLabel} (${w.tier.toUpperCase()}) · ${w.stageLabel} Lv ${w.level}`, c: hex(w.wyrm.color) })
       rows.push({ k: 'Breath', v: `${Math.round(w.breathDamage)} ${w.wyrm.element} · ${w.breathRadiusTiles.toFixed(1)} tiles / ${w.breathCd.toFixed(1)}s`, c: hex(w.wyrm.color) })
-      rows.push({ k: 'Bond aura', v: `+${Math.round((w.heroAmp - 1) * 100)}% hero dmg · +${Math.round(w.towerBuff * 100)}% ${w.wyrm.element} towers`, c: '#c9b6ff' })
+      rows.push({ k: 'Bond aura', v: wyrmBuffsTowers(w.wyrm.element)
+        ? `+${Math.round((w.heroAmp - 1) * 100)}% hero dmg · +${Math.round(w.towerBuff * 100)}% ${w.wyrm.element} towers`
+        : `+${Math.round((w.heroAmp - 1) * 100)}% hero dmg (hero-only — no ${w.wyrm.element} tower)`, c: '#c9b6ff' })
       if (w.ult) rows.push({ k: `★ ${w.ult.name}`, v: w.ult.blurb, c: hex(w.wyrm.color) })
     }
     // RESONANCE — hero + 2/4+ towers of their resonant kind
