@@ -26,6 +26,7 @@ import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
 import { appSettings } from '../ui/settings'
 import { heroCutout } from '../ui/heroArt'
+import { enemyArt, enemyArtReady } from '../ui/enemyArt'
 
 const TILE_PX = 80
 const CX = MAP_X + MAP_W / 2 // 360
@@ -78,6 +79,15 @@ interface EnemySlot {
   // colour ('keeper' kind only; retinted per Keeper since the pool is shared)
   crown: THREE.Mesh | null
   crownMat: THREE.MeshBasicMaterial | null
+  // Painted "greyling" billboard token (async) — REPLACES the primitive body mesh
+  // once the hand-painted PNG lands; the mesh stays as the load/miss fallback.
+  art: THREE.Sprite | null
+  artMat: THREE.SpriteMaterial | null
+  artH: number // billboard height in world units (drives the squash/bob math)
+  accentGlow: THREE.Sprite | null // additive signature-accent halo (skipped for swarm)
+  accentGlowMat: THREE.SpriteMaterial | null
+  accent: number // signature Greying accent colour
+  boss: boolean // keeper / Titan → set-piece scale + extra spectacle
 }
 
 // One animated garnish on a tower (floating ring / orb / flame / runestone):
@@ -1151,11 +1161,78 @@ export class BattleView3D {
     }
 
     this.scene.add(group)
-    return {
+    const slot: EnemySlot = {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
       auraPip: null, auraPipMat: null, crown, crownMat,
+      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss,
     }
+
+    // Swap the primitive body for the painted "greyling" billboard once its PNG
+    // decodes (cached per kind — first battle pays one decode, rest resolve
+    // instantly). Load/miss → keep the mesh so nothing ever breaks. The slot pool
+    // is keyed by kind, so this attaches at most once and survives reuse.
+    enemyArt(e.kind).then((art) => {
+      if (!art || this.disposed || slot.art) return
+      const artH = r * (def.boss ? 3.6 : 2.8) // boss kinds read as set-pieces
+      const w = artH * art.aspect
+      const mat = new THREE.SpriteMaterial({ map: art.tex, transparent: true, alphaTest: 0.04, depthWrite: false })
+      const sprite = new THREE.Sprite(mat)
+      sprite.scale.set(w, artH, 1)
+      // ground units plant their feet on the tile top (group sits at GROUND+r, so
+      // the ground plane is local −r); flyers keep hovering near the body centre.
+      const posY = def.isAir ? artH * 0.12 : artH / 2 - r
+      sprite.position.y = posY
+      sprite.userData.y0 = posY
+      sprite.userData.w = w
+      sprite.userData.h = artH
+      group.add(sprite)
+      slot.art = sprite
+      slot.artMat = mat
+      slot.artH = artH
+      body.visible = false
+
+      // signature accent glow: a soft additive halo in the archetype's Greying
+      // colour so roles read at a glance. Skipped for swarm — dense clusters, and
+      // the painted silhouette already carries the yellow read.
+      if (e.kind !== 'swarm') {
+        const gmat = new THREE.SpriteMaterial({ map: this.enemyGlowTexture(), color: art.accent, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+        const glow = new THREE.Sprite(gmat)
+        const gs = Math.max(w, artH) * 1.5
+        glow.scale.set(gs, gs, 1)
+        glow.position.y = posY
+        glow.renderOrder = -1 // draw behind the billboard so it blooms around the edges
+        group.add(glow)
+        slot.accentGlow = glow
+        slot.accentGlowMat = gmat
+      }
+
+      // lift the HP bar / crown clear of the taller token
+      const barY = posY + artH / 2 + 0.3
+      hpBg.position.y = barY
+      hpFill.position.y = barY
+      if (crown) crown.position.y = posY + artH / 2 + 0.05
+    })
+    return slot
+  }
+
+  // shared soft radial-glow texture for enemy accent halos (one upload, reused)
+  private enemyGlowTex: THREE.CanvasTexture | null = null
+  private enemyGlowTexture(): THREE.CanvasTexture {
+    if (this.enemyGlowTex) return this.enemyGlowTex
+    const c = document.createElement('canvas')
+    c.width = 64
+    c.height = 64
+    const g = c.getContext('2d')!
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+    grad.addColorStop(0, 'rgba(255,255,255,0.9)')
+    grad.addColorStop(0.45, 'rgba(255,255,255,0.35)')
+    grad.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = grad
+    g.fillRect(0, 0, 64, 64)
+    this.enemyGlowTex = new THREE.CanvasTexture(c)
+    this.disposables.push(this.enemyGlowTex)
+    return this.enemyGlowTex
   }
 
   private shadowMatCache: THREE.MeshBasicMaterial | null = null
@@ -1439,6 +1516,17 @@ export class BattleView3D {
     else if (slowed) { s.bodyMat.color.setHex(0x8fe9ff); s.bodyMat.emissive.setHex(0x4ad9ff); s.bodyMat.emissiveIntensity = 0.35 }
     else if (burning) { s.bodyMat.color.setHex(0xffb15c); s.bodyMat.emissive.setHex(0xff6a2c); s.bodyMat.emissiveIntensity = 0.5 }
     else { s.bodyMat.color.setHex(e.def.color); s.bodyMat.emissive.setHex(e.def.color); s.bodyMat.emissiveIntensity = 0.28 }
+
+    // painted billboard shares the same status read via a colour multiply (works
+    // under reduce-motion — it's tint, not motion). Frozen/stunned freezes the
+    // walk pose too (animSpeed 0 halts walkT), keeping the frozen-mid-gesture trick.
+    if (s.artMat) {
+      if (e.hitFlash > 0) s.artMat.color.setHex(0xffffff)
+      else if (stunned) s.artMat.color.setHex(0x9fd8ff)
+      else if (slowed) s.artMat.color.setHex(0xc2ecff)
+      else if (burning) s.artMat.color.setHex(0xffc39a)
+      else s.artMat.color.setHex(0xffffff)
+    }
 
     // hit squash impulse
     if (e.hitFlash > 0 && s.hitT <= 0) s.hitT = 0.14
@@ -1818,19 +1906,42 @@ export class BattleView3D {
     mesh.position.set(wx(simX), 0.7, wz(simY))
     this.scene.add(mesh)
     this.transients.push({ obj: mesh, mat, geo, t: 0, life: 0.3, kind: 'flash', baseScale: boss ? 3.5 : 1.8, fade: true })
-    // dissolving body ghost: pops up + inflates + fades — the "kill" read
-    const bodyGeo = kind ? this.enemyGeo.get(kind) : undefined
-    if (bodyGeo) {
-      const gm = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
-      const ghost = new THREE.Mesh(bodyGeo, gm) // shares pooled geometry — never disposed here
+    // dissolving body ghost: pops up + inflates + fades — the "kill" read. Prefer
+    // the painted billboard so the ghost matches the greyling; fall back to the
+    // primitive mesh geometry if the art hasn't decoded (or the kind has none).
+    const readyArt = kind ? enemyArtReady(kind) : null
+    if (readyArt) {
+      const gm = new THREE.SpriteMaterial({ map: readyArt.tex, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+      const ghost = new THREE.Sprite(gm)
+      const h = (boss ? 1.3 : 0.7) // world-height seed; the 'pop' handler inflates it
+      ghost.userData.w0 = h * readyArt.aspect
+      ghost.userData.h0 = h
+      ghost.scale.set(h * readyArt.aspect, h, 1)
       ghost.position.set(wx(simX), 0.55, wz(simY))
       this.scene.add(ghost)
-      this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.5 : 0.34, kind: 'pop', baseScale: boss ? 2 : 1.45, fade: true, vy: boss ? 2.4 : 1.8 })
+      this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.55 : 0.36, kind: 'pop', baseScale: boss ? 1.9 : 1.4, fade: true, vy: boss ? 2.4 : 1.8 })
+    } else {
+      const bodyGeo = kind ? this.enemyGeo.get(kind) : undefined
+      if (bodyGeo) {
+        const gm = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+        const ghost = new THREE.Mesh(bodyGeo, gm) // shares pooled geometry — never disposed here
+        ghost.position.set(wx(simX), 0.55, wz(simY))
+        this.scene.add(ghost)
+        this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.5 : 0.34, kind: 'pop', baseScale: boss ? 2 : 1.45, fade: true, vy: boss ? 2.4 : 1.8 })
+      }
     }
-    // ground shockwave on every kill; camera speaks only for bosses
+    // ground shockwave on every kill; the Titan gets a screen-filling finale.
     this.pushRing(simX, simY, boss ? 120 : 55, color, boss ? 0.9 : 0.5)
-    if (boss) { this.shake(0.18); this.pushIn(0.8) }
-    else this.shake(0.035)
+    if (boss) {
+      // stacked shock rings + a bright flare + a hard camera bite — a set-piece end
+      this.pushRing(simX, simY, 210, 0xffffff, 0.85)
+      this.pushRing(simX, simY, 300, color, 0.7)
+      this.spellFlash(simX, simY, 220, 0xfff2ff, 3.2)
+      this.emitParticles(wx(simX), 0.7, wz(simY), 0xffffff, 26, 5)
+      this.shake(0.26)
+      this.pushIn(1.1)
+      this.bloomPulse(0.5)
+    } else this.shake(0.035)
   }
 
   fxMuzzle(simX: number, simY: number, tsimX: number, tsimY: number, color: number, kind: TowerKind): void {
@@ -2035,9 +2146,17 @@ export class BattleView3D {
       } else if (tr.kind === 'pop') {
         // death ghost: quick inflate + rise, then the generic fade dissolves it
         const e = 1 - (1 - k) * (1 - k)
-        tr.obj.scale.setScalar((tr.baseScale ?? 1.4) * (0.9 + e * 0.9))
+        const infl = (tr.baseScale ?? 1.4) * (0.9 + e * 0.9)
+        if (tr.obj instanceof THREE.Sprite) {
+          // painted ghost: preserve aspect (uniform setScalar would distort it)
+          const w0 = tr.obj.userData.w0 as number
+          const h0 = tr.obj.userData.h0 as number
+          tr.obj.scale.set(w0 * infl, h0 * infl, 1)
+        } else {
+          tr.obj.scale.setScalar(infl)
+          tr.obj.rotation.y += dt * 3
+        }
         tr.obj.position.y += (tr.vy ?? 1.8) * (1 - k) * dt
-        tr.obj.rotation.y += dt * 3
       }
       if (tr.fade) {
         const m = Array.isArray(tr.mat) ? tr.mat[0] : tr.mat
@@ -2111,18 +2230,41 @@ export class BattleView3D {
       const stretch = 1 + Math.sin(s.walkT * 2) * 0.06 * s.animSpeed
       let sqX = 1 / Math.sqrt(stretch)
       let sqY = stretch
+      let hitK = 0
       if (s.hitT > 0) {
         s.hitT -= dt
-        const k = Math.max(0, s.hitT / 0.14)
-        sqX *= 1 + k * 0.3
-        sqY *= 1 - k * 0.22
-        s.body.position.z = -k * 0.09 // knockback nudge, opposite travel
-      } else {
-        s.body.position.z = 0
+        hitK = Math.max(0, s.hitT / 0.14)
+        sqX *= 1 + hitK * 0.3
+        sqY *= 1 - hitK * 0.22
       }
-      s.body.scale.set(sqX, sqY, sqX)
-      s.body.position.y = s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.08 : hop * 0.07 * s.animSpeed
-      if (s.isAir) s.body.rotation.y += dt * 1.4
+      if (s.art) {
+        // painted billboard: same walk squash/stretch + hit punch, applied to the
+        // sprite's base dims. Facing is camera-locked (that's the billboard read).
+        const w = s.art.userData.w as number
+        const h = s.art.userData.h as number
+        s.art.scale.set(w * sqX, h * sqY, 1)
+        const y0 = s.art.userData.y0 as number
+        // subtle idle bob (walk hop for ground, gentle float for flyers); frozen
+        // static under reduce-motion so status still reads without motion.
+        const bob = this.motionOk ? (s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.06 : hop * 0.06 * s.animSpeed) : 0
+        s.art.position.y = y0 + bob
+        s.body.position.z = 0
+        // accent glow: gentle breathing pulse, flares white on a hit
+        if (s.accentGlow && s.accentGlowMat) {
+          s.accentGlow.position.y = s.art.position.y
+          const base = this.motionOk ? 0.32 + 0.12 * Math.sin(this.clockT * 2.4 + s.walkT) : 0.36
+          s.accentGlowMat.opacity = Math.min(0.95, base + hitK * 0.7)
+          const gs = Math.max(w, h) * (1.5 + hitK * 0.35)
+          s.accentGlow.scale.set(gs, gs, 1)
+          if (hitK > 0) s.accentGlowMat.color.setRGB(1, 1, 1)
+          else s.accentGlowMat.color.setHex(s.accent)
+        }
+      } else {
+        s.body.position.z = hitK > 0 ? -hitK * 0.09 : 0 // knockback nudge, opposite travel
+        s.body.scale.set(sqX, sqY, sqX)
+        s.body.position.y = s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.08 : hop * 0.07 * s.animSpeed
+        if (s.isAir) s.body.rotation.y += dt * 1.4
+      }
       // burning → embers (throttled per enemy so swarms stay cheap)
       if (s.burning) {
         s.emberAcc += dt
@@ -2323,6 +2465,8 @@ export class BattleView3D {
     const disposeSlot = (s: EnemySlot) => {
       s.bodyMat.dispose()
       s.hpFillMat.dispose()
+      s.artMat?.dispose() // painted-billboard material (shared texture is cached, not disposed)
+      s.accentGlowMat?.dispose()
       if (s.shield) { /* geo/mat tracked in disposables */ }
     }
     for (const [, s] of this.enemyViews) disposeSlot(s)
