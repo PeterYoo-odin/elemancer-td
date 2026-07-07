@@ -12,6 +12,19 @@ import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
 import { readLaunchParams } from './game/seedcode'
 import { playCutscene } from './ui/Cutscene'
+import { captureAttribution, reportAttribution, getReferrer } from './game/attribution'
+import { economy } from './game/economy'
+import { registerServiceWorker } from './ui/pwa'
+
+// GROWTH FUNNEL: a shared/ad/social link drops the player straight into playable
+// game. Snapshot the marketing params (?ref= · ?utm_* · ?campaign= · ?src= · ?c=)
+// first-touch for admin attribution, record any inbound referral, and try the
+// backend seam (no-op without a configured endpoint). All non-blocking; the game
+// boots exactly as before. The installable-PWA shell registers after load.
+captureAttribution()
+economy.setReferredBy(getReferrer())
+reportAttribution()
+registerServiceWorker()
 
 // The Odin Platforms boot splash goes up first (a DOM overlay above the canvas)
 // and is gated behind a tap so the thunderclap is allowed to play. Phaser boots

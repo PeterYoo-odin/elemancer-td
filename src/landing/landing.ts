@@ -6,6 +6,8 @@
 import './landing.css'
 import { dailySeed, seedToCode } from '../game/seedcode'
 import { HEROES, HERO_ORDER } from '../game/heroes'
+import { captureAttribution, reportAttribution, getReferrer } from '../game/attribution'
+import { registerServiceWorker, canInstall, showInstallCard } from '../ui/pwa'
 
 // ---------------------------------------------------------------------------
 //  Today's seed — client-side + deterministic: every visitor worldwide derives
@@ -221,9 +223,37 @@ function initFooter(): void {
   })
 }
 
+// ---------------------------------------------------------------------------
+//  Growth: capture the marketing params first-touch (?ref= · ?utm_* · ?campaign=
+//  · ?src= · ?c=), register the installable-PWA shell, and — when a friend's
+//  invite brought this visitor — warm the welcome copy so it feels personal.
+//  Same-origin localStorage is shared with the game at /, so capturing here is
+//  enough; clicking PLAY carries the attribution through with zero query juggling.
+// ---------------------------------------------------------------------------
+function initGrowth(): void {
+  captureAttribution()
+  reportAttribution()
+  registerServiceWorker()
+
+  if (getReferrer()) {
+    const bundle = document.getElementById('hero-bundle')
+    if (bundle) {
+      bundle.innerHTML =
+        '🎁 A friend invited you — your welcome bundle is <strong>upgraded</strong>. ' +
+        'Play now → claim 2000💎 + a starter skin + a referred-only dye. Ranked stays untouched.'
+    }
+  }
+
+  // Tasteful install affordance: only if installable and not already dismissed.
+  // Wait for engagement (the beforeinstallprompt event often lands after load).
+  const maybeInstall = (): void => { if (canInstall()) showInstallCard() }
+  window.addEventListener('load', () => window.setTimeout(maybeInstall, 4000), { once: true })
+}
+
 initSeedWidget()
 initHeroRow()
 initAttractEmbed()
 initTrailer()
 initSignup()
 initFooter()
+initGrowth()

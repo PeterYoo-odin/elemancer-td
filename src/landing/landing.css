@@ -182,6 +182,18 @@ section { padding: clamp(2.5rem, 7vw, 5rem) 1rem; }
   text-shadow: 0 2px 12px rgba(5, 3, 8, 0.9);
 }
 .hero-ctas { display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center; }
+.hero-bundle {
+  margin: 1.1rem auto 0;
+  max-width: 34rem;
+  font-size: clamp(0.82rem, 2.6vw, 0.98rem);
+  color: #ffe9a8;
+  background: rgba(255, 200, 90, 0.08);
+  border: 1px solid rgba(255, 200, 90, 0.28);
+  border-radius: 12px;
+  padding: 0.6rem 0.9rem;
+  text-shadow: 0 1px 8px rgba(5, 3, 8, 0.9);
+}
+.hero-bundle strong { color: #fff; }
 .hero-live-note {
   margin-top: 1.1rem;
   font-size: 0.85rem;

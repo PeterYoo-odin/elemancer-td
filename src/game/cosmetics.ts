@@ -45,6 +45,8 @@ export interface Sku {
   gate?: { levelClear: string; label: string }
   /** true → earned only from the Prism Pass, never sold on the shelf */
   passExclusive?: boolean
+  /** true → granted by a growth promo (welcome bundle / referral), never sold */
+  promoExclusive?: boolean
   /** shown on the card; convenience items always carry the casual-only tag */
   casualOnly?: boolean
 }
@@ -103,15 +105,22 @@ export const CATALOG: Sku[] = [
   { id: 'sv-meteor-ember', kind: 'spellVfx', name: 'Emberfall Comet', desc: 'Premium pass VFX: your meteor falls in Emberwaste gold.', price: 0, currency: 'diamonds', slot: 'spell:meteor', spellKey: 'meteor', spellColor: 0xffc23c, passExclusive: true },
   { id: 'ts-storm-emberstorm', kind: 'towerSkin', name: 'Emberstorm', desc: 'Premium pass skin: storm bolts in burning orange.', price: 0, currency: 'diamonds', slot: 'tower:storm', towerKind: 'storm', palette: { color: 0xff9040, accent: 0x802e08 }, passExclusive: true },
   { id: 'hs-ember-emberlord', kind: 'heroSkin', name: 'Ember, Emberlord', desc: 'Premium pass finale: legendary molten-crown recolor of Ember’s portrait and token.', price: 0, currency: 'diamonds', slot: 'hero:ember', heroTint: { tint: 0xffb060, css: 'saturate(1.5) contrast(1.08) brightness(1.05)' }, passExclusive: true },
+
+  // --- Growth promos (welcome bundle + referral; GRANTED never sold, cosmetic only) ---
+  { id: 'ts-cannon-firstlight', kind: 'towerSkin', name: 'Firstlight Cannon', desc: 'Welcome starter skin: a dawn-gold “first light” palette on your Cannon. Exclusive to new Chromancers — never sold. Pure paint; Ranked ignores it.', price: 0, currency: 'diamonds', slot: 'tower:cannon', towerKind: 'cannon', palette: { color: 0xffd27a, accent: 0x9a5a10 }, promoExclusive: true },
+  { id: 'dye-referred', kind: 'dye', name: 'Kindred Dye', desc: 'Referred-friend exclusive: a warm kindred-rose UI accent for players who arrived on a friend’s invite. Granted, never sold.', price: 0, currency: 'diamonds', slot: 'dye', dyeAccent: '#ff8fb0', promoExclusive: true },
+  { id: 'frame-restorer', kind: 'frame', name: 'Restorer Frame', desc: 'Referral reward (3 friends): a woven-vine flourish around your CHROMANCER wordmark. Granted, never sold.', price: 0, currency: 'diamonds', slot: 'frame', promoExclusive: true },
+  { id: 'ts-frost-referral', kind: 'towerSkin', name: 'Auric Frost', desc: 'Referral reward (5 friends): a gilded aurora palette on your Frost tower. Pure paint; granted, never sold.', price: 0, currency: 'diamonds', slot: 'tower:frost', towerKind: 'frost', palette: { color: 0xffe08a, accent: 0x7a5a10 }, promoExclusive: true },
+  { id: 'dye-restorers-wall', kind: 'dye', name: 'Restorers-Wall Dye', desc: 'Referral reward (10 friends): a legendary iridescent UI dye + a Restorers-Wall credit. Granted, never sold.', price: 0, currency: 'diamonds', slot: 'dye', dyeAccent: '#c9a2ff', promoExclusive: true },
 ]
 
 export function skuById(id: string): Sku | undefined {
   return CATALOG.find((s) => s.id === id)
 }
 
-/** Everything sold on the shelf (pass exclusives are earned, not sold). */
+/** Everything sold on the shelf (pass + promo exclusives are earned, not sold). */
 export function shelfSkus(): Sku[] {
-  return CATALOG.filter((s) => !s.passExclusive)
+  return CATALOG.filter((s) => !s.passExclusive && !s.promoExclusive)
 }
 
 // ---------------------------------------------------------------------------

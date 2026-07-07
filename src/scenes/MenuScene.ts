@@ -54,7 +54,7 @@ export class MenuScene extends Phaser.Scene {
   private showRewards(): void {
     if (!this.front) return
     const idle = economy.claimIdle()
-    const daily = economy.claimDaily()
+    const streak = economy.claimLoginStreak()
     const lines: string[] = []
     let title = ''
     if (idle.coins > 0) {
@@ -63,10 +63,23 @@ export class MenuScene extends Phaser.Scene {
       lines.push(`You earned ${idle.coins} coins`)
       lines.push(mins >= 60 ? `over ${(mins / 60).toFixed(1)}h${idle.capped ? ' (max)' : ''}` : `over ${mins} min`)
     }
-    if (daily > 0) {
-      if (!title) title = 'DAILY BONUS'
+    if (streak) {
+      if (!title) title = streak.isJackpot ? 'STREAK JACKPOT!' : 'DAILY REWARD'
       else lines.push('')
-      lines.push(`Daily bonus: +${daily} diamonds`)
+      const r = streak.reward
+      const parts: string[] = []
+      if (r.diamonds) parts.push(`+${r.diamonds} 💎`)
+      if (r.coins) parts.push(`+${r.coins} 🪙`)
+      if (r.prisms) parts.push(`+${r.prisms} ✦`)
+      lines.push(`Day ${streak.streak} streak: ${parts.join(' · ')}`)
+      // the "come back tomorrow" nudge — name tomorrow's escalating reward
+      const info = economy.loginStreakInfo()
+      const t = info.tomorrowReward
+      const tParts: string[] = []
+      if (t.diamonds) tParts.push(`${t.diamonds} 💎`)
+      if (t.coins) tParts.push(`${t.coins} 🪙`)
+      if (t.prisms) tParts.push(`${t.prisms} ✦`)
+      if (tParts.length) lines.push(`Come back tomorrow for ${tParts.join(' · ')} →`)
     }
     if (lines.length) {
       this.front.showRewards(title, lines)

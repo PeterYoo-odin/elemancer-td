@@ -11,6 +11,12 @@
     />
     <link rel="canonical" href="https://chromancer.io/landing" />
     <link rel="icon" type="image/svg+xml" href="./brand/odin-icon.svg" />
+    <!-- Installable PWA: "download" the game to the home screen (no app store). -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Chromancer" />
 
     <!-- Open Graph / unfurls (seed-link prove-it cards ride the same tags later) -->
     <meta property="og:type" content="website" />
@@ -71,6 +77,9 @@
           <a class="btn btn-gold btn-lg" href="./" data-cta="hero-play">PLAY FREE NOW</a>
           <a class="btn btn-ghost btn-lg" href="#trailer">Watch the trailer</a>
         </div>
+        <p class="hero-bundle" id="hero-bundle">
+          🎁 New here? Play now → claim <strong>2000💎 + an exclusive starter skin</strong>. Free, no card. Nothing you claim ever works in Ranked.
+        </p>
         <p class="hero-live-note" id="hero-live-note" hidden>
           ▲ That's not a video — it's the game, playing itself live behind this page.
         </p>

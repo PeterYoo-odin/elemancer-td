@@ -8,6 +8,7 @@
 // reduce-motion, safe-area).
 
 import { todaysDaily } from '../game/seedcode'
+import { withRef } from '../game/referral'
 import { dailyHistory, dailyPB, dailyStreak, dailyDaysPlayed, bestForDay, playedToday, utcDailyDate } from '../game/daily'
 import { appSettings } from './settings'
 import { playUiTick } from './sfx'
@@ -183,7 +184,7 @@ export class DailySeedPage {
     try {
       if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol)) base = location.origin + location.pathname
     } catch { /* non-browser */ }
-    const link = `${base}?seed=${encodeURIComponent(todaysDaily().code)}`
+    const link = withRef(`${base}?seed=${encodeURIComponent(todaysDaily().code)}`)
     const done = (): void => {
       if (!label) return
       const prev = label.textContent

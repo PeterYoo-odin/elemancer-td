@@ -11,6 +11,10 @@ import { playUiTick } from './sfx'
 import { music } from './music'
 import { keyartBackdropUrl } from './heroArt'
 import { menuBanner, prestigeTitle, hasFrame, uiDyeAccent } from '../game/skins'
+import { economy } from '../game/economy'
+import { showReferralPanel } from './ReferralPanel'
+import { showWelcomeReward, welcomeUnclaimed } from './WelcomeReward'
+import { showInstallCard, canInstall } from './pwa'
 
 export interface FrontPageHandlers {
   onPlay(): void
@@ -358,6 +362,8 @@ export class FrontPage {
         <div class="efp-chip c-coin"><span class="efp-coin"></span><span data-coin>0</span></div>
         <div class="efp-chip c-dia"><span class="efp-dia"></span><span data-dia>0</span></div>
         <div class="efp-chip c-prism" data-prismchip hidden>✦ <span data-prism>0</span></div>
+        <button class="efp-gear" data-act="install" data-install aria-label="Install app" title="Install Chromancer" hidden>⬇</button>
+        <button class="efp-gear" data-act="invite" aria-label="Invite friends" title="Invite friends — you both win">📣</button>
         <button class="efp-gear" data-act="settings" aria-label="Settings">${svg(ICONS.gear)}</button>
       </div>
 
@@ -380,6 +386,11 @@ export class FrontPage {
       </div>
 
       <div class="efp-menu">
+        <button class="efp-btn efp-primary efp-in efp-welcome" style="animation-delay:.34s; --a:#ffd873" data-act="welcome" data-welcome hidden>
+          <span class="efp-ic">🎁</span>
+          <span class="efp-btxt"><span class="efp-blabel">CLAIM WELCOME BUNDLE</span><span class="efp-bsub">2000💎 + starter skin + a free spin</span></span>
+          <span class="efp-chev">&#8250;</span>
+        </button>
         <button class="efp-btn efp-primary efp-in" style="animation-delay:.36s" data-act="play">
           <span class="efp-ic">${svg(ICONS.play)}</span>
           <span class="efp-btxt"><span class="efp-blabel">PLAY</span><span class="efp-bsub">Campaign</span></span>
@@ -469,7 +480,22 @@ export class FrontPage {
       else if (act === 'shop') this.leave(() => this.handlers.onShop())
       else if (act === 'endless') this.leave(() => this.handlers.onEndless())
       else if (act === 'daily') this.leave(() => this.handlers.onDaily())
+      else if (act === 'invite') showReferralPanel()
+      else if (act === 'install') showInstallCard({ force: true })
+      else if (act === 'welcome') showWelcomeReward(() => this.refreshGrowth())
     })
+
+    this.refreshGrowth()
+  }
+
+  // Toggle the growth affordances (unclaimed-welcome banner + install button)
+  // and keep the wallet in sync after a claim. Cheap; safe to call repeatedly.
+  private refreshGrowth(): void {
+    const wEl = this.root.querySelector<HTMLElement>('[data-welcome]')
+    if (wEl) wEl.hidden = !welcomeUnclaimed()
+    const iEl = this.root.querySelector<HTMLElement>('[data-install]')
+    if (iEl) iEl.hidden = !canInstall()
+    this.setCurrencies(economy.coins, economy.diamonds, economy.prisms)
   }
 
   setCurrencies(coins: number, diamonds: number, prisms = 0): void {

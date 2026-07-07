@@ -37,6 +37,15 @@ export interface SaveData {
   activeLoadout: number // 0 = party (slot 1); 1+ index into loadouts
   pass: PassSave // Prism Pass season progress (advances by play only)
   restorerName: string // Restorers Wall display name stub ('' = unset)
+  // --- growth loop (all cosmetic / soft-currency / convenience; Ranked ignores it) ---
+  welcomeClaimed: boolean // welcome bundle (2000💎 + starter skin + first spin) claimed
+  firstSpinUsed: boolean // the welcome "first spin" free-reward has been spun
+  loginStreak: number // consecutive UTC days the daily login reward was claimed
+  loginBest: number // longest login streak ever reached
+  loginLastDay: number // epoch-day index of the last claimed login-streak day
+  referredBy: string // inbound referral code that brought this player ('' = organic)
+  referralFriends: number // confirmed friends who played from your link (BACKEND-fed; 0 local-only)
+  referralTiersClaimed: number // referral-ladder tiers already granted to this player
 }
 
 export interface PassSave {
@@ -84,6 +93,14 @@ export function defaultSave(): SaveData {
     activeLoadout: 0,
     pass: defaultPass(),
     restorerName: '',
+    welcomeClaimed: false,
+    firstSpinUsed: false,
+    loginStreak: 0,
+    loginBest: 0,
+    loginLastDay: 0,
+    referredBy: '',
+    referralFriends: 0,
+    referralTiersClaimed: 0,
   }
 }
 
@@ -180,6 +197,16 @@ function coerce(raw: unknown): SaveData {
     if (typeof p.premClaimed === 'number' && isFinite(p.premClaimed)) d.pass.premClaimed = Math.max(0, Math.floor(p.premClaimed))
   }
   if (typeof o.restorerName === 'string') d.restorerName = o.restorerName.slice(0, 24)
+
+  // --- growth loop (additive; old blobs keep the fresh defaults, no migration) ---
+  d.welcomeClaimed = o.welcomeClaimed === true
+  d.firstSpinUsed = o.firstSpinUsed === true
+  if (typeof o.loginStreak === 'number' && isFinite(o.loginStreak)) d.loginStreak = Math.max(0, Math.floor(o.loginStreak))
+  if (typeof o.loginBest === 'number' && isFinite(o.loginBest)) d.loginBest = Math.max(0, Math.floor(o.loginBest))
+  if (typeof o.loginLastDay === 'number' && isFinite(o.loginLastDay)) d.loginLastDay = Math.max(0, Math.floor(o.loginLastDay))
+  if (typeof o.referredBy === 'string') d.referredBy = o.referredBy.slice(0, 24)
+  if (typeof o.referralFriends === 'number' && isFinite(o.referralFriends)) d.referralFriends = Math.max(0, Math.floor(o.referralFriends))
+  if (typeof o.referralTiersClaimed === 'number' && isFinite(o.referralTiersClaimed)) d.referralTiersClaimed = Math.max(0, Math.floor(o.referralTiersClaimed))
   return d
 }
 

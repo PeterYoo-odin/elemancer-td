@@ -28,9 +28,74 @@ import {
   type PassReward,
   type Sku,
 } from './cosmetics'
+import { myReferralCode, isReferralCode, reportReferralEvent, REFERRAL_LADDER, type ReferralRung } from './referral'
 
 const IDLE_CAP_MS = 8 * 60 * 60 * 1000 // 8 hours
 const DAILY_DIAMONDS = 5 // diamonds drip free (~5-15/day with play)
+
+// ---- growth-loop constants (all soft-currency / cosmetic; Ranked ignores) ----
+export const WELCOME_DIAMONDS = 2000 // ≈ $35 face value at pack rates — costs us nothing
+export const WELCOME_SKIN_ID = 'ts-cannon-firstlight' // exclusive starter cosmetic
+export const REFERRED_DYE_ID = 'dye-referred' // referred-friend bundle upgrade
+
+export interface WelcomeGrant {
+  diamonds: number
+  skinId: string
+  referred: boolean // arrived on a friend's invite → bundle upgraded
+  referredDyeId?: string
+}
+
+export interface SpinPrize {
+  currency: 'diamonds' | 'coins' | 'prisms' | 'shards'
+  amount: number
+  label: string
+}
+
+// Welcome "first spin" — a one-time wheel. Every wedge is a currency Ranked
+// FULLY ignores: diamonds/prisms buy only cosmetics; coins buy only casual
+// Workshop nodes. No hero shards here — roster breadth stays earned-by-play, so
+// the wheel can never touch Ranked in any way.
+const FIRST_SPIN_PRIZES: SpinPrize[] = [
+  { currency: 'diamonds', amount: 150, label: '150 💎' },
+  { currency: 'coins', amount: 300, label: '300 🪙' },
+  { currency: 'diamonds', amount: 250, label: '250 💎' },
+  { currency: 'prisms', amount: 5, label: '5 ✦' },
+  { currency: 'prisms', amount: 10, label: '10 ✦' },
+  { currency: 'diamonds', amount: 500, label: '500 💎 · jackpot!' },
+]
+
+export interface StreakReward {
+  diamonds?: number
+  coins?: number
+  prisms?: number
+}
+export interface StreakGrant {
+  streak: number
+  reward: StreakReward
+  continued: boolean
+  isJackpot: boolean
+}
+export interface LoginStreakInfo {
+  streak: number
+  best: number
+  claimable: boolean
+  nextStreak: number
+  todayReward: StreakReward
+  tomorrowReward: StreakReward
+  cycleLength: number
+}
+
+// 7-day login cycle: escalates within the week, then loops. Diamonds are the
+// premium-but-earnable currency; day 7 is the jackpot. Ranked-neutral.
+const LOGIN_CYCLE: StreakReward[] = [
+  { diamonds: 30 },
+  { coins: 120 },
+  { diamonds: 40 },
+  { prisms: 1 },
+  { diamonds: 50 },
+  { coins: 200 },
+  { diamonds: 100 }, // day-7 jackpot
+]
 
 // RANKED NORMALIZATION: endless ignores hero progression — every fielded hero
 // plays at this fixed level, so no purchase OR grind buys ranked power.
@@ -388,6 +453,134 @@ class Economy {
     this.data.diamonds += DAILY_DIAMONDS
     this.save()
     return DAILY_DIAMONDS
+  }
+
+  // ======================================================================
+  //  GROWTH LOOP — welcome bundle, first spin, daily-login streak, referral.
+  //  FAIRNESS INVARIANT: every grant below is diamonds/coins/prisms (all
+  //  earnable free) or a cosmetic SKU (pure paint). The sim reads NONE of it;
+  //  Ranked/Endless/daily-seed ignore all of it by construction.
+  // ======================================================================
+
+  // ---- welcome bundle (the hybrid enticement + activation hook) ----
+  welcomeAvailable(): boolean {
+    return !this.data.welcomeClaimed
+  }
+  /** Was this player brought in on a friend's ?ref= link? (drives the upgrade) */
+  arrivedReferred(): boolean {
+    return this.data.referredBy !== ''
+  }
+  /** Record the inbound referral code once (first-touch), from attribution. */
+  setReferredBy(code: string): void {
+    if (this.data.referredBy || !code) return
+    const c = code.trim().toUpperCase().slice(0, 24)
+    if (c === myReferralCode().toUpperCase()) return // never self-refer
+    if (!isReferralCode(c)) return
+    this.data.referredBy = c
+    this.save()
+  }
+  /** Claim the welcome bundle. Idempotent — a second call returns null. */
+  claimWelcome(): WelcomeGrant | null {
+    if (this.data.welcomeClaimed) return null
+    this.data.welcomeClaimed = true
+    const diamonds = WELCOME_DIAMONDS
+    this.data.diamonds += diamonds
+    this.grantSku(WELCOME_SKIN_ID) // auto-equips (Cannon slot is empty for a new player)
+    const referred = this.arrivedReferred()
+    let referredDyeId: string | undefined
+    if (referred) {
+      this.grantSku(REFERRED_DYE_ID)
+      referredDyeId = REFERRED_DYE_ID
+      // BACKEND SEAM: the friend played + claimed → credit the referrer server-side.
+      reportReferralEvent('friend-played', { referredBy: this.data.referredBy })
+    }
+    this.save()
+    return { diamonds, skinId: WELCOME_SKIN_ID, referred, referredDyeId }
+  }
+
+  // ---- welcome "first spin" — a one-time wheel of SOFT rewards ----
+  firstSpinAvailable(): boolean {
+    return !this.data.firstSpinUsed
+  }
+  firstSpinPrizes(): SpinPrize[] {
+    return FIRST_SPIN_PRIZES
+  }
+  /** Spin the welcome wheel once; grants a soft-currency prize. */
+  firstSpin(): SpinPrize | null {
+    if (this.data.firstSpinUsed) return null
+    this.data.firstSpinUsed = true
+    const prize = FIRST_SPIN_PRIZES[Math.floor(Math.random() * FIRST_SPIN_PRIZES.length)]
+    if (prize.currency === 'diamonds') this.data.diamonds += prize.amount
+    else if (prize.currency === 'coins') this.data.coins += prize.amount
+    else if (prize.currency === 'prisms') this.data.prisms += prize.amount
+    else this.data.heroShards += prize.amount
+    this.save()
+    return prize
+  }
+
+  // ---- daily-login streak (soft-currency; the "come back tomorrow" hook) ----
+  private streakRewardFor(streakDay: number): StreakReward {
+    return LOGIN_CYCLE[(Math.max(1, streakDay) - 1) % LOGIN_CYCLE.length]
+  }
+  loginStreakInfo(): LoginStreakInfo {
+    const today = dayIndex(now())
+    const claimable = today > this.data.loginLastDay
+    // what the streak becomes if claimed right now
+    const next = claimable
+      ? (this.data.loginLastDay === today - 1 ? this.data.loginStreak + 1 : 1)
+      : this.data.loginStreak
+    return {
+      streak: this.data.loginStreak,
+      best: this.data.loginBest,
+      claimable,
+      nextStreak: next,
+      todayReward: this.streakRewardFor(next),
+      tomorrowReward: this.streakRewardFor(next + 1),
+      cycleLength: LOGIN_CYCLE.length,
+    }
+  }
+  /** Claim today's login reward, advancing (or resetting) the streak. */
+  claimLoginStreak(): StreakGrant | null {
+    const today = dayIndex(now())
+    if (today <= this.data.loginLastDay) return null
+    const continued = this.data.loginLastDay === today - 1
+    const streak = continued ? this.data.loginStreak + 1 : 1
+    this.data.loginStreak = streak
+    this.data.loginLastDay = today
+    if (streak > this.data.loginBest) this.data.loginBest = streak
+    const reward = this.streakRewardFor(streak)
+    if (reward.diamonds) this.data.diamonds += reward.diamonds
+    if (reward.coins) this.data.coins += reward.coins
+    if (reward.prisms) this.data.prisms += reward.prisms
+    this.save()
+    return { streak, reward, continued, isJackpot: streak % LOGIN_CYCLE.length === 0 }
+  }
+
+  // ---- referral ladder (referrer side; BACKEND-gated friend count) ----
+  get referralFriends(): number {
+    return this.data.referralFriends
+  }
+  /** State of every rung for the referral UI (unlocked = server-confirmed count). */
+  referralLadderState(): Array<{ rung: ReferralRung; unlocked: boolean; claimed: boolean }> {
+    return REFERRAL_LADDER.map((rung, i) => ({
+      rung,
+      unlocked: this.data.referralFriends >= rung.friends,
+      claimed: this.data.referralTiersClaimed > i,
+    }))
+  }
+  /** Claim a referral rung. Only possible when the backend has confirmed enough
+   *  friends — offline, `referralFriends` stays 0, so nothing is ever fabricated. */
+  claimReferralRung(index: number): boolean {
+    const rung = REFERRAL_LADDER[index]
+    if (!rung) return false
+    if (this.data.referralTiersClaimed > index) return false
+    if (this.data.referralFriends < rung.friends) return false
+    if (this.data.referralTiersClaimed !== index) return false // claim in order
+    this.data.referralTiersClaimed = index + 1
+    if (rung.diamonds) this.data.diamonds += rung.diamonds
+    if (rung.sku) this.grantSku(rung.sku)
+    this.save()
+    return true
   }
 
   // ======================================================================

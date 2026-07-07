@@ -1,0 +1,19 @@
+{
+  "name": "CHROMANCER — Paint the world back",
+  "short_name": "Chromancer",
+  "description": "The hand-painted tower defense that doesn't cheat. Provably-fair runs, a leaderboard money can't climb. Instant web play.",
+  "id": "/",
+  "start_url": "./?src=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0716",
+  "theme_color": "#0a0716",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

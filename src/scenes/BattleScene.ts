@@ -31,6 +31,9 @@ import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } fro
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
 import { ftue, LEVEL_LESSONS, deathLesson } from '../game/onboarding'
 import { Coach } from '../ui/coach'
+import { showWelcomeReward } from '../ui/WelcomeReward'
+import { showInstallCard } from '../ui/pwa'
+import { withRef } from '../game/referral'
 
 // ONBOARDING coach steps for the first-ever battle (L1). Every step completes
 // by DOING; none of them ever blocks input, and skipping ahead auto-advances.
@@ -916,9 +919,11 @@ export class BattleScene extends Phaser.Scene {
   private endlessShards(): number { return 8 + Math.round(this.sim.waveIndex * 2.5) }
   private endlessXp(): number { return 30 + this.sim.waveIndex * 8 }
 
-  // The full deep link for THIS run (level-scoped for campaign/demo, plain for endless).
+  // The full deep link for THIS run (level-scoped for campaign/demo, plain for
+  // endless). Fused with the player's ?ref= so every shared run is ALSO an invite
+  // (the prove-it card, attract card, pause + copy buttons all flow through here).
   private runLink(): string {
-    return seedLink(this.seedCode, this.endless ? undefined : this.level.id)
+    return withRef(seedLink(this.seedCode, this.endless ? undefined : this.level.id))
   }
 
   // The prove-it card payload: pure function of the finished sim + run identity.
@@ -1018,6 +1023,13 @@ export class BattleScene extends Phaser.Scene {
         onContinue: this.demoMode ? () => this.scene.start('Map') : undefined,
       })
       this.tryBark('victory') // post-victory beat: Color Bloom + one line over the card
+      // GROWTH HYBRID: the welcome bundle LANDS right after the first felt win
+      // (the demo or first campaign clear) — the activation + account hook. Never
+      // in attract (headless capture / landing embed must not claim). After the
+      // celebratory claim, offer the PWA install (a completed critical journey).
+      if (!this.attract && economy.welcomeAvailable()) {
+        window.setTimeout(() => showWelcomeReward(() => showInstallCard()), 1100)
+      }
     } else {
       this.hud.flash(0xff3b6b, 0.5)
       battleSfx.defeat()
@@ -1063,6 +1075,11 @@ export class BattleScene extends Phaser.Scene {
       'font:900 22px "Baloo 2","Nunito",system-ui,sans-serif;letter-spacing:1px;' +
       'background:linear-gradient(180deg,#3ad07a,#1f9a54);box-shadow:0 8px 30px rgba(46,220,130,.4);'
     cta.onclick = () => { window.location.href = window.location.origin + window.location.pathname + '?demo=1' }
+    // welcome-bundle enticement — advertise the reward up front so it magnetizes
+    // the click (the celebratory claim lands after the quick demo win).
+    const bundle = document.createElement('div')
+    bundle.textContent = '🎁 Finish the quick demo → claim 2000💎 + an exclusive starter skin'
+    bundle.style.cssText = 'font-size:clamp(12px,3vw,15px);font-weight:700;color:#ffe9a8;'
     const seedBtn = document.createElement('button')
     seedBtn.textContent = `🔗 seed ${this.seedCode} — copy the challenge link`
     seedBtn.style.cssText =
@@ -1072,7 +1089,7 @@ export class BattleScene extends Phaser.Scene {
       const ok = await copyText(this.runLink())
       seedBtn.textContent = ok ? '✓ link copied — go beat it' : '✗ copy failed'
     }
-    ov.append(card, line, cta, seedBtn)
+    ov.append(card, line, cta, bundle, seedBtn)
     document.body.appendChild(ov)
     requestAnimationFrame(() => { ov.style.opacity = '1' })
     this.attractEndEl = ov
