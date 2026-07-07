@@ -26,7 +26,7 @@ export type IconName =
   | 'pencil' | 'link' | 'target' | 'brush' | 'flask'
   // store swatch fallbacks (item kinds)
   | 'frame' | 'crown' | 'hourglass' | 'magnet' | 'bag' | 'mask'
-  | 'chat' | 'gift' | 'hand'
+  | 'chat' | 'gift' | 'hand' | 'warn' | 'atom'
 
 // Inner SVG markup per icon (a 24×24 viewBox). Filled silhouettes read cleanly
 // down to ~14px; stroke details use the same `currentColor`.
@@ -99,6 +99,8 @@ const PATHS: Record<IconName, string> = {
   chat: '<path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h13A2.5 2.5 0 0 1 21 5.5v8A2.5 2.5 0 0 1 18.5 16H9l-5 4.5V16H5.5A2.5 2.5 0 0 1 3 13.5Z"/><g fill="#1a0f30"><circle cx="8.5" cy="9.5" r="1.2"/><circle cx="12" cy="9.5" r="1.2"/><circle cx="15.5" cy="9.5" r="1.2"/></g>',
   gift: '<rect x="3.5" y="8" width="17" height="5" rx="1"/><path d="M5 13h14v7.5A1.5 1.5 0 0 1 17.5 22h-11A1.5 1.5 0 0 1 5 20.5Z"/><path d="M10.5 8V22M13.5 8V22" fill="none" stroke="#1a0f30" stroke-width="1.4"/><path d="M12 8S9.5 3.5 7.5 4.5 8 8 12 8Zm0 0s2.5-4.5 4.5-3.5S16 8 12 8Z"/>',
   hand: '<path d="M9 11V4.5a1.5 1.5 0 0 1 3 0V10m0-.5V3.5a1.5 1.5 0 0 1 3 0V10m0-1V5.5a1.5 1.5 0 0 1 3 0V13c0 4-2.6 8-7 8-3 0-4.7-1.4-6.3-4L4 13.2a1.5 1.5 0 0 1 2.5-1.6L9 14"/>',
+  warn: '<path d="M12 2.5 22.5 21H1.5Z"/><path d="M12 9v5" fill="none" stroke="#1a0f30" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.5" r="1.4" fill="#1a0f30"/>',
+  atom: '<circle cx="12" cy="12" r="2.2"/><g fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="10" ry="4.2"/><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(120 12 12)"/></g>',
 }
 
 export interface IconOpts {
@@ -179,6 +181,7 @@ const EMOJI_ICON: Record<string, IconName> = {
   '🖼️': 'frame', '🖼': 'frame', '👑': 'crown', '⏳': 'hourglass', '⌛': 'hourglass',
   '🧲': 'magnet', '🎒': 'bag', '🎭': 'mask', '⚔': 'blade', '⚔️': 'blade', '➡': 'link',
   '💬': 'chat', '🗨️': 'chat', '🗨': 'chat', '🎁': 'gift', '👆': 'hand', '👉': 'hand', '👇': 'hand',
+  '⚠': 'warn', '⚠️': 'warn', '⚛': 'atom', '⚛️': 'atom',
 }
 
 /** Map a data-table glyph (emoji) to inline-SVG markup. `color` tints it. */

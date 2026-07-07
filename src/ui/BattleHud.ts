@@ -68,6 +68,11 @@ function iconEl<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, mark
   return e
 }
 
+/** Escape text before it goes next to inline-SVG markup in an innerHTML string. */
+function escHud(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 const CSS = `
 .eld-hud, .eld-hud * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
   font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; }
@@ -474,6 +479,9 @@ export class BattleHud {
   private lastLives = -1
   private spellWasReady = new Map<SpellKey, boolean>()
   private heroWasReady = new Map<string, boolean>()
+  // Last badge STATE token per hero, so the inline-SVG glyph is re-parsed only on
+  // a state change (cooldown ↔ ready ↔ $cost) — never every frame (perf on mobile).
+  private heroBadgeState = new Map<string, string>()
 
   constructor(cb: HudCallbacks) {
     this.cb = cb
@@ -747,9 +755,10 @@ export class BattleHud {
       this.startBtn.classList.remove('hidden')
       const tg = sim.waveTelegraph()
       const elemPart = tg.element ? ` · ${tg.element}` : ''
-      this.telegraphEl.textContent = tg.keeperName
-        ? `☠ ${tg.keeperName}`
-        : `${tg.boss ? '☠ BOSS · ' : 'INCOMING: '}${tg.armor}${elemPart}`
+      const skull = iconMarkup('skull', { size: 12, color: 'currentColor' })
+      this.telegraphEl.innerHTML = tg.keeperName
+        ? `${skull} ${escHud(tg.keeperName)}`
+        : `${tg.boss ? skull + ' BOSS · ' : 'INCOMING: '}${escHud(tg.armor)}${elemPart}`
       this.telegraphEl.classList.remove('hidden')
       this.dockBar.classList.remove('hidden')
     } else {
@@ -820,7 +829,7 @@ export class BattleHud {
     if (this.bossKey !== key) {
       this.bossKey = key
       this.bossNameEl.textContent = bs.name
-      this.bossAblEl.textContent = `⚠ ${bs.abilityName}`
+      this.bossAblEl.innerHTML = `${iconMarkup('warn', { size: 13, color: hex(bs.accent) })} ${escHud(bs.abilityName)}`
       this.bossEl.style.setProperty('--bossc', hex(bs.accent))
       this.bossEl.style.setProperty('--bossacc', hex(bs.accent))
       this.bossEl.classList.toggle('echo', bs.echo)
@@ -903,7 +912,11 @@ export class BattleHud {
           ref.mask.style.background = `conic-gradient(rgba(6,4,16,.8) ${deg}deg, transparent ${deg}deg)`
           ref.cdtxt.textContent = String(Math.ceil(cd))
           ref.root.classList.remove('ready')
-          ref.badge.innerHTML = glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })
+          // glyph never changes frame-to-frame — only re-parse the SVG on transition
+          if (this.heroBadgeState.get(entry.heroId) !== 'cd') {
+            ref.badge.innerHTML = glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })
+            this.heroBadgeState.set(entry.heroId, 'cd')
+          }
           this.heroWasReady.set(entry.heroId, false)
         } else {
           ref.mask.style.background = 'transparent'
@@ -911,7 +924,10 @@ export class BattleHud {
           ref.root.classList.add('ready')
           if (this.heroWasReady.get(entry.heroId) === false) this.popClass(ref.root, 'ping', 550)
           this.heroWasReady.set(entry.heroId, true)
-          ref.badge.innerHTML = `${glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })} CAST`
+          if (this.heroBadgeState.get(entry.heroId) !== 'ready') {
+            ref.badge.innerHTML = `${glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })} CAST`
+            this.heroBadgeState.set(entry.heroId, 'ready')
+          }
         }
         ref.badge.style.color = hex(entry.def.color)
         ref.port.style.borderColor = hex(entry.def.color)
@@ -920,7 +936,11 @@ export class BattleHud {
         ref.mask.style.background = 'transparent'
         ref.cdtxt.textContent = ''
         ref.root.classList.remove('ready')
-        ref.badge.textContent = `$${entry.cost}`
+        const costTok = `cost:${entry.cost}`
+        if (this.heroBadgeState.get(entry.heroId) !== costTok) {
+          ref.badge.textContent = `$${entry.cost}`
+          this.heroBadgeState.set(entry.heroId, costTok)
+        }
         ref.badge.style.color = '#ffe27a'
         ref.port.style.borderColor = hex(RARITY_COLOR[entry.def.rarity])
         ref.root.classList.toggle('dim', sim.gold < entry.cost)
@@ -1096,7 +1116,7 @@ export class BattleHud {
       foot = `${tg.element} foes take 1.5× from ${counters.join(' & ')} attacks — and 0.75× from what they resist.`
     }
     return {
-      tag: tg.boss ? 'INCOMING · ☠ BOSS WAVE' : 'INCOMING WAVE',
+      tag: tg.boss ? 'INCOMING · BOSS WAVE' : 'INCOMING WAVE',
       title: `${tg.armor} armor${tg.element ? ' · ' + tg.element : ''}`,
       accent: tg.boss ? '#ff8fa5' : '#a8e9ff',
       body: 'Damage-type multipliers against this wave. Build toward the green.',
@@ -1117,8 +1137,11 @@ export class BattleHud {
     wrap.style.boxShadow = `0 12px 34px rgba(0,0,0,.55), 0 0 22px ${hex(def.color)}55`
 
     const row1 = el('div', 'row1')
-    const tierName = t.fusedElem !== '' ? `⚛ ${t.fusionName}` : sim.isMax(t) ? def.branches[t.branch].name : `Lv ${t.level + 1}`
-    row1.append(el('div', 'tt', `${def.name} · ${tierName}`), el('div', 'stars', starStr(sim.powerTier(t))))
+    const tierName = t.fusedElem !== '' ? t.fusionName : sim.isMax(t) ? def.branches[t.branch].name : `Lv ${t.level + 1}`
+    const ttEl = t.fusedElem !== ''
+      ? iconEl('div', 'tt', `${escHud(def.name)} · ${iconMarkup('atom', { size: 13, color: hex(def.color) })} ${escHud(tierName)}`)
+      : el('div', 'tt', `${def.name} · ${tierName}`)
+    row1.append(ttEl, el('div', 'stars', starStr(sim.powerTier(t))))
     const stars = row1.querySelector('.stars') as HTMLElement
     stars.classList.add('pe')
     attachTip(stars, () => {
@@ -1227,7 +1250,7 @@ export class BattleHud {
       })
       ctl.append(br)
     } else if (t.fusedElem !== '') {
-      const fused = el('div', 'maxlbl pe', `⚛ ${t.fusionName.toUpperCase()}`)
+      const fused = iconEl('div', 'maxlbl pe', `${iconMarkup('atom', { size: 15, color: hex(t.fusedColor) })} ${escHud(t.fusionName.toUpperCase())}`)
       fused.style.color = hex(t.fusedColor)
       attachTip(fused, () => {
         const tt = this.simRef?.towerById(id)
@@ -1254,7 +1277,7 @@ export class BattleHud {
           const btn = el('button', 'br pe' + (afford ? '' : ' no'))
           btn.style.background = `linear-gradient(180deg, ${hex(o.color)}, ${hex(o.color2)}66), linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
           btn.append(
-            el('span', undefined, `⚛ FUSE → ${o.name}`),
+            iconEl('span', '', `${iconMarkup('atom', { size: 13, color: '#fff' })} FUSE → ${escHud(o.name)}`),
             el('span', 'bb', `absorb ${o.partner.def.name} · solo ${REACTIONS[o.key].name}`),
             el('span', 'bc', `$${o.cost}`),
           )
@@ -1277,7 +1300,7 @@ export class BattleHud {
         const max = el('div', 'maxlbl pe', 'MAX ★')
         attachTip(max, () => ({
           tag: 'FULLY UPGRADED', title: 'MAX — but not the end', accent: '#ffd54a',
-          body: 'Build ANOTHER max-tier tower of a reactive element on an adjacent tile and a ⚛ FUSE option appears here.',
+          body: 'Build ANOTHER max-tier tower of a reactive element on an adjacent tile and a FUSE option appears here.',
           rows: [
             { k: 'Flame + Frost', v: 'Thermal Core', c: '#ffb15c' },
             { k: 'Frost + Storm', v: 'Shatterspire', c: '#9fdcff' },

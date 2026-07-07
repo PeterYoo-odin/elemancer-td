@@ -8,7 +8,7 @@
 // reduce-motion, safe-area).
 
 import { todaysDaily } from '../game/seedcode'
-import { dailyHistory, dailyPB, dailyStreak, bestForDay, playedToday, utcDailyDate } from '../game/daily'
+import { dailyHistory, dailyPB, dailyStreak, dailyDaysPlayed, bestForDay, playedToday, utcDailyDate } from '../game/daily'
 import { appSettings } from './settings'
 import { playUiTick } from './sfx'
 import { currencyIcon, iconMarkup } from './icons'
@@ -147,7 +147,7 @@ export class DailySeedPage {
           <div class="eds-stats">
             <div class="eds-stat"><div class="v">${iconMarkup('burst', { size: 18, color: '#ff9a4a' })}${streak}</div><div class="l">DAY STREAK</div></div>
             <div class="eds-stat"><div class="v">${currencyIcon('star', { size: 18 })}${pb || '—'}</div><div class="l">BEST WAVE</div></div>
-            <div class="eds-stat"><div class="v">${history.length}</div><div class="l">DAYS PLAYED</div></div>
+            <div class="eds-stat"><div class="v">${dailyDaysPlayed()}</div><div class="l">DAYS PLAYED</div></div>
           </div>
 
           <div class="eds-promise">
