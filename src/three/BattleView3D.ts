@@ -21,6 +21,7 @@ import { RARITY_COLOR } from '../game/heroes'
 import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
+import type { RealmBackdrop } from '../game/realmBackdrops'
 import { TERRAIN_META } from '../game/paths'
 import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
@@ -346,6 +347,7 @@ export class BattleView3D {
     private palette: FieldPalette,
     private accent: number, // element-ground accent for the arena floor
     private pathCells: ReadonlyArray<[number, number]> = [], // ordered spawn→base cells
+    private backdrop?: RealmBackdrop, // painted per-realm landscape (lazy-loaded)
   ) {
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'battle3d-canvas'
@@ -359,7 +361,10 @@ export class BattleView3D {
 
     this.scene = new THREE.Scene()
     this.scene.background = this.makeSkyTexture()
-    this.scene.fog = new THREE.Fog(0x180d33, 22, 40)
+    // Per-realm atmosphere: nudge the base fog toward the biome tint so the whole
+    // scene reads as that world, without swamping the deep-violet base (keeps the
+    // board / tokens / HP bars legible on top).
+    this.scene.fog = new THREE.Fog(this.fogColor(), 22, 40)
 
     this.camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 100)
 
@@ -378,6 +383,7 @@ export class BattleView3D {
     this.initSharedGeom()
     this.initModelMaterials()
     this.setupLights()
+    this.setupBackdrop()
     this.setupBoard()
     this.setupDetails()
     this.setupBuildHighlight()
@@ -423,7 +429,11 @@ export class BattleView3D {
     cv.width = 2
     cv.height = 512
     const ctx = cv.getContext('2d')!
-    const accent = new THREE.Color(this.accent).lerp(new THREE.Color(0x5a3cae), 0.7)
+    // Bias the horizon band toward the realm tint (when present) so the all-angle
+    // gradient backstop — the safety net when the painted plane is off-screen or
+    // missing — still reads as this biome.
+    const tint = this.backdrop ? new THREE.Color(this.backdrop.tint) : new THREE.Color(0x5a3cae)
+    const accent = new THREE.Color(this.accent).lerp(tint, this.backdrop ? 0.55 : 0.7)
     const grad = ctx.createLinearGradient(0, 0, 0, 512)
     grad.addColorStop(0, '#3b2378')
     grad.addColorStop(0.35, '#' + accent.getHexString())
@@ -437,14 +447,80 @@ export class BattleView3D {
     return tex
   }
 
+  // Base fog nudged toward the realm tint — biome mood without losing readability.
+  private fogColor(): number {
+    const base = new THREE.Color(0x180d33)
+    if (this.backdrop) base.lerp(new THREE.Color(this.backdrop.tint), 0.22)
+    return base.getHex()
+  }
+
+  // ---------------------------------------------------------------- backdrop
+  // Painted per-realm landscape: ONE world-fixed curved plane parked behind the
+  // board (−z, the default-view side). It shows the 16:9 art undistorted and
+  // parallaxes correctly as the camera pans/orbits/zooms; orbit far enough past
+  // it and the tinted gradient sky takes over (no edge-reveal, no tiling). Lazy-
+  // loaded off the render path — the gradient shows until the texture decodes,
+  // and a missing/failed file just stays on the gradient (graceful fallback).
+  //
+  // Gotchas handled: fog is disabled on the material (linear fog past ~40u would
+  // otherwise paint it a solid wall), and the color is multiplied DOWN so it
+  // stays under the bloom threshold and never washes out towers/enemies/HP bars.
+  private setupBackdrop(): void {
+    if (!this.backdrop) return
+    const R = 32          // radius: camera (default rig, panned/zoomed) stays inside
+    const H = 40          // tall enough to fill the frame at the shallowest pitch
+    const arc = 150 * Math.PI / 180
+    const geo = new THREE.CylinderGeometry(R, R, H, 48, 1, true, Math.PI - arc / 2, arc)
+    this.disposables.push(geo)
+    // Dim, faintly biome-tinted multiply — keeps the painting recessive so the
+    // gameplay layer stays dominant and bloom doesn't blow it out.
+    const col = new THREE.Color(0x8f8f8f).lerp(new THREE.Color(this.backdrop.tint), 0.18)
+    const mat = new THREE.MeshBasicMaterial({
+      color: col,
+      side: THREE.DoubleSide, // visible whether the camera sits just inside or outside R
+      fog: false,             // never let the scene fog erase it into a flat wall
+      depthWrite: false,      // pure backdrop — never occludes the play layer
+      transparent: false,
+    })
+    this.disposables.push(mat)
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(0, H / 2 - 4, 0) // horizon of the art sits just below the board
+    mesh.renderOrder = -1
+    mesh.frustumCulled = false
+    this.scene.add(mesh)
+
+    new THREE.TextureLoader().load(
+      this.backdrop.url,
+      (tex) => {
+        if (this.disposed) { tex.dispose(); return }
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.wrapS = THREE.ClampToEdgeWrapping
+        tex.wrapT = THREE.ClampToEdgeWrapping
+        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+        this.disposables.push(tex)
+        mat.map = tex
+        mat.needsUpdate = true
+      },
+      undefined,
+      () => { /* missing/failed → stay on the tinted gradient sky (graceful fallback) */ },
+    )
+  }
+
   // ---------------------------------------------------------------- lights
   // Coherence rig: warm KEY + cool FILL + cool RIM + soft sky/ground hemi, plus a
   // low ambient floor so nothing crushes to black. Kept deliberately tight so the
   // whole board reads as one palette and the emissive tower caps are what pops.
   private setupLights(): void {
-    const hemi = new THREE.HemisphereLight(0xdbeaff, 0x35264f, 0.7) // cool sky, warm-ish ground
+    // Per-realm ambient: nudge the sky-hemi + ambient floor toward the biome tint
+    // so board, towers and greylings all read as this world. Kept subtle (≤18%)
+    // so nothing gets recoloured enough to hurt readability.
+    const tint = this.backdrop ? new THREE.Color(this.backdrop.tint) : null
+    const hemiSky = new THREE.Color(0xdbeaff)
+    const ambCol = new THREE.Color(0x40507a)
+    if (tint) { hemiSky.lerp(tint, 0.16); ambCol.lerp(tint, 0.18) }
+    const hemi = new THREE.HemisphereLight(hemiSky.getHex(), 0x35264f, 0.7) // cool sky, warm-ish ground
     this.scene.add(hemi)
-    this.scene.add(new THREE.AmbientLight(0x40507a, 0.35))
+    this.scene.add(new THREE.AmbientLight(ambCol.getHex(), 0.35))
     const key = new THREE.DirectionalLight(0xfff1cf, 1.25) // warm sun from front-right
     key.position.set(7, 15, 9)
     this.scene.add(key)

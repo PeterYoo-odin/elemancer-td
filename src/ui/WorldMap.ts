@@ -8,6 +8,7 @@
 // node → levelId wiring (plain DOM buttons, so taps can't miss).
 
 import { LEVELS, REALMS, isLevelUnlocked, realmForLevel, type LevelDef, type RealmDef } from '../game/levels'
+import { realmBackdropUrl } from '../game/realmBackdrops'
 import { economy } from '../game/economy'
 import { appSettings } from './settings'
 import { playUiTick, playNodeStinger, playDiscovery } from './sfx'
@@ -899,7 +900,7 @@ export class WorldMap {
     el.style.setProperty('--a', realm.ui.accent)
     el.innerHTML = `
       <div class="ewm-bcard" style="--a:${realm.ui.accent}">
-        <div class="ewm-bkey"></div>
+        <div class="ewm-bkey" style="background-image:url('${realmBackdropUrl(realmIdx)}')"></div>
         <div class="ewm-bbody">
           <div class="ewm-bemoji">${realm.emoji}</div>
           <div class="ewm-bord">REALM ${ROMAN[realmIdx]} · ${realm.element.toUpperCase()}</div>
@@ -958,10 +959,14 @@ export class WorldMap {
           <div class="ewm-mrow"><span class="ewm-mlabel">DIFFICULTY</span>${chip(false, 'data-md="heroic"', 'Heroic')}</div>
           <div class="ewm-mrow" data-chgroup><span class="ewm-mlabel">CHALLENGE</span>${chip(true, 'data-ch=""', 'None')}${chip(false, 'data-ch="iron"', 'Iron')}${chip(false, 'data-ch="nohero"', 'No-Hero')}${chip(false, 'data-ch="towers"', 'Spare')}</div>
         </div>`
+    // biome landscape layered faintly UNDER the card gradient (kept ~88% opaque
+    // so the flavor + bark text stays crisp), so the pre-level card reads as this realm
+    const rIdx = Math.max(0, REALMS.indexOf(node.realm))
+    const pcardBg = `linear-gradient(180deg, rgba(29,19,56,.86) 0%, rgba(19,12,40,.93) 100%), url('${realmBackdropUrl(rIdx)}') center/cover no-repeat`
     const el = document.createElement('div')
     el.className = 'ewm-pre'
     el.innerHTML = `
-      <div class="ewm-pcard" style="--a:${node.realm.ui.accent}">
+      <div class="ewm-pcard" style="--a:${node.realm.ui.accent};background:${pcardBg}">
         <button class="ewm-px" data-x aria-label="Back">✕</button>
         <div class="ewm-pord">LEVEL ${node.lvl.index + 1} · ${node.realm.name.toUpperCase()}</div>
         <div class="ewm-pname">${node.lvl.name}</div>

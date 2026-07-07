@@ -22,7 +22,8 @@ import { appSettings } from '../ui/settings'
 import { barkEngine } from '../game/barks'
 import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL, unlockCodexBatch, unlockEnemyCodex, CODEX_ON_KEEPER_REDEEM } from '../game/codex'
 import { KEEPER_BY_ID } from '../game/keepers'
-import { realmForLevel } from '../game/levels'
+import { realmForLevel, REALMS } from '../game/levels'
+import { realmBackdrop } from '../game/realmBackdrops'
 import { playMoroseHush } from '../ui/sfx'
 import { battleSfx } from '../ui/battleSfx'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
@@ -254,7 +255,10 @@ export class BattleScene extends Phaser.Scene {
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
     const pathCells = pathCellsFor(this.level) // ordered spawn→base, for tile orientation
-    this.view = new BattleView3D(this.sim, this.level.palette, accent, pathCells)
+    // Map this level's realm → painted backdrop by REALM ORDER (endless/demo fall
+    // through realmForLevel to REALMS[0] → Emberwaste, which is a fine default).
+    const realmIdx = Math.max(0, REALMS.indexOf(realmForLevel(this.levelId)))
+    this.view = new BattleView3D(this.sim, this.level.palette, accent, pathCells, realmBackdrop(realmIdx))
     this.view.mount(document.body)
 
     // ---- DOM HUD ----
