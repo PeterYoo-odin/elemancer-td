@@ -1254,6 +1254,17 @@ export class BattleScene extends Phaser.Scene {
         this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
         battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute')
         break
+      case 'wyrmBreath':
+        // a bonded Wyrm exhales — a coloured elemental burst around its hero.
+        if (ev.ult) {
+          this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color)
+          this.hud.flash(ev.color, 0.3)
+          this.hud.banner(`★ ${ev.name.toUpperCase()}!`, ev.color)
+          battleSfx.reaction()
+        } else {
+          this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, 0.5)
+        }
+        break
       case 'reaction':
         this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
         this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)

@@ -505,6 +505,16 @@ export class WorldMap {
       if (fin && !isCutsceneSeen(fin)) queue.push(fin)
       if (camp && !isCutsceneSeen(camp)) queue.push(camp)
     }
+    // THE WAKING OF THE WYRMS — the late act, gated on ~4 realms restored. Fires
+    // once, then each discovered Wyrm's codex page unlocks (reusing the systems).
+    if (economy.wyrmsAwakened()) {
+      unlockCodex('wyrm-act')
+      for (const id of economy.discoveredWyrms()) unlockCodex('wyrm-' + id)
+      if (getCutscene('wyrms-waking') && !isCutsceneSeen('wyrms-waking')) {
+        queue.push('wyrms-waking')
+        economy.markWyrmActSeen()
+      }
+    }
     if (queue.length === 0 || this.leaving) { then(); return }
     // Migrated save catching up several realms at once: don't flood the player
     // with a back-to-back reel. Fast-forward all but the two most recent beats

@@ -27,6 +27,7 @@ import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
 import { appSettings } from '../ui/settings'
 import { heroCutout } from '../ui/heroArt'
+import { wyrmCutout } from '../ui/wyrmArt'
 import { enemyArt, enemyArtReady } from '../ui/enemyArt'
 
 const TILE_PX = 80
@@ -166,11 +167,18 @@ interface HeroSlot {
   color: number
   heroId: string
   artTint: number // equipped hero-skin dye (0xffffff = stock)
+  // bonded Chromatic Wyrm — a painted billboard that circles the hero (async)
+  wyrm: THREE.Sprite | null
+  wyrmMat: THREE.SpriteMaterial | null
+  wyrmPhase: number // per-hero orbit phase so companions don't fly in lockstep
 }
 
 // painted cutout textures, keyed by heroId — shared across battles, never disposed
 // (7 small canvases; re-uploaded automatically when a new renderer context starts)
 const heroArtTexCache = new Map<string, THREE.CanvasTexture>()
+// painted Wyrm cutout textures, keyed by wyrmId (6 canvases; shared like heroes)
+const wyrmArtTexCache = new Map<string, THREE.CanvasTexture>()
+const WYRM_ART_H = 1.15 // world-units tall — the companion reads smaller than its hero
 const HERO_ART_H = 1.55 // world-units tall — reads over towers without looming
 
 interface Transient {
@@ -1833,6 +1841,31 @@ export class BattleView3D {
       badge: badge.sprite, badgeTex: badge.tex, badgeMat: badge.mat,
       art: null, artMat: null, color: def.color, heroId: h.heroId,
       artTint: heroDye(h.heroId)?.tint ?? 0xffffff, // equipped hero-skin dye
+      wyrm: null, wyrmMat: null, wyrmPhase: (h.id * 1.7) % (Math.PI * 2),
+    }
+
+    // bonded Chromatic Wyrm: a painted billboard that circles above the hero.
+    // Async (first battle decodes once; cached thereafter). Missing art → no
+    // companion sprite, but the sim breath/aura still runs (graceful fallback).
+    if (h.wyrm) {
+      const wid = h.wyrm.wyrm.id
+      wyrmCutout(wid).then((cut) => {
+        if (!cut || this.disposed || this.heroViews.get(h.id) !== slot) return
+        let tex = wyrmArtTexCache.get(wid)
+        if (!tex) {
+          tex = new THREE.CanvasTexture(cut.canvas)
+          tex.colorSpace = THREE.SRGBColorSpace
+          tex.anisotropy = 4
+          wyrmArtTexCache.set(wid, tex)
+        }
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, alphaTest: 0.05, depthWrite: false })
+        const sprite = new THREE.Sprite(mat)
+        const wAspect = Math.max(0.4, cut.aspect)
+        sprite.scale.set(WYRM_ART_H * wAspect, WYRM_ART_H, 1)
+        g.add(sprite)
+        slot.wyrm = sprite
+        slot.wyrmMat = mat
+      })
     }
 
     // swap the low-poly figure for the painted billboard token once the cached
@@ -1884,6 +1917,18 @@ export class BattleView3D {
     // temporary Holy-Nova buff → brighten the crystal
     const buffed = h.buffUntil > this.sim.clock
     s.orbMat.emissiveIntensity = buffed ? 2.6 : 1.5
+
+    // the bonded Wyrm circles above the hero; it flares as its breath nears.
+    if (s.wyrm) {
+      const t = this.clockT * 0.9 + s.wyrmPhase
+      const orbitR = 1.05
+      s.wyrm.position.set(Math.cos(t) * orbitR, WYRM_ART_H * 0.5 + 1.15 + Math.sin(t * 1.6) * 0.12, Math.sin(t) * orbitR * 0.5)
+      // wing-beat pulse; brighten just before a breath fires (cd near zero)
+      const charge = h.wyrm ? Math.max(0, 1 - h.wyrmBreathCd / Math.max(0.5, h.wyrm.breathCd)) : 0
+      if (s.wyrmMat) s.wyrmMat.color.setScalar(1 + charge * 0.4)
+      const beat = this.motionOk ? 1 + Math.sin(this.clockT * 8 + s.wyrmPhase) * 0.05 : 1
+      s.wyrm.scale.y = WYRM_ART_H * beat
+    }
   }
 
   private disposeHeroSlot(s: HeroSlot): void {
@@ -1893,6 +1938,7 @@ export class BattleView3D {
     s.badgeMat.dispose()
     s.badgeTex.dispose()
     s.artMat?.dispose() // material only — the cutout texture is cached for reuse
+    s.wyrmMat?.dispose() // Wyrm billboard material (shared texture stays cached)
   }
 
   private syncProjectiles(): void {

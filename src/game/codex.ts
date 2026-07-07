@@ -6,7 +6,7 @@
 //  SaveData — so the save schema stays untouched.
 // ============================================================================
 
-export type CodexCategory = 'heroes' | 'world' | 'realms' | 'keepers' | 'enemies' | 'morose' | 'lore' | 'field'
+export type CodexCategory = 'heroes' | 'wyrms' | 'world' | 'realms' | 'keepers' | 'enemies' | 'morose' | 'lore' | 'field'
 
 export interface CodexEntry {
   id: string
@@ -19,6 +19,7 @@ export interface CodexEntry {
 
 export const CODEX_CATEGORY_LABEL: Record<CodexCategory, string> = {
   heroes: 'The Company',
+  wyrms: 'The Chromatic Wyrms',
   world: 'Aetheria',
   realms: 'The Six Realms',
   keepers: 'The Fallen Keepers',
@@ -30,7 +31,10 @@ export const CODEX_CATEGORY_LABEL: Record<CodexCategory, string> = {
 
 // Panel render order (CodexPanel iterates this). Adding a category here is the
 // ONLY place the collection UI needs to learn about it.
-export const CODEX_CATEGORY_ORDER: CodexCategory[] = ['heroes', 'world', 'realms', 'keepers', 'enemies', 'morose', 'lore', 'field']
+export const CODEX_CATEGORY_ORDER: CodexCategory[] = ['heroes', 'wyrms', 'world', 'realms', 'keepers', 'enemies', 'morose', 'lore', 'field']
+
+// Wyrm codex ids, in canon order (unlocked when a Wyrm is discovered / bonded).
+export const WYRM_CODEX_IDS: string[] = ['wyrm-pyrax', 'wyrm-glaciaxis', 'wyrm-voltaryx', 'wyrm-verdwyrm', 'wyrm-lumenwyrm', 'wyrm-umbrawyrm']
 
 export const CODEX: CodexEntry[] = [
   // ---- heroes (unlocked by first fielding each hero) ----
@@ -58,6 +62,29 @@ export const CODEX: CodexEntry[] = [
   { id: 'hero-vex', category: 'heroes', title: 'Nyx the Umbral Trickster',
     text: 'From the Twilight Margins, the realm everyone treated as basically grey already. Steals things and returns them improved. Lies constantly, kindly. Believes — quietly, fiercely — that shadow is not the absence of colour. Shadow is where colour rests.',
     hint: 'Field Nyx in battle.' },
+
+  // ---- the Chromatic Wyrms (unlocked as the late act wakes each dragon) ----
+  { id: 'wyrm-act', category: 'wyrms', title: 'The Waking of the Wyrms',
+    text: 'Before the Greying, six great Wyrms were the living founts of colour in Aetheria — each the pure elemental soul of one realm. When Morose spread the grey, they did not die. They curled around the last ember of colour deep in each realm and went dormant, too drained to wake. Restore enough of the world and the feeling comes back to them. A hero can bond a waking Wyrm, and the world\'s colour takes flight again — the truest mirror of the Hollow King, who tried to hold all six alone.',
+    hint: 'Restore four realms to wake the Wyrms.' },
+  { id: 'wyrm-pyrax', category: 'wyrms', title: 'Pyrax, the First Ember',
+    text: 'The fire-soul of Emberwaste, curled a hundred years around Kindlekeep\'s last unspent coal. It does not breathe to destroy — it breathes to keep the people behind it warm, which is fire\'s second and better job. Bonds perfectly with Ashka: two foundlings of the flame who were never really cold, just cold-adjacent.',
+    hint: 'Restore Emberwaste, then wake the Wyrms.' },
+  { id: 'wyrm-glaciaxis', category: 'wyrms', title: 'Glaciaxis, the Deep Frost',
+    text: 'The ice-soul of Frostreach. Like Lumi, it dreamed the Greying before it came, and like Lumi it was not believed — so it chose to sleep until the aurora could sing again. Its rime-breath stills a whole field in place. Attunes to Lumi; the oracle and the dragon simply finish choosing the same better future.',
+    hint: 'Restore Frostreach, then wake the Wyrms.' },
+  { id: 'wyrm-voltaryx', category: 'wyrms', title: 'Voltaryx, the Sky\'s Verdict',
+    text: 'The storm-soul of Stormpeaks. The dead calm that took Galea\'s crew nearly drank it dry; it hoarded one spark, and one spark turned out to be enough. Its breath is a verdict — loud, sudden, and final. Attunes to Galea, who finally has a sky that bets with her.',
+    hint: 'Restore Stormpeaks, then wake the Wyrms.' },
+  { id: 'wyrm-verdwyrm', category: 'wyrms', title: 'Verdwyrm, the Green Patience',
+    text: 'The green-soul of the Verdant Wilds. It held a single seed of colour through a hundred grey years without complaint — it is extraordinarily good at waiting, which is a kind of strength Thornwick recognises on sight. Its breath is slow rot and fast bloom at once. Attunes to Thornwick; they plant this one together.',
+    hint: 'Restore the Verdant Wilds, then wake the Wyrms.' },
+  { id: 'wyrm-lumenwyrm', category: 'wyrms', title: 'Lumenwyrm, the Kept Dawn',
+    text: 'The light-soul of Lumen Sanctum. It guttered but never went out — light that refused, gently, to give up. Its dawn-breath strips the grey off armour and inaction alike. Attunes to Seraphine, and foils darkly with Umbrawyrm: dawn and dusk, holding the line from opposite ends of the same day.',
+    hint: 'Restore Lumen Sanctum, then wake the Wyrms.' },
+  { id: 'wyrm-umbrawyrm', category: 'wyrms', title: 'Umbrawyrm, the Rested Colour',
+    text: 'The shadow-soul of the Hollow — nearest of all six to the grey, and the living proof that shadow is not the grey\'s kin. Shadow is where colour goes to rest, and this Wyrm has been resting a very long, very patient while. Attunes to Nyx: the redemption pair, waking the last colour the Hollow King mistook for peace.',
+    hint: 'Restore the Hollow, then wake the Wyrms.' },
 
   // ---- hero arcs (the second page — unlocked as the campaign resolves each) ----
   { id: 'arc-ember', category: 'heroes', title: 'Ashka — The Second Job of Fire',

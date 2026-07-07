@@ -260,6 +260,11 @@ const CSS = `
 .eld-hero .hcdtxt { position:absolute; inset:0; display:grid; place-items:center; font-size:15px; font-weight:900; text-shadow:0 1px 2px #000; pointer-events:none; }
 .eld-hero .hbadge { font-size:11px; font-weight:900; line-height:1; }
 .eld-hero .hname { font-size:10px; font-weight:800; color:#e6dcff; letter-spacing:.3px; }
+/* bonded Chromatic Wyrm sigil (corner of the hero portrait) */
+.eld-hero .hwyrm { position:absolute; bottom:-4px; right:-5px; z-index:3; width:19px; height:19px; border-radius:50%;
+  display:grid; place-items:center; font-size:11px; line-height:1; background:#160c2e; border:1.5px solid #fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.5); }
+.eld-hero .hwyrm.perfect { box-shadow:0 0 6px 1px var(--wc, #fff), 0 1px 3px rgba(0,0,0,.5); }
 
 /* ---- synergy panel (active element team bonuses) ---- */
 .eld-syn { position:absolute; left:10px; top: calc(env(safe-area-inset-top,0px) + 96px); display:flex; flex-direction:column; gap:5px; max-width:190px; z-index:21; }
@@ -884,6 +889,14 @@ export class BattleHud {
       port.append(mask, cdtxt)
       const badge = el('div', 'hbadge', `$${entry.cost}`)
       badge.style.color = '#ffe27a'
+      // bonded Chromatic Wyrm sigil — tinted by tier (Attunement glows).
+      if (entry.wyrm) {
+        const w = entry.wyrm
+        const sig = el('div', 'hwyrm' + (w.tier === 'perfect' ? ' perfect' : ''), w.wyrm.emoji)
+        sig.style.setProperty('--wc', hex(w.wyrm.color))
+        sig.style.borderColor = hex(w.wyrm.color)
+        port.append(sig)
+      }
       const name = el('div', 'hname', def.name)
       b.append(lvl, port, badge, name)
       b.onclick = () => { playUiTick(); this.cb.onHeroButton(entry.heroId) }
@@ -1076,6 +1089,14 @@ export class BattleHud {
       v: awake ? sig.blurb : `dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}`,
       c: awake ? hex(def.color) : '#9d8fc5',
     })
+    // CHROMATIC WYRM — the bonded companion (breath + aura + attunement)
+    if (entry.wyrm) {
+      const w = entry.wyrm
+      rows.push({ k: `${w.wyrm.emoji} ${w.wyrm.name}`, v: `${w.tierLabel} (${w.tier.toUpperCase()}) · ${w.stageLabel} Lv ${w.level}`, c: hex(w.wyrm.color) })
+      rows.push({ k: 'Breath', v: `${Math.round(w.breathDamage)} ${w.wyrm.element} · ${w.breathRadiusTiles.toFixed(1)} tiles / ${w.breathCd.toFixed(1)}s`, c: hex(w.wyrm.color) })
+      rows.push({ k: 'Bond aura', v: `+${Math.round((w.heroAmp - 1) * 100)}% hero dmg · +${Math.round(w.towerBuff * 100)}% ${w.wyrm.element} towers`, c: '#c9b6ff' })
+      if (w.ult) rows.push({ k: `★ ${w.ult.name}`, v: w.ult.blurb, c: hex(w.wyrm.color) })
+    }
     // RESONANCE — hero + 2/4+ towers of their resonant kind
     const res = sim.activeResonances().find((r) => r.heroIds.includes(heroId))
     const rInfo = resonanceInfo(def.resonantTower)

@@ -288,10 +288,33 @@ const ENDING: Cutscene = {
 }
 
 // ---------------------------------------------------------------------------
+//  THE WAKING OF THE WYRMS — the late act (fires once ~4 realms restored). The
+//  colour poured back into the world reaches the sleeping dragons, and they
+//  wake: a power spike, an emotional beat, and the truest mirror of the villain
+//  (he held all six alone; the heroes wake six friends).
+// ---------------------------------------------------------------------------
+const WYRMS_WAKING: Cutscene = {
+  id: 'wyrms-waking',
+  title: 'The Waking of the Wyrms',
+  beats: [
+    { art: ART.keyart, tone: 'dusk', pan: 'in', fx: 'motes', heading: 'the waking of the wyrms',
+      text: 'Four realms remember how to feel. And far under each of them, curled around the last ember of its colour, something enormous and old stirs for the first time in a hundred grey years.', hold: 0 },
+    { realm: 'emberwaste', tone: 'bloom', pan: 'up', fx: 'motes', speaker: 'maddervane',
+      text: 'Before the Greying, little brush, there were six great Wyrms — one soul of pure colour for each realm. My friend didn\'t kill them when he greyed the world. He couldn\'t. They only… fell asleep, waiting for a reason to wake.' },
+    { realm: 'emberwaste', tone: 'bloom', pan: 'left', fx: 'motes',
+      text: 'You have been that reason. Every hearth you rekindled, every vision you let go unread, every name you gave back — the colour ran downhill into the deep places, and pooled, and warmed them.', hold: 0 },
+    { realm: 'hollow', tone: 'bloom', pan: 'in', fx: 'motes', speaker: 'maddervane',
+      text: 'A hero can bond a waking Wyrm now. Some pairings sing — attunement, we called it, when a soul and a dragon share an element and a wound. The world\'s colour is about to take flight. Literally. Go and meet them.' },
+    { art: ART.keyart, tone: 'bloom', pan: 'out', fx: 'motes', heading: 'go meet your dragon.',
+      text: 'Morose tried to hold all six colours alone, and they cancelled to grey. You never held them alone — you held six friends. Now you hold six friends and their dragons. That was always the difference. That was always the whole trick.', hold: 0 },
+  ],
+}
+
+// ---------------------------------------------------------------------------
 //  REGISTRY + persistence (one localStorage key, view-side, never in SaveData).
 // ---------------------------------------------------------------------------
 export const CUTSCENES: Record<string, Cutscene> = Object.fromEntries(
-  [OPENING, ...REALM_INTROS, ...REALM_FINALES, ...CAMPFIRES, ENDING].map((c) => [c.id, c]),
+  [OPENING, ...REALM_INTROS, ...REALM_FINALES, ...CAMPFIRES, WYRMS_WAKING, ENDING].map((c) => [c.id, c]),
 )
 
 export function getCutscene(id: string): Cutscene | undefined {

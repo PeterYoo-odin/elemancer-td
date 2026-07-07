@@ -10,6 +10,7 @@
 
 import { economy } from '../game/economy'
 import { heroArtUrl } from './heroArt'
+import { BondPanel } from './BondPanel'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
 import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
@@ -220,6 +221,7 @@ export class HeroCollection {
   private partyHint: HTMLElement
   private onBack: () => void
   private rebuildLoadoutBar: (() => void) | null = null
+  private bondPanel: BondPanel | null = null
 
   constructor(onBack: () => void) {
     this.onBack = onBack
@@ -236,6 +238,9 @@ export class HeroCollection {
     const back = el('button', 'hc-back', '‹ BACK')
     back.onclick = () => this.onBack()
     head.append(back, el('div', 'hc-title', 'HEROES'))
+    const bonds = el('button', 'hc-back', '🐉 BONDS')
+    bonds.onclick = () => this.openBonds()
+    head.append(bonds)
     this.walletEl = el('div', 'hc-wallet')
     head.append(this.walletEl)
     this.scroll.append(head)
@@ -625,8 +630,19 @@ export class HeroCollection {
     window.setTimeout(() => t.remove(), 1650)
   }
 
+  // The Wyrmroost — assign a Wyrm to a hero + preview the Attunement bonus.
+  private openBonds(): void {
+    if (this.bondPanel) return
+    this.bondPanel = new BondPanel(() => {
+      this.bondPanel = null
+      this.render() // reflect any new bonds on the hero cards' sigils
+    })
+  }
+
   dispose(): void {
     this.closeDetail()
+    this.bondPanel?.destroy()
+    this.bondPanel = null
     this.root.remove()
     this.styleEl.remove()
     document.querySelectorAll('.hc-toast').forEach((n) => n.remove())
