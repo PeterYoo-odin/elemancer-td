@@ -403,13 +403,13 @@ export class StorePage {
         action = `<button class="est-eq on">✓ OWNED</button>`
       }
     } else if (!gateOpen) {
-      action = `<button class="est-buy poor">🔒 ${priceLabel(sku)}</button>`
+      action = `<button class="est-buy poor">${glyphIcon('🔒', { size: 12 })} ${priceLabel(sku)}</button>`
     } else {
       const arming = this.confirmId === sku.id
       const cls = sku.currency === 'prisms' ? ' pri2' : ''
       action = `<button class="est-buy${cls}${arming ? ' confirm' : ''}" data-act="buy" data-id="${sku.id}">${arming ? 'SURE? ' : ''}${priceLabel(sku)}</button>`
     }
-    const gate = !gateOpen && sku.gate ? `<div class="est-gate">🔒 ${sku.gate.label}</div>` : ''
+    const gate = !gateOpen && sku.gate ? `<div class="est-gate">${glyphIcon('🔒', { size: 12 })} ${sku.gate.label}</div>` : ''
     return `<div class="est-card${gateOpen ? '' : ' gated'}">${this.swatch(sku)}
       <div class="est-tx"><div class="est-nm">${sku.name} ${tags}</div><div class="est-ds">${sku.desc}</div>${gate}</div>
       <div class="est-act">${action}</div></div>`
@@ -428,7 +428,7 @@ export class StorePage {
       <div class="est-rot">Rotates daily. What leaves always returns — <b>rotation, not extortion.</b> Nothing here is "last chance".</div>
       ${rot.map((s) => this.skuCard(s)).join('')}
       <div class="est-h2">STARTER CHROMA KIT</div>
-      <div class="est-card"><div class="est-sw">🎁</div>
+      <div class="est-card"><div class="est-sw" style="color:#ffd54a">${glyphIcon('🎁', { size: 24 })}</div>
         <div class="est-tx"><div class="est-nm">${STARTER_KIT.name} <span class="est-rk">RANKED: NONE</span></div>
         <div class="est-ds">You get exactly: ${STARTER_KIT.contents.join(' + ')}. ${STARTER_KIT.note}</div></div>
         <div class="est-act"><button class="est-buy mock" data-act="mock" data-title="STARTER CHROMA KIT"
@@ -481,7 +481,7 @@ export class StorePage {
       return `<div class="est-tier${reached ? ' reached' : ''}">
         <div class="est-tn2">${t.tier}</div>
         <div class="est-tr${reached ? '' : ' locked'}">${freeClaimed ? '✓ ' : ''}${rewardLabel(t.free)}</div>
-        <div class="est-tr${reached && premium ? '' : ' locked'}">${premClaimed ? '✓ ' : premium ? '' : '🔒 '}${rewardLabel(t.premium)}</div>
+        <div class="est-tr${reached && premium ? '' : ' locked'}">${premClaimed ? '✓ ' : premium ? '' : glyphIcon('🔒', { size: 11 }) + ' '}${rewardLabel(t.premium)}</div>
       </div>`
     }).join('')
     return `

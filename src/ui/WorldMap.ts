@@ -17,6 +17,7 @@ import { REALM_ENTRY, LEVEL_STORY } from '../game/story'
 import { unlockCodex, lockedMoroseFragments, codexFreshCount } from '../game/codex'
 import { CodexPanel } from './CodexPanel'
 import { heroById } from '../game/heroes'
+import { glyphIcon, iconMarkup } from './icons'
 import { attachTip, dismissTip } from './tooltip'
 
 export interface WorldMapHandlers {
@@ -383,7 +384,7 @@ export class WorldMap {
       <div class="ewm-top">
         <button class="ewm-back" data-nav="menu">‹ MENU</button>
         <div class="ewm-title">WORLD MAP</div>
-        <button class="ewm-codex" data-codex aria-label="The Cadet's Sketchbook">📖${codexFreshCount() > 0 ? `<span class="bdg">${codexFreshCount()}</span>` : ''}</button>
+        <button class="ewm-codex" data-codex aria-label="The Cadet's Sketchbook">${iconMarkup('book', { size: 20, color: '#efe9ff' })}${codexFreshCount() > 0 ? `<span class="bdg">${codexFreshCount()}</span>` : ''}</button>
         <div class="ewm-starchip">★ ${economy.totalStars()}/${LEVELS.length * 3}</div>
       </div>
       <div class="ewm-toast" data-toast></div>
@@ -561,7 +562,7 @@ export class WorldMap {
       .map((n) => {
         const stars = [0, 1, 2].map((i) => `<span class="s ${i < n.stars ? 'on' : ''}">★</span>`).join('')
         const label = n.state === 'locked' ? '???' : n.lvl.name
-        const lock = n.state === 'locked' ? '<span class="ewm-lock">🔒</span>' : ''
+        const lock = n.state === 'locked' ? `<span class="ewm-lock">${iconMarkup('lock', { size: 13, color: '#cdbcff' })}</span>` : ''
         return `
         <button class="ewm-node st-${n.state}" data-level="${n.lvl.id}" data-state="${n.state}"
           style="left:${n.x}%;top:${n.y}px;--a:${n.realm.ui.accent}"
@@ -593,13 +594,13 @@ export class WorldMap {
       .map((id) => {
         const def = heroById(id)
         if (!def) return ''
-        return `<span class="cc" style="--c:#${(def.color & 0xffffff).toString(16).padStart(6, '0')}">${def.glyph}</span>`
+        return `<span class="cc" style="--c:#${(def.color & 0xffffff).toString(16).padStart(6, '0')}">${glyphIcon(def.glyph, { size: 20, color: '#fff' })}</span>`
       })
       .join('')
     const nyx = party.includes('vex')
-      ? `<span class="cc trail" style="--c:#${(heroById('vex')!.color & 0xffffff).toString(16).padStart(6, '0')}">${heroById('vex')!.glyph}</span>`
+      ? `<span class="cc trail" style="--c:#${(heroById('vex')!.color & 0xffffff).toString(16).padStart(6, '0')}">${glyphIcon(heroById('vex')!.glyph, { size: 20, color: '#fff' })}</span>`
       : ''
-    const fallback = party.length === 0 ? '<span class="cc" style="--c:#ffd76a">⚑</span>' : ''
+    const fallback = party.length === 0 ? `<span class="cc" style="--c:#ffd76a">${iconMarkup('star', { size: 18, color: '#ffd76a' })}</span>` : ''
     const cur = this.nodes[this.currentIdx]
     return `<div class="ewm-cara" data-caravan style="left:${cur.x}%;top:${cur.y + 46}px">${chips}${nyx}${fallback}</div>`
   }
@@ -680,13 +681,13 @@ export class WorldMap {
       const entry = unlockCodex(frag)
       if (entry) {
         playDiscovery()
-        return { icon: '📜', title: 'A TORN PAGE', text: `“${entry.title}” added to the Sketchbook.` }
+        return { icon: iconMarkup('book', { size: 22, color: '#ffe1a6' }), title: 'A TORN PAGE', text: `“${entry.title}” added to the Sketchbook.` }
       }
     }
     const coins = 20 + node.lvl.index * 6
     economy.addCoins(coins)
     playDiscovery()
-    return { icon: '🪙', title: 'A HIDDEN CACHE', text: `Someone buried hope here. +${coins} coins.` }
+    return { icon: iconMarkup('coin', { size: 22, color: '#ffd54a' }), title: 'A HIDDEN CACHE', text: `Someone buried hope here. +${coins} coins.` }
   }
 
   private showDiscovery(d: { icon: string; title: string; text: string }, onDone: () => void): void {
@@ -781,7 +782,7 @@ export class WorldMap {
       ? `<div class="ewm-blines">${story
           .map((l) => {
             const s = speakerInfo(l.speaker)
-            return `<div class="ewm-bline"><span class="sp" style="color:${s.color}">${s.glyph} ${s.name}</span>${l.text}</div>`
+            return `<div class="ewm-bline"><span class="sp" style="color:${s.color}">${glyphIcon(s.glyph, { size: 14, color: s.color })} ${s.name}</span>${l.text}</div>`
           })
           .join('')}</div>`
       : `<div class="ewm-bintro">“${realm.intro}”</div>`
@@ -846,8 +847,8 @@ export class WorldMap {
         <div class="ewm-pord">LEVEL ${node.lvl.index + 1} · ${node.realm.name.toUpperCase()}</div>
         <div class="ewm-pname">${node.lvl.name}</div>
         ${story ? `<div class="ewm-pflavor">“${story.flavor}”</div>` : ''}
-        ${story && sp ? `<div class="ewm-pbark"><span class="sp" style="color:${sp.color}">${sp.glyph} ${sp.name}</span><span data-bark></span></div>` : ''}
-        <button class="ewm-pgo">⚔ TO BATTLE</button>
+        ${story && sp ? `<div class="ewm-pbark"><span class="sp" style="color:${sp.color}">${glyphIcon(sp.glyph, { size: 14, color: sp.color })} ${sp.name}</span><span data-bark></span></div>` : ''}
+        <button class="ewm-pgo">${iconMarkup('blade', { size: 16, color: '#3a2604' })} TO BATTLE</button>
       </div>`
     if (story) {
       const t = el.querySelector('[data-bark]')

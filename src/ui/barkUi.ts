@@ -5,6 +5,7 @@
 
 import { HEROES } from '../game/heroes'
 import { NARRATOR_SPEAKERS, type Bark } from '../game/barks'
+import { glyphIcon } from './icons'
 
 const CSS = `
 .ebk { position: fixed; left: 50%; bottom: calc(216px + env(safe-area-inset-bottom)); z-index: 44;
@@ -67,7 +68,7 @@ export function showBarkLine(speaker: string, text: string, opts: BarkShowOption
   const d = document.createElement('div')
   d.className = 'ebk' + (opts.layout === 'map' ? ' map' : '') + (speaker === 'morose' ? ' morose' : '')
   d.style.setProperty('--bk', s.color)
-  d.innerHTML = `<div class="p">${s.glyph}</div><div class="b"><div class="n"></div><div class="t"></div></div>`
+  d.innerHTML = `<div class="p">${glyphIcon(s.glyph, { size: 22, color: s.color })}</div><div class="b"><div class="n"></div><div class="t"></div></div>`
   d.querySelector('.n')!.textContent = s.name
   d.querySelector('.t')!.textContent = text
   d.addEventListener('pointerdown', (e) => {

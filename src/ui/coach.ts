@@ -3,6 +3,8 @@
 // intercepts a tap, never adds an "OK" button, never blocks play. The player
 // completes a step by DOING it; the director (BattleScene) decides when to move on.
 
+import { iconMarkup } from './icons'
+
 const CSS = `
 .chr-coach { position: fixed; inset: 0; z-index: 2600; pointer-events: none;
   font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; }
@@ -55,7 +57,7 @@ export class Coach {
     this.pill.append(this.title, this.sub)
     this.hand = document.createElement('div')
     this.hand.className = 'chr-coach-hand'
-    this.hand.textContent = '👆'
+    this.hand.innerHTML = iconMarkup('hand', { size: 30, color: '#ffe08a' })
     this.ringBox = document.createElement('div')
     this.ringBox.className = 'chr-coach-ringbox'
     this.root.append(this.ringBox, this.pill, this.hand)

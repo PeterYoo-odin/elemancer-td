@@ -11,6 +11,7 @@
 // bottom action bar exactly, whatever rows the dock currently shows.
 
 import { speakerInfo } from './barkUi'
+import { glyphIcon, iconMarkup } from './icons'
 
 const CSS = `
 .eld-chat { position:absolute; left:8px; bottom: calc(var(--dock-h, 230px) + 10px); z-index:24;
@@ -73,7 +74,7 @@ export class ChatFeed {
     this.panel.className = 'eld-chat-panel'
     this.tab = document.createElement('button')
     this.tab.className = 'eld-chat-tab'
-    this.tab.textContent = '💬'
+    this.tab.innerHTML = iconMarkup('chat', { size: 22, color: '#efe9ff' })
     this.badge = document.createElement('span')
     this.badge.className = 'ub'
     this.tab.appendChild(this.badge)
@@ -113,7 +114,7 @@ export class ChatFeed {
       msg.style.setProperty('--ck', s.color)
       const g = document.createElement('div')
       g.className = 'cg'
-      g.textContent = s.glyph
+      g.innerHTML = glyphIcon(s.glyph, { size: 18, color: s.color })
       const b = document.createElement('div')
       b.className = 'cb'
       const n = document.createElement('div')

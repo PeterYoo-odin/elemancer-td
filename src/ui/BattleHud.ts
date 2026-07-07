@@ -13,6 +13,7 @@ import { RARITY_COLOR } from '../game/heroes'
 import { heroArtUrl } from './heroArt'
 import { heroStats, heroSpellScaled, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
+import { glyphIcon, iconMarkup, currencyIcon } from './icons'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 import { playUiTick } from './sfx'
@@ -56,6 +57,14 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   const e = document.createElement(tag)
   if (cls) e.className = cls
   if (text !== undefined) e.textContent = text
+  return e
+}
+
+/** Like el(), but the content is inline-SVG icon markup (innerHTML, not text). */
+function iconEl<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, markup: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag)
+  e.className = cls
+  e.innerHTML = markup
   return e
 }
 
@@ -554,7 +563,7 @@ export class BattleHud {
     this.pauseBtn.onclick = () => { playUiTick(); this.cb.onPause() }
     this.speedBtn = el('button', 'pe', '1×')
     this.speedBtn.onclick = () => { playUiTick(); this.cb.onSpeed() }
-    const resetBtn = el('button', 'pe', '🧭')
+    const resetBtn = iconEl('button', 'pe', iconMarkup('target', { size: 18, color: '#e6ddff' }))
     resetBtn.onclick = () => { playUiTick(); this.cb.onResetView() }
     rc.append(this.pauseBtn, this.speedBtn, resetBtn)
     attachTip(this.pauseBtn, () => ({
@@ -581,7 +590,7 @@ export class BattleHud {
     // one-time discoverability hint (the tooltip layer IS the manual)
     this.hintEl = el('div', 'eld-hint')
     const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
-    this.hintEl.textContent = coarse ? '💡 Long-press anything to inspect it' : '💡 Hover anything to inspect it'
+    this.hintEl.innerHTML = `${iconMarkup('sparkle', { size: 13, color: '#ffe08a' })} ${coarse ? 'Long-press anything to inspect it' : 'Hover anything to inspect it'}`
     this.root.append(this.hintEl)
     try { this.hintDone = localStorage.getItem('chromancer_tip_hint_v1') === '1' } catch { this.hintDone = true }
 
@@ -596,7 +605,7 @@ export class BattleHud {
       b.style.borderColor = hex(c)
       b.style.color = hex(c)
       const glyph = key === 'meteor' ? '☄' : key === 'freeze' ? '❄' : '💰'
-      b.append(el('span', undefined, glyph))
+      b.append(iconEl('span', '', glyphIcon(glyph, { size: 20, color: hex(c) })))
       const mask = el('div', 'cdmask')
       const txt = el('div', 'cdtxt', '')
       b.append(mask, txt)
@@ -616,7 +625,7 @@ export class BattleHud {
       const nm = el('div', 'tn', def.name)
       const cost = el('div', 'tc', '$0')
       const tt = el('div', 'tt', def.damageType.slice(0, 4).toUpperCase() + (def.element ? ' · ' + def.element[0] : ''))
-      const lock = el('div', 'lock', '🔒')
+      const lock = iconEl('div', 'lock', iconMarkup('lock', { size: 16, color: '#efe9ff' }))
       lock.style.display = 'none'
       b.append(gem, nm, cost, tt, lock)
       b.onclick = () => { playUiTick(); this.cb.onTowerButton(kind) }
@@ -857,7 +866,7 @@ export class BattleHud {
         if (dye) port.style.filter = dye.css
       } else {
         port.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
-        port.append(el('span', 'hglyph', def.glyph))
+        port.append(iconEl('span', 'hglyph', glyphIcon(def.glyph, { size: 24, color: '#fff' })))
       }
       port.style.borderColor = hex(RARITY_COLOR[def.rarity])
       port.style.color = hex(def.color)
@@ -894,7 +903,7 @@ export class BattleHud {
           ref.mask.style.background = `conic-gradient(rgba(6,4,16,.8) ${deg}deg, transparent ${deg}deg)`
           ref.cdtxt.textContent = String(Math.ceil(cd))
           ref.root.classList.remove('ready')
-          ref.badge.textContent = h.spell.glyph
+          ref.badge.innerHTML = glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })
           this.heroWasReady.set(entry.heroId, false)
         } else {
           ref.mask.style.background = 'transparent'
@@ -902,7 +911,7 @@ export class BattleHud {
           ref.root.classList.add('ready')
           if (this.heroWasReady.get(entry.heroId) === false) this.popClass(ref.root, 'ping', 550)
           this.heroWasReady.set(entry.heroId, true)
-          ref.badge.textContent = `${h.spell.glyph} CAST`
+          ref.badge.innerHTML = `${glyphIcon(h.spell.glyph, { size: 16, color: hex(entry.def.color) })} CAST`
         }
         ref.badge.style.color = hex(entry.def.color)
         ref.port.style.borderColor = hex(entry.def.color)
@@ -1043,7 +1052,7 @@ export class BattleHud {
     const sig = def.signature
     const awake = signatureAwake(entry.level)
     rows.push({
-      k: `${sig.glyph} ${sig.name}`,
+      k: sig.name,
       v: awake ? sig.blurb : `dormant — awakens at Lv ${SIGNATURE_UNLOCK_LEVEL}`,
       c: awake ? hex(def.color) : '#9d8fc5',
     })
@@ -1052,8 +1061,8 @@ export class BattleHud {
     const rInfo = resonanceInfo(def.resonantTower)
     rows.push(
       res
-        ? { k: '🔗 Resonance', v: `${res.name} · ${res.desc}`, c: '#8dff4a' }
-        : { k: '🔗 Resonance', v: awake ? `build 2+ ${rInfo.towerName} towers to awaken` : `needs Lv ${SIGNATURE_UNLOCK_LEVEL} + 2 ${rInfo.towerName} towers`, c: '#9d8fc5' },
+        ? { k: 'Resonance', v: `${res.name} · ${res.desc}`, c: '#8dff4a' }
+        : { k: 'Resonance', v: awake ? `build 2+ ${rInfo.towerName} towers to awaken` : `needs Lv ${SIGNATURE_UNLOCK_LEVEL} + 2 ${rInfo.towerName} towers`, c: '#9d8fc5' },
     )
     rows.push(
       fielded
@@ -1163,7 +1172,7 @@ export class BattleHud {
     close.onclick = () => this.cb.onSelectDeselect()
 
     const ctl = el('div', 'ctl')
-    const tgt = el('button', 'tgt pe', `🎯 ${t.targeting}`)
+    const tgt = iconEl('button', 'tgt pe', `${iconMarkup('target', { size: 13, color: '#e6ddff' })} ${t.targeting}`)
     tgt.onclick = () => { this.cb.onTargeting(t.id); this.showUpgrade(sim, id) }
     attachTip(tgt, () => {
       const tt = this.simRef?.towerById(id)
@@ -1369,14 +1378,14 @@ export class BattleHud {
       const box = el('div', 'eld-lesson')
       const lt = el('div', 'lt')
       lt.append(el('div', 'lh', "MADDERVANE'S LESSON"), el('div', 'lb', opts.lesson))
-      box.append(el('div', 'li', '🖌️'), lt)
+      box.append(iconEl('div', 'li', iconMarkup('brush', { size: 22, color: '#c9b6ff' })), lt)
       ov.append(box)
     }
     const rewards = el('div', 'eld-rewards')
     const lines: string[] = []
-    if (opts.coins > 0) lines.push(`+${opts.coins} 🪙`)
-    if (opts.diamonds > 0) lines.push(`+${opts.diamonds} 💎`)
-    if (opts.shards && opts.shards > 0) lines.push(`+${opts.shards} 🔹`)
+    if (opts.coins > 0) lines.push(`+${opts.coins} ${currencyIcon('coin', { size: 15 })}`)
+    if (opts.diamonds > 0) lines.push(`+${opts.diamonds} ${currencyIcon('diamond', { size: 15 })}`)
+    if (opts.shards && opts.shards > 0) lines.push(`+${opts.shards} ${currencyIcon('shard', { size: 15 })}`)
     rewards.innerHTML = lines.join('<br>')
     if (lines.length) ov.append(rewards)
     if (opts.unlocked) {
@@ -1392,20 +1401,20 @@ export class BattleHud {
       canvas.className = 'eld-sharecard'
       ov.append(canvas)
       const srow = el('div', 'eld-btnrow')
-      const sh = el('button', 'eld-btn blue slim', '📤 SHARE')
+      const sh = iconEl('button', 'eld-btn blue slim', `${iconMarkup('link', { size: 15, color: '#cfe0ff' })} SHARE`)
       sh.onclick = async () => {
         if (!(await shareCard(canvas, share))) {
           downloadCard(canvas, share.code)
           this.banner('CARD SAVED — paste it anywhere', 0x9ee8ff)
         }
       }
-      const cp = el('button', 'eld-btn purple slim', '🔗 COPY SEED LINK')
+      const cp = iconEl('button', 'eld-btn purple slim', `${iconMarkup('link', { size: 14, color: '#e0ccff' })} COPY SEED LINK`)
       cp.onclick = async () => {
         const ok = await copyText(share.link)
         cp.textContent = ok ? '✓ LINK COPIED' : '✗ COPY FAILED'
-        window.setTimeout(() => { cp.textContent = '🔗 COPY SEED LINK' }, 1600)
+        window.setTimeout(() => { cp.innerHTML = `${iconMarkup('link', { size: 14, color: '#e0ccff' })} COPY SEED LINK` }, 1600)
       }
-      const dl = el('button', 'eld-btn purple slim', '⬇')
+      const dl = el('button', 'eld-btn purple slim', '↓')
       dl.title = 'Download the card'
       dl.onclick = () => downloadCard(canvas, share.code)
       srow.append(sh, cp, dl)
@@ -1448,11 +1457,11 @@ export class BattleHud {
     ov.append(row)
     if (share) {
       const srow = el('div', 'eld-btnrow')
-      const cp = el('button', 'eld-btn purple slim', '🔗 COPY SEED LINK')
+      const cp = iconEl('button', 'eld-btn purple slim', `${iconMarkup('link', { size: 14, color: '#e0ccff' })} COPY SEED LINK`)
       cp.onclick = async () => {
         const ok = await copyText(share.link)
         cp.textContent = ok ? '✓ LINK COPIED' : '✗ COPY FAILED'
-        window.setTimeout(() => { cp.textContent = '🔗 COPY SEED LINK' }, 1600)
+        window.setTimeout(() => { cp.innerHTML = `${iconMarkup('link', { size: 14, color: '#e0ccff' })} COPY SEED LINK` }, 1600)
       }
       srow.append(cp)
       ov.append(srow)
