@@ -1,0 +1,11 @@
+{
+  "note": "Painted per-realm level backdrops (16:9). Wire as the battle-board background/skybox + ambient light tint per realm, in realm order.",
+  "realms": [
+    { "order": 1, "key": "emberwaste",     "file": "emberwaste.png",     "theme": "fire/volcanic",  "tint": "#e8802c" },
+    { "order": 2, "key": "frostreach",      "file": "frostreach.png",     "theme": "ice/tundra",     "tint": "#6cc6e8" },
+    { "order": 3, "key": "stormpeaks",      "file": "stormpeaks.png",     "theme": "lightning/peaks","tint": "#8a6ce0" },
+    { "order": 4, "key": "verdantwilds",    "file": "verdantwilds.png",   "theme": "nature/swamp",   "tint": "#4fbf6a" },
+    { "order": 5, "key": "radiantsanctum",  "file": "radiantsanctum.png", "theme": "light/celestial","tint": "#e8c65a" },
+    { "order": 6, "key": "umbralvoid",      "file": "umbralvoid.png",     "theme": "void/greying",   "tint": "#9a5ac0" }
+  ]
+}
