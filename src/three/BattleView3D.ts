@@ -193,6 +193,10 @@ export class BattleView3D {
   private projPools = new Map<string, ProjSlot[]>()
   private activeScratch = new Set<number>()
 
+  // burning-ground zones (Scorch branch): glowing pulsing discs + throttled embers
+  private zoneViews = new Map<number, { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; emberAcc: number; phase: number }>()
+  private zoneGeo!: THREE.CircleGeometry
+
   private transients: Transient[] = []
   private buffLinesGroup: THREE.Group
 
@@ -1066,7 +1070,35 @@ export class BattleView3D {
     this.syncTowers(selectedId)
     this.syncHeroes()
     this.syncProjectiles()
+    this.syncZones()
     if (this.buffDirty) { this.syncBuffLinks(); this.buffDirty = false }
+  }
+
+  private syncZones(): void {
+    const active = this.activeScratch
+    active.clear()
+    for (const z of this.sim.zones) {
+      if (!z.active) continue
+      active.add(z.id)
+      let s = this.zoneViews.get(z.id)
+      if (!s) {
+        const mat = new THREE.MeshBasicMaterial({ color: z.color, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+        const mesh = new THREE.Mesh(this.zoneGeo, mat)
+        mesh.rotation.x = -Math.PI / 2
+        this.scene.add(mesh)
+        s = { mesh, mat, emberAcc: 0, phase: (z.x * 7.3 + z.y * 3.1) % (Math.PI * 2) }
+        this.zoneViews.set(z.id, s)
+      }
+      s.mesh.position.set(wx(z.x), GROUND + 0.025, wz(z.y))
+      s.mesh.scale.setScalar(wr(z.radius))
+    }
+    for (const [id, s] of this.zoneViews) {
+      if (!active.has(id)) {
+        this.scene.remove(s.mesh)
+        s.mat.dispose()
+        this.zoneViews.delete(id)
+      }
+    }
   }
 
   private syncEnemies(): void {
@@ -1493,6 +1525,20 @@ export class BattleView3D {
     this.emitParticles(wx(simX), 0.7, wz(simY), color, 16, 3)
   }
 
+  // ELEMENTAL REACTION detonation: two-tone burst + shock ring + flash + camera bite.
+  fxReaction(simX: number, simY: number, radiusPx: number, color: number, color2: number): void {
+    const r = Math.max(60, radiusPx || 70)
+    this.pushRing(simX, simY, r + 30, color, 0.95)
+    this.spellFlash(simX, simY, r, color2, 1.6)
+    const x = wx(simX)
+    const z = wz(simY)
+    this.emitParticles(x, 0.8, z, color, 22, 4.2)
+    this.emitParticles(x, 0.8, z, color2, 14, 3.4)
+    this.emitParticles(x, 0.9, z, 0xffffff, 8, 2.6)
+    this.shake(0.085)
+    this.pushIn(0.35)
+  }
+
   fxSpell(key: string, simX: number, simY: number, radiusPx: number, color: number): void {
     if (key === 'meteor') {
       this.pushRing(simX, simY, radiusPx, color, 0.95)
@@ -1735,6 +1781,18 @@ export class BattleView3D {
       s.glow.intensity = Math.max(s.glow.intensity, 0.9 + Math.sin(this.clockT * 2.4) * 0.18)
     }
 
+    // burning ground: pulse the disc + throttled rising embers
+    for (const [, s] of this.zoneViews) {
+      s.mat.opacity = 0.24 + Math.sin(this.clockT * 5 + s.phase) * 0.09
+      s.emberAcc += dt
+      if (s.emberAcc > 0.1) {
+        s.emberAcc = 0
+        const a = Math.random() * Math.PI * 2
+        const rr = Math.random() * s.mesh.scale.x * 0.8
+        this.emitParticles(s.mesh.position.x + Math.cos(a) * rr, GROUND + 0.15, s.mesh.position.z + Math.sin(a) * rr, 0xff8a3c, 1, 0.9)
+      }
+    }
+
     this.updateProjTrails(dt)
     this.updateParticles(dt)
     this.updateMotes()
@@ -1752,6 +1810,8 @@ export class BattleView3D {
   private initSharedGeom(): void {
     this.shadowGeo = new THREE.CircleGeometry(1, 16)
     this.disposables.push(this.shadowGeo)
+    this.zoneGeo = new THREE.CircleGeometry(1, 26)
+    this.disposables.push(this.zoneGeo)
     this.hpBgGeo = new THREE.PlaneGeometry(0.7, 0.1)
     this.hpFillGeo = new THREE.PlaneGeometry(0.66, 0.07)
     this.disposables.push(this.hpBgGeo, this.hpFillGeo)
@@ -1814,6 +1874,10 @@ export class BattleView3D {
     this.projViews.clear()
     this.projPools.clear()
     this.projGeoCache.clear()
+
+    // burning-ground zones own per-zone materials (shared geo is in disposables)
+    for (const [, s] of this.zoneViews) { this.scene.remove(s.mesh); s.mat.dispose() }
+    this.zoneViews.clear()
 
     // everything registered
     for (const d of this.disposables) {

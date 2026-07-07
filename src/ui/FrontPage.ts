@@ -3,7 +3,7 @@
 // lifecycle and supplies navigation handlers; this file is presentation only.
 //
 // Interim art direction until the painted key-art lands: deep night-indigo
-// palette, metallic-gold ELEMANCER wordmark with elemental glints, glassy menu
+// palette, metallic-gold CHROMANCER wordmark with elemental glints, glassy menu
 // buttons, and a light canvas of ambient embers/frost motes.
 
 import { appSettings } from './settings'
@@ -342,8 +342,8 @@ export class FrontPage {
 
       <div class="efp-hero">
         <div class="efp-logo-wrap efp-in" style="animation-delay:.12s">
-          <div class="efp-logo">ELEMANCER</div>
-          <div class="efp-logo-sheen" aria-hidden="true">ELEMANCER</div>
+          <div class="efp-logo">CHROMANCER</div>
+          <div class="efp-logo-sheen" aria-hidden="true">CHROMANCER</div>
           <span class="efp-spark s-fire" aria-hidden="true">&#10022;</span>
           <span class="efp-spark s-ice" aria-hidden="true">&#10022;</span>
           <span class="efp-spark s-bolt" aria-hidden="true">&#10022;</span>
@@ -353,7 +353,7 @@ export class FrontPage {
           <div class="efp-orb o-fire"></div><div class="efp-orb o-bolt"></div><div class="efp-orb o-ice"></div>
           <div class="efp-rule"></div>
         </div>
-        <div class="efp-tag efp-in" style="animation-delay:.3s"><span>Master the elements</span> &middot; <span>Hold the line</span></div>
+        <div class="efp-tag efp-in" style="animation-delay:.3s"><span>Paint the world back</span> &middot; <span>Hold the line</span></div>
       </div>
 
       <div class="efp-menu">

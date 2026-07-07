@@ -1,7 +1,7 @@
 import Phaser from 'phaser'
 import { UI, makeButton, currencyBar, orbBackdrop } from './ui'
 
-// Shop — UI ONLY, nothing charges this slice. Diamond packs + an "Elemancer Plus"
+// Shop — UI ONLY, nothing charges this slice. Diamond packs + a "Chromancer Plus"
 // subscription, all inert "Coming soon". economy.ts stays the single currency
 // source; a real IAP layer drops in behind these buttons later.
 interface Pack {
@@ -46,7 +46,7 @@ export class ShopScene extends Phaser.Scene {
       this.drawPack(pack, x, y)
     })
 
-    // Elemancer Plus subscription card
+    // Chromancer Plus subscription card
     this.drawSubscription(width / 2, 720)
 
     this.add
@@ -97,7 +97,7 @@ export class ShopScene extends Phaser.Scene {
     bg.lineStyle(5, 0xffd54a, 0.9)
     bg.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 22)
 
-    this.add.text(x, y - h / 2 + 32, '✦ ELEMANCER PLUS ✦', { fontFamily: 'Arial Black', fontSize: '30px', color: '#ffd54a' }).setOrigin(0.5).setDepth(3)
+    this.add.text(x, y - h / 2 + 32, '✦ CHROMANCER PLUS ✦', { fontFamily: 'Arial Black', fontSize: '30px', color: '#ffd54a' }).setOrigin(0.5).setDepth(3)
     const perks = ['2× idle earnings', 'Daily diamond stipend', 'Exclusive cosmetic skin', 'Auto-collect coins']
     perks.forEach((p, i) => {
       const px = x - w / 2 + 40 + (i % 2) * (w / 2 - 20)

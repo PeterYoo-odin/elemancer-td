@@ -140,6 +140,7 @@ const CSS = `
 .eld-upg .branches { display:flex; gap:8px; flex:1 1 auto; }
 .eld-upg .br { flex:1; padding:8px 6px; border-radius:12px; font-weight:800; border:1px solid rgba(255,255,255,.25);
   display:flex; flex-direction:column; align-items:center; line-height:1.15; }
+.eld-upg .br .bb { font-size:10px; font-weight:700; opacity:.85; }
 .eld-upg .br .bc { font-size:12px; opacity:.9; }
 .eld-upg .br.no { opacity:.55; }
 .eld-upg .maxlbl { flex:1 1 auto; text-align:center; padding:10px; font-weight:900; color:var(--gold); font-size:18px; }
@@ -273,6 +274,23 @@ const CSS = `
 /* flying coins (world kill → gold counter) */
 .eld-coin { position:absolute; width:16px; height:16px; border-radius:50%; z-index:31; pointer-events:none;
   background:radial-gradient(circle at 35% 30%, #fff2b0, #ffd54a 60%, #c89600); box-shadow:0 0 8px rgba(255,213,74,.9); }
+
+/* ELEMENTAL REACTION callout: Balatro-style slam — huge, overshoots in, wobbles, punches out */
+.eld-react { position:absolute; left:50%; top:27%; z-index:32; pointer-events:none; font-weight:900;
+  font-size: clamp(36px, 10vw, 62px); letter-spacing:3px; white-space:nowrap; text-align:center;
+  transform:translate(-50%,-50%);
+  text-shadow: 0 4px 0 rgba(0,0,0,.5), 0 0 34px currentColor, 0 0 10px currentColor;
+  animation: eldreact 1s cubic-bezier(.16,1.5,.3,1) forwards; }
+.eld-react .rx-sub { display:block; font-size:13px; letter-spacing:7px; margin-top:2px; color:#fff;
+  opacity:.85; text-shadow:0 2px 4px rgba(0,0,0,.6); }
+@keyframes eldreact {
+  0%   { opacity:0; transform:translate(-50%,-50%) scale(2.8) rotate(-7deg); }
+  16%  { opacity:1; transform:translate(-50%,-50%) scale(.94) rotate(2.5deg); }
+  28%  { transform:translate(-50%,-50%) scale(1.14) rotate(-1.5deg); }
+  40%  { transform:translate(-50%,-50%) scale(1) rotate(0deg); }
+  80%  { opacity:1; }
+  100% { opacity:0; transform:translate(-50%,-58%) scale(.9); }
+}
 `
 
 export class BattleHud {
@@ -642,7 +660,7 @@ export class BattleHud {
         const afford = sim.gold >= cost
         const btn = el('button', 'br pe' + (afford ? '' : ' no'))
         btn.style.background = `linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
-        btn.append(el('span', undefined, b.name), el('span', 'bc', `$${cost}`))
+        btn.append(el('span', undefined, b.name), el('span', 'bb', b.blurb), el('span', 'bc', `$${cost}`))
         btn.onclick = () => this.cb.onBranch(t.id, idx)
         br.append(btn)
       })
@@ -813,6 +831,19 @@ export class BattleHud {
     const d = el('div', 'eld-wavebanner', msg)
     this.fxLayer.append(d)
     window.setTimeout(() => d.remove(), 1750)
+  }
+
+  // ELEMENTAL REACTION slam. Single element reused so back-to-back reactions
+  // replace (restart) the callout instead of stacking a wall of text.
+  private reactEl: HTMLElement | null = null
+  reactionCallout(name: string, color: number): void {
+    this.reactEl?.remove()
+    const d = el('div', 'eld-react', name)
+    d.style.color = hex(color)
+    d.append(el('span', 'rx-sub', 'ELEMENTAL REACTION'))
+    this.fxLayer.append(d)
+    this.reactEl = d
+    window.setTimeout(() => { if (this.reactEl === d) this.reactEl = null; d.remove() }, 1050)
   }
 
   flash(color: number, alpha = 0.45, dur = 240): void {

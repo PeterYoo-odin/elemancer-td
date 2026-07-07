@@ -1,4 +1,7 @@
-# Elemancer TD
+# CHROMANCER (Elemancer TD)
+
+> Display name: **CHROMANCER** — “Paint the world back.” Repo/package/paths keep the
+> original `elemancer` naming on purpose (renaming them would break Vercel/builds).
 
 A colorful, cartoon **idle + tower-defense** hybrid for the web. Built and hosted in Odin.
 

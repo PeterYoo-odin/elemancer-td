@@ -26,7 +26,11 @@ export interface TowerLevel {
   // Flame:
   burnDps?: number // burn damage per second
   burnDuration?: number // seconds burn lasts
-  splash?: number // splash radius in tiles (also Mortar/Meteor branches)
+  splash?: number // splash radius in tiles (also Mortar branch)
+  seeking?: boolean // Phoenix branch: fires a homing bolt instead of a burst (single-target hunter)
+  zoneDps?: number // Scorch branch: leaves burning ground dealing this DPS (area denial)
+  zoneDuration?: number // seconds the burning ground lingers
+  zoneRadius?: number // burning-ground radius in tiles
   // Storm:
   chainCount?: number // number of extra enemies a bolt jumps to
   chainRange?: number // tiles a bolt can jump between enemies
@@ -34,6 +38,7 @@ export interface TowerLevel {
   // Arcane (support):
   buffDamage?: number // +fraction damage granted to adjacent towers (e.g. 0.3 = +30%)
   buffRange?: number // +fraction range granted to adjacent towers
+  buffReach?: number // Amplify branch: buff aura reach in cells (default 1 = adjacent ring)
   dealsDamage?: boolean // Prism branch: the support beam also hurts enemies
 }
 
@@ -139,8 +144,10 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
       { damage: 24, range: 2.45, cooldown: 0.8, upgradeCost: 135, burnDps: 28, burnDuration: 2.6, splash: 1.35 },
     ],
     branches: [
-      { key: 'meteor', name: 'Meteor', blurb: 'Massive splash impact', damage: 60, range: 2.9, cooldown: 1.0, upgradeCost: 300, burnDps: 34, burnDuration: 2.4, splash: 2.1 },
-      { key: 'inferno', name: 'Inferno', blurb: 'Relentless scorching burn', damage: 32, range: 2.6, cooldown: 0.7, upgradeCost: 300, burnDps: 80, burnDuration: 3.4, splash: 1.4 },
+      // Kingdom-Rush rule: each branch changes what the tower DOES on screen.
+      // Scorch paints burning ground (area denial); Phoenix hunts one target with homing bolts.
+      { key: 'scorch', name: 'Scorch', blurb: 'Leaves burning ground · area denial', damage: 34, range: 2.7, cooldown: 1.0, upgradeCost: 300, burnDps: 30, burnDuration: 2.6, splash: 1.5, zoneDps: 30, zoneDuration: 3.2, zoneRadius: 1.25 },
+      { key: 'phoenix', name: 'Phoenix', blurb: 'Seeking firebolt · hunts one target', damage: 95, range: 4.0, cooldown: 0.8, upgradeCost: 300, burnDps: 46, burnDuration: 3.0, splash: 0, seeking: true },
     ],
   },
   storm: {
@@ -187,8 +194,10 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
       { damage: 12, range: 1.6, cooldown: 1.0, upgradeCost: 160, buffDamage: 0.42, buffRange: 0.15 },
     ],
     branches: [
-      { key: 'amplify', name: 'Amplify', blurb: 'Overwhelming ally buff', damage: 14, range: 1.6, cooldown: 1.0, upgradeCost: 300, buffDamage: 0.75, buffRange: 0.25 },
-      { key: 'prism', name: 'Prism', blurb: 'Buffs AND blasts foes', damage: 46, range: 2.8, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true },
+      // Amplify widens the buff NETWORK (reach 2 cells — visibly longer glow links);
+      // Prism reforges the beam into armour-piercing shots while still buffing.
+      { key: 'amplify', name: 'Amplify', blurb: 'Buff aura reaches 2 tiles', damage: 14, range: 1.6, cooldown: 1.0, upgradeCost: 300, buffDamage: 0.55, buffRange: 0.18, buffReach: 2 },
+      { key: 'prism', name: 'Prism', blurb: 'Piercing beam · buffs AND blasts', damage: 52, range: 3.0, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true, damageType: 'Pierce', armorPen: 6 },
     ],
   },
 }

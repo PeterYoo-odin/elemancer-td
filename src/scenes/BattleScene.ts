@@ -13,6 +13,7 @@ import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, cellCenter, type SimEvent } from '../s
 import { BattleView3D } from '../three/BattleView3D'
 import { BattleHud, type HudContext } from '../ui/BattleHud'
 import { music } from '../ui/music'
+import { appSettings } from '../ui/settings'
 
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
@@ -45,6 +46,12 @@ export class BattleScene extends Phaser.Scene {
   private lastTime = 0
   private hitstopT = 0 // brief slow-mo on big kills (view pacing only)
   private lastSimState = ''
+  private reactCalloutCd = 0 // throttles the big reaction slam (bursts still always fire)
+
+  // THE GREYING as rendering: the battlefield starts drained and colour returns
+  // as the player clears it (CSS saturate filter on the 3D canvas — cheap, GPU-composited).
+  private greySat = -1 // current smoothed saturation (-1 = uninitialised)
+  private greyBloomT = 0 // victory colour-bloom timer
 
   constructor() { super('Battle') }
 
@@ -82,6 +89,9 @@ export class BattleScene extends Phaser.Scene {
     this.lastTime = 0
     this.hitstopT = 0
     this.lastSimState = ''
+    this.reactCalloutCd = 0
+    this.greySat = -1
+    this.greyBloomT = 0
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -148,6 +158,9 @@ export class BattleScene extends Phaser.Scene {
     }
     this.lastSimState = this.sim.state
 
+    if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
+    this.updateGreying(dt)
+
     this.view.syncFrom(this.selectedId)
     this.view.render(dt)
     this.hud.update(this.sim, this.hudCtx())
@@ -157,6 +170,26 @@ export class BattleScene extends Phaser.Scene {
     if (this.sim.state !== 'draft' && this.draftShown) { this.draftShown = false; this.hud.hideDraft() }
     if ((this.sim.state === 'won' || this.sim.state === 'lost') && !this.resultShown) this.showResult()
     void time
+  }
+
+  // The Greying: battlefield saturation tracks clear progress — every kill and
+  // wave paints colour back; victory blooms past full colour then settles.
+  private updateGreying(dt: number): void {
+    const p = this.sim.colorProgress()
+    let target = 0.28 + 0.72 * p
+    let bright = 0.92 + 0.08 * p
+    if (this.greyBloomT > 0) {
+      this.greyBloomT = Math.max(0, this.greyBloomT - dt)
+      const k = Math.sin(Math.min(1, this.greyBloomT / 1.4) * Math.PI) // 0→1→0 pulse
+      target = 1 + k * 0.45
+      bright = 1 + k * 0.18
+    }
+    if (this.greySat < 0) this.greySat = target // no pop-in on the first frame
+    this.greySat += (target - this.greySat) * Math.min(1, dt * 3)
+    const sat = Math.round(this.greySat * 200) / 200 // quantise → no per-frame string churn
+    const br = Math.round(bright * 200) / 200
+    const filter = sat >= 0.995 && br >= 0.995 && br <= 1.005 ? '' : `saturate(${sat}) brightness(${br})`
+    if (this.view.canvas.style.filter !== filter) this.view.canvas.style.filter = filter
   }
 
   private hudCtx(): HudContext {
@@ -398,6 +431,9 @@ export class BattleScene extends Phaser.Scene {
     this.exitDeploy()
     this.deselect()
     if (this.sim.state === 'won') {
+      // victory colour-BLOOM: the level snaps back to full colour with an overshoot
+      // (reduce-motion users still get full colour, just without the pulse)
+      if (!appSettings.reducedMotion()) this.greyBloomT = 1.4
       const stars = starsForClear(this.sim.lives, this.sim.startLives)
       const result = economy.awardCampaign(this.level.id, stars, this.level.baseCoins)
       const shards = this.awardHeroes(20 + stars * 12, 55 + stars * 30)
@@ -457,7 +493,8 @@ export class BattleScene extends Phaser.Scene {
         break
       case 'chain':
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
-        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SHATTER!'); this.hitstopT = Math.max(this.hitstopT, 0.12) }
+        // (renamed from SHATTER — that name now belongs to the Water+Storm reaction)
+        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12) }
         if (ev.count > 1) {
           const last = ev.points[ev.points.length - 1]
           this.floatAt(last[0], last[1], `CHAIN ×${ev.count}`, 0xffe14a, 20)
@@ -505,6 +542,15 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxHeroSpell(ev.effect, ev.x, ev.y, ev.radius, ev.color)
         this.hud.flash(ev.color, 0.4)
         this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
+        break
+      case 'reaction':
+        this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
+        this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, true, 1.1)
+        if (this.reactCalloutCd <= 0) {
+          this.hud.reactionCallout(ev.name, ev.color)
+          this.reactCalloutCd = 0.55
+          this.hitstopT = Math.max(this.hitstopT, 0.06)
+        }
         break
       case 'banner':
         this.hud.banner(ev.msg, ev.color)

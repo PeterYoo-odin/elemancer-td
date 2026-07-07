@@ -1,5 +1,5 @@
 // ============================================================================
-//  Elemancer TD — PURE, renderer-agnostic, deterministic simulation core.
+//  CHROMANCER (Elemancer TD) — PURE, renderer-agnostic, deterministic simulation core.
 //  ZERO Phaser imports. All game logic lives here; a view merely reads state and
 //  forwards input. Fixed-timestep, one seeded PRNG, object pooling, defensive
 //  math (never NaN/Infinity/negative-HP/overflow). Swap to Three.js later without
@@ -27,6 +27,7 @@ import {
   type TargetMode,
 } from './combat'
 import { COLS, ROWS, TILE, FIXED_DT, MAX_STEPS_PER_FRAME, cellCenter } from './layout'
+import { reactionFor, type AuraElement, type ReactionDef, type ReactionKey } from './reactions'
 import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
 import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
 import { heroStats, heroSpellScaled } from '../game/heroProgress'
@@ -38,6 +39,18 @@ const COMBO_STEP = 0.15 // per-synergy-hit multiplier growth
 const COMBO_MAX = 6 // hard cap (also a simcheck range bound)
 const DRAFT_EVERY = 3 // offer a draft after every N cleared waves
 const PROJECTILE_SPEED = 760
+
+// ---- elemental reactions (see reactions.ts for the pair table) -------------
+const AURA_WINDOW = 4 // seconds an element tag lingers on an enemy
+const REACT_LOCK = 1.1 // per-enemy cooldown after a reaction (paces the fireworks)
+const AMPLIFY_TAKEN = 1.25 // damage multiplier on AMPLIFY-marked enemies
+const AMPLIFY_DURATION = 4
+const MAX_ZONES = 48 // burning-ground pool cap (oldest recycled beyond this)
+
+// Aura an attacking tower paints (Arcane tags its OWN element so it combos with all).
+const TOWER_AURA: Record<TowerKind, AuraElement | undefined> = {
+  flame: 'Fire', frost: 'Water', storm: 'Storm', arcane: 'Arcane', cannon: undefined,
+}
 
 export type SimState = 'prep' | 'active' | 'draft' | 'won' | 'lost'
 
@@ -75,8 +88,25 @@ export interface SimEnemy {
   tearUntil: number
   tearAmount: number
   healTick: number
+  // elemental-reaction state (aura tag + pacing lock + AMPLIFY vulnerability mark)
+  auraElem: AuraElement | ''
+  auraUntil: number
+  reactLockUntil: number
+  amplifyUntil: number
   // transient view hints
   hitFlash: number
+}
+
+// A lingering ground hazard (Scorch branch: burning ground). Pooled like enemies.
+export interface SimZone {
+  id: number
+  active: boolean
+  x: number
+  y: number
+  radius: number // px
+  dps: number
+  until: number // absolute clock deadline
+  color: number
 }
 
 export interface SimTower {
@@ -145,6 +175,9 @@ export interface SimProjectile {
   synergy: boolean
   sourceKind: TowerKind
   color: number
+  // Phoenix branch payload: burn applied on impact (0 = none)
+  burnDps: number
+  burnDur: number
 }
 
 // Semantic events — the VIEW decides the juice (shake/flash/particles) from these.
@@ -168,6 +201,7 @@ export type SimEvent =
   | { t: 'heroSpell'; effect: SpellEffect; name: string; glyph: string; x: number; y: number; radius: number; color: number; count: number }
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
+  | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
 
 interface SpawnItem {
   kind: EnemyKind
@@ -192,6 +226,7 @@ export class Sim {
   towers: SimTower[] = []
   projectiles: SimProjectile[] = []
   heroes: SimHero[] = []
+  zones: SimZone[] = [] // burning-ground hazards (Scorch branch)
 
   // heroes: the loadout available to deploy, which ids are already fielded, and the
   // live element-synergy state (recomputed whenever the field changes).
@@ -213,6 +248,10 @@ export class Sim {
   comboCount = 0
   comboMult = 1
   comboTimer = 0
+
+  // Greying restoration: kills this wave / wave size, for colorProgress()
+  private waveKills = 0
+  private waveSpawnTotal = 1
 
   // run-wide draft upgrades
   upgrades: RunUpgrades = neutralUpgrades()
@@ -392,10 +431,21 @@ export class Sim {
 
     this.updateCombo(dt)
     this.updateEnemies(dt)
+    this.updateZones(dt)
     this.updateTowers(dt)
     this.updateHeroes(dt)
     this.updateProjectiles(dt)
     this.updateSpellCooldowns(dt)
+  }
+
+  // How much of the level's colour the player has painted back (0 = fully Greyed,
+  // 1 = restored). Monotonic across a run: waves cleared + kills within the wave.
+  colorProgress(): number {
+    if (this.state === 'won') return 1
+    if (this.config.endless) return clamp(this.waveIndex / 12, 0, 1)
+    const total = Math.max(1, this.config.level.waves.length)
+    const frac = this.state === 'active' ? clamp(this.waveKills / this.waveSpawnTotal, 0, 1) : 0
+    return clamp((this.waveIndex + frac) / total, 0, 1)
   }
 
   // ---- combo engine -------------------------------------------------------
@@ -476,6 +526,8 @@ export class Sim {
       }
       t += 0.5
     }
+    this.waveKills = 0
+    this.waveSpawnTotal = Math.max(1, this.spawnQueue.length)
   }
 
   private waveCleared(): void {
@@ -548,6 +600,10 @@ export class Sim {
     e.tearUntil = 0
     e.tearAmount = 0
     e.healTick = 0
+    e.auraElem = ''
+    e.auraUntil = 0
+    e.reactLockUntil = 0
+    e.amplifyUntil = 0
     e.hitFlash = 0
   }
 
@@ -558,7 +614,8 @@ export class Sim {
     const e: SimEnemy = {
       id: 0, active: false, def: ENEMIES.runner, kind: 'runner', maxHp: 1, hp: 1, shield: 0, shieldMax: 0,
       dist: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
-      poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0, hitFlash: 0,
+      poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0,
+      auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0, hitFlash: 0,
     }
     this.enemies.push(e)
     e.id = this.nextId++
@@ -772,6 +829,7 @@ export class Sim {
       dmgType,
       element: t.def.element,
       armorPen,
+      aura: TOWER_AURA[t.kind],
     }
   }
 
@@ -790,9 +848,10 @@ export class Sim {
       const s = this.stats(a)
       const bd = s.buffDamage ?? 0
       const br = s.buffRange ?? 0
+      const reach = Math.max(1, Math.round(s.buffReach ?? 1)) // Amplify branch: wider network
       for (const n of this.towers) {
         if (!n.active || n === a) continue
-        if (adjacentCell(a, n)) {
+        if (adjacentCell(a, n, reach)) {
           n.buffDmg += bd
           n.buffRng += br
         }
@@ -800,7 +859,7 @@ export class Sim {
       // support towers also empower adjacent heroes
       for (const n of this.heroes) {
         if (!n.active) continue
-        if (adjacentCell(a, n)) n.adjBuff += bd
+        if (adjacentCell(a, n, reach)) n.adjBuff += bd
       }
     }
     // support HEROES buff adjacent towers AND heroes (Sylvan/Pyra/Aurelia)
@@ -822,9 +881,10 @@ export class Sim {
     const out: Array<{ ax: number; ay: number; bx: number; by: number; color: number }> = []
     for (const a of this.towers) {
       if (!a.active || !a.def.support) continue
+      const reach = Math.max(1, Math.round(this.stats(a).buffReach ?? 1))
       for (const n of this.towers) {
         if (!n.active || n === a) continue
-        if (adjacentCell(a, n)) {
+        if (adjacentCell(a, n, reach)) {
           out.push({ ax: a.x, ay: a.y, bx: n.x, by: n.y, color: a.def.color })
         }
       }
@@ -891,7 +951,11 @@ export class Sim {
 
       if (t.kind === 'cannon') this.fireProjectile(t, target)
       else if (t.kind === 'frost') this.frostZap(t, range)
-      else if (t.kind === 'flame') this.flameBurst(t, target)
+      else if (t.kind === 'flame') {
+        // Phoenix branch: a seeking firebolt (homing projectile) instead of the burst.
+        if (this.stats(t).seeking) this.fireProjectile(t, target)
+        else this.flameBurst(t, target)
+      }
       else if (t.kind === 'storm') this.stormBolt(t, target)
       else this.arcaneZap(t, target)
     }
@@ -936,6 +1000,7 @@ export class Sim {
       p = {
         id: this.nextId++, active: false, x: 0, y: 0, tx: 0, ty: 0, targetId: -1, speed: PROJECTILE_SPEED,
         splash: 0, atk: { damage: 0, dmgType: 'Physical', armorPen: 0 }, synergy: false, sourceKind: 'cannon', color: 0xffffff,
+        burnDps: 0, burnDur: 0,
       }
       this.projectiles.push(p)
     }
@@ -951,6 +1016,9 @@ export class Sim {
     p.synergy = t.def.synergyDamage
     p.sourceKind = t.kind
     p.color = t.def.color
+    // Phoenix payload: the seeking bolt sets its target ablaze on impact.
+    p.burnDps = (s.burnDps ?? 0) * this.upgrades.burnDmgMult
+    p.burnDur = s.burnDuration ?? 0
     this.emit({ t: 'towerFire', x: t.x, y: t.y, tx: target.x, ty: target.y, color: t.def.color, kind: t.kind })
   }
 
@@ -979,6 +1047,62 @@ export class Sim {
       if (e.active) {
         e.burnUntil = this.clock + burnDur
         e.burnDps = Math.max(e.burnDps, burnDps)
+      }
+    }
+    // Scorch branch: the impact leaves burning ground — area denial you can SEE.
+    const zoneDps = s.zoneDps ?? 0
+    if (zoneDps > 0) {
+      this.spawnZone(target.x, target.y, (s.zoneRadius ?? 1.2) * TILE, zoneDps * this.upgrades.burnDmgMult, s.zoneDuration ?? 3, 0xff7a30)
+    }
+  }
+
+  // ---- burning ground (Scorch) ---------------------------------------------
+  // Zones near an existing one MERGE into it (refresh + grow) so a fast-firing
+  // Scorch tower reads as one persistent burning patch, not confetti.
+  private spawnZone(x: number, y: number, radius: number, dps: number, duration: number, color: number): void {
+    const mergeR2 = (TILE * 0.6) * (TILE * 0.6)
+    for (const z of this.zones) {
+      if (!z.active) continue
+      if (dist2(z.x, z.y, x, y) <= mergeR2) {
+        z.until = Math.max(z.until, this.clock + duration)
+        z.dps = Math.max(z.dps, dps)
+        z.radius = Math.max(z.radius, radius)
+        return
+      }
+    }
+    let z: SimZone | null = null
+    for (const cand of this.zones) if (!cand.active) { z = cand; break }
+    if (!z && this.zones.length >= MAX_ZONES) {
+      // pool full → recycle the zone closest to expiring
+      z = this.zones[0]
+      for (const cand of this.zones) if (cand.until < z.until) z = cand
+    }
+    if (!z) {
+      z = { id: 0, active: false, x: 0, y: 0, radius: 1, dps: 0, until: 0, color }
+      this.zones.push(z)
+    }
+    z.id = this.nextId++
+    z.active = true
+    z.x = x
+    z.y = y
+    z.radius = Math.max(8, radius)
+    z.dps = Math.max(0, dps)
+    z.until = this.clock + Math.max(0.1, duration)
+    z.color = color
+    this.emit({ t: 'aoe', x, y, radius: z.radius, color, alpha: 0.5 })
+  }
+
+  private updateZones(dt: number): void {
+    for (const z of this.zones) {
+      if (!z.active) continue
+      if (this.clock >= z.until) { z.active = false; continue }
+      const r2 = z.radius * z.radius
+      for (const e of this.enemies) {
+        if (!e.active || e.def.isAir) continue // ground fire can't reach flyers
+        if (dist2(z.x, z.y, e.x, e.y) > r2) continue
+        // standing in fire counts as afflicted (combo hook + burning visual)
+        e.burnUntil = Math.max(e.burnUntil, this.clock + 0.2)
+        this.applyRaw(e, z.dps * dt, false)
       }
     }
   }
@@ -1070,6 +1194,10 @@ export class Sim {
 
   private dealDamageProjectile(e: SimEnemy, p: SimProjectile): void {
     this.dealDamageWith(e, p.atk, p.synergy, p.x, p.y)
+    if (p.burnDps > 0 && e.active) {
+      e.burnUntil = this.clock + Math.max(0.1, p.burnDur)
+      e.burnDps = Math.max(e.burnDps, p.burnDps)
+    }
   }
 
   // ---- damage pipeline (grid × wheel × combo × shield) --------------------
@@ -1095,6 +1223,9 @@ export class Sim {
       comboN = this.comboCount
     }
 
+    // AMPLIFY reaction mark: the target takes bonus damage while marked.
+    if (e.amplifyUntil > this.clock) dmg *= AMPLIFY_TAKEN
+
     // shield absorption (breaks → not an immunity)
     if (e.shield > 0) {
       const block = def.shieldBlock ?? 0.6
@@ -1110,6 +1241,144 @@ export class Sim {
     this.emit({ t: 'damage', x: e.x, y: e.y - e.def.radius - 6, amount: dmg, eff, combo: comboN })
     e.hitFlash = 0.09
     this.applyRaw(e, dmg, true)
+
+    // elemental reactions: paint the aura / detonate a pair (survivors only)
+    if (e.active && atk.aura) this.applyAura(e, atk.aura, dmg)
+  }
+
+  // ======================================================================
+  //  ELEMENTAL REACTIONS — two different elements on one enemy inside the
+  //  window detonate a named reaction. Deterministic: no RNG anywhere here.
+  // ======================================================================
+  private applyAura(e: SimEnemy, aura: AuraElement, triggerDmg: number): void {
+    if (this.clock < e.reactLockUntil) return // paced: no tags during the lock
+    const hasAura = e.auraElem !== '' && e.auraUntil > this.clock
+    if (hasAura && e.auraElem !== aura) {
+      const def = reactionFor(e.auraElem as AuraElement, aura)
+      if (def) {
+        e.auraElem = ''
+        e.auraUntil = 0
+        e.reactLockUntil = this.clock + REACT_LOCK
+        this.triggerReaction(e, def, clamp(triggerDmg, 0, 1e6))
+        return
+      }
+    }
+    // no reaction for this pair (or same element) → set/refresh the tag
+    e.auraElem = aura
+    e.auraUntil = this.clock + AURA_WINDOW
+  }
+
+  // burst damage from a reaction: ignores armor (it's a detonation, not an attack)
+  private reactionBurst(e: SimEnemy, amount: number): void {
+    if (!e.active) return
+    const dmg = clamp(amount, 0, 1e7)
+    if (dmg <= 0) return
+    this.emit({ t: 'damage', x: e.x, y: e.y - e.def.radius - 6, amount: dmg, eff: 'strong', combo: 0 })
+    e.hitFlash = 0.09
+    this.applyRaw(e, dmg, false)
+  }
+
+  private triggerReaction(e: SimEnemy, def: ReactionDef, trigger: number): void {
+    const cx = e.x
+    const cy = e.y
+    let radius = 0
+
+    if (def.key === 'thermal') {
+      // THERMAL SHOCK: armor break — strips flat armor for a while + a burst
+      e.tearUntil = Math.max(e.tearUntil, this.clock + 5)
+      e.tearAmount = Math.max(e.tearAmount, 8)
+      this.reactionBurst(e, trigger * 0.8)
+    } else if (def.key === 'shatter') {
+      // SHATTER: big burst, doubled against armored targets
+      const armored = e.def.flatArmor > 0 || e.def.armor === 'Heavy' || e.def.armor === 'Fortified'
+      this.reactionBurst(e, trigger * 1.3 * (armored ? 2 : 1))
+    } else if (def.key === 'flashover') {
+      // FLASHOVER: explosion around the target
+      radius = TILE * 1.6
+      const r2 = radius * radius
+      for (const o of this.enemies) {
+        if (!o.active || o.hp <= 0) continue
+        if (dist2(cx, cy, o.x, o.y) > r2) continue
+        this.reactionBurst(o, trigger * 0.9)
+      }
+    } else if (def.key === 'wildfire') {
+      // WILDFIRE: the burn leaps to everything nearby
+      radius = TILE * 2
+      const r2 = radius * radius
+      const dps = clamp(12 + trigger * 0.35, 0, 400)
+      for (const o of this.enemies) {
+        if (!o.active || o.hp <= 0) continue
+        if (dist2(cx, cy, o.x, o.y) > r2) continue
+        o.burnUntil = Math.max(o.burnUntil, this.clock + 3)
+        o.burnDps = Math.max(o.burnDps, dps)
+      }
+    } else if (def.key === 'overgrow') {
+      // OVERGROW: roots erupt — heavy area slow
+      radius = TILE * 1.8
+      const r2 = radius * radius
+      for (const o of this.enemies) {
+        if (!o.active || o.hp <= 0) continue
+        if (dist2(cx, cy, o.x, o.y) > r2) continue
+        o.slowUntil = Math.max(o.slowUntil, this.clock + 2.5)
+        o.slowFactor = Math.min(o.slowFactor, 0.3)
+      }
+    } else if (def.key === 'eclipse') {
+      // ECLIPSE: a blink of darkness — brief area stun
+      radius = TILE * 1.5
+      const r2 = radius * radius
+      for (const o of this.enemies) {
+        if (!o.active || o.hp <= 0) continue
+        if (dist2(cx, cy, o.x, o.y) > r2) continue
+        o.stunUntil = Math.max(o.stunUntil, this.clock + 0.85)
+      }
+    } else if (def.key === 'conduct') {
+      // CONDUCT: the charge arcs outward — a bonus chain off the target
+      radius = TILE * 2.5
+      const r2 = radius * radius
+      const chain: SimEnemy[] = []
+      let cursor: SimEnemy = e
+      const used = new Set<number>([e.id])
+      while (chain.length < 4) {
+        let best: SimEnemy | null = null
+        let bd = Infinity
+        for (const o of this.enemies) {
+          if (!o.active || o.hp <= 0 || used.has(o.id)) continue
+          const d2 = dist2(cursor.x, cursor.y, o.x, o.y)
+          if (d2 <= r2 && d2 < bd) { bd = d2; best = o }
+        }
+        if (!best) break
+        chain.push(best)
+        used.add(best.id)
+        cursor = best
+      }
+      if (chain.length) {
+        const points: Array<[number, number]> = [[e.x, e.y]]
+        for (const o of chain) points.push([o.x, o.y])
+        this.emit({ t: 'chain', points, color: def.color, count: chain.length, supercharged: false })
+        let dmg = trigger * 0.75
+        for (const o of chain) {
+          this.reactionBurst(o, dmg)
+          dmg *= 0.85
+        }
+      }
+    } else if (def.key === 'blight') {
+      // BLIGHT: corrupted spores — poison DoT area
+      radius = TILE * 1.6
+      const r2 = radius * radius
+      const dps = clamp(10 + trigger * 0.3, 0, 300)
+      for (const o of this.enemies) {
+        if (!o.active || o.hp <= 0) continue
+        if (dist2(cx, cy, o.x, o.y) > r2) continue
+        o.poisonUntil = Math.max(o.poisonUntil, this.clock + 4)
+        o.poisonDps = Math.max(o.poisonDps, dps)
+      }
+    } else {
+      // AMPLIFY: mark the target — it takes bonus damage from everything
+      e.amplifyUntil = this.clock + AMPLIFY_DURATION
+      this.reactionBurst(e, trigger * 0.4)
+    }
+
+    this.emit({ t: 'reaction', key: def.key, name: def.name, x: cx, y: cy, radius, color: def.color, color2: def.color2 })
   }
 
   private applyRaw(e: SimEnemy, dmg: number, _tag: boolean): void {
@@ -1125,6 +1394,7 @@ export class Sim {
   private killEnemy(e: SimEnemy): void {
     if (!e.active) return
     e.active = false
+    this.waveKills++ // every kill paints a little colour back (Greying restoration)
     const reward = Math.max(0, Math.round(e.def.reward * this.config.mods.goldGainMult * this.upgrades.goldGainMult))
     this.addGold(reward)
     this.emit({ t: 'gold', x: e.x, y: e.y, amount: reward })
@@ -1287,7 +1557,7 @@ export class Sim {
   private heroAttack(h: SimHero, target: SimEnemy): void {
     this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: target.x, ty: target.y, color: h.def.color })
     this.emit({ t: 'hit', x: target.x, y: target.y, color: h.def.color })
-    const atk: AttackStats = { damage: this.heroDamage(h), dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus }
+    const atk: AttackStats = { damage: this.heroDamage(h), dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus, aura: h.def.element }
     // heroes are synergy sources — striking an afflicted enemy ramps the combo meter
     this.dealDamageWith(target, atk, true, target.x, target.y)
     if (h.role === 'Control' && target.active && h.slowFactor < 1) {
@@ -1556,7 +1826,8 @@ export class Sim {
 
 const EMPTY_EVENTS: SimEvent[] = []
 
-// 3×3 grid adjacency (shared by tower + hero support-buff passes).
-function adjacentCell(a: { col: number; row: number }, b: { col: number; row: number }): boolean {
-  return Math.abs(a.col - b.col) <= 1 && Math.abs(a.row - b.row) <= 1
+// Grid adjacency within `reach` cells (default 1 = the classic 3×3 ring).
+// The Amplify branch widens its buff network to reach 2.
+function adjacentCell(a: { col: number; row: number }, b: { col: number; row: number }, reach = 1): boolean {
+  return Math.abs(a.col - b.col) <= reach && Math.abs(a.row - b.row) <= reach
 }

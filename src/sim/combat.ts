@@ -92,6 +92,9 @@ export interface AttackStats {
   dmgType: DamageType
   element?: Element
   armorPen: number
+  // Reaction aura this hit paints on the target (see reactions.ts). Distinct from
+  // `element` because the Arcane tower tags 'Arcane' while its wheel element is Light.
+  aura?: Element | 'Arcane'
 }
 
 // Combined type multiplier (grid × wheel) clamped to [0.5, 2.5].

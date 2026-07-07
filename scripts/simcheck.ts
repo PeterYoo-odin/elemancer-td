@@ -19,6 +19,7 @@ const TARGET_WAVES = 60
 const STEP_BUDGET = 60 * 60 * 200 // generous cap (~200 min of sim time)
 
 let failures = 0
+let reactionEvents = 0 // elemental reactions must actually fire during the stress runs
 const seen: Record<string, number> = {}
 function fail(msg: string): void {
   const key = msg.slice(0, 60)
@@ -114,6 +115,12 @@ function validate(sim: Sim, tick: number): void {
     if (e.x < MAP_X - pad || e.x > MAP_X + MAP_W + pad || e.y < MAP_Y - pad || e.y > MAP_Y + MAP_H + pad) fail(`enemy off-map: ${e.x.toFixed(0)},${e.y.toFixed(0)} @${tick}`)
     if (!finite(e.dist) || e.dist < 0 || e.dist > sim.pathLength + 2) fail(`enemy dist out of range: ${e.dist}/${sim.pathLength} @${tick}`)
     if (!finite(e.slowFactor) || e.slowFactor <= 0 || e.slowFactor > 1) fail(`enemy slowFactor out of range: ${e.slowFactor} @${tick}`)
+    if (!finite(e.auraUntil) || !finite(e.reactLockUntil) || !finite(e.amplifyUntil)) fail(`enemy reaction field non-finite @${tick}`)
+  }
+  for (const z of sim.zones) {
+    if (!z.active) continue
+    if (!finite(z.x) || !finite(z.y) || !finite(z.radius) || z.radius <= 0) fail(`zone geometry bad @${tick}`)
+    if (!finite(z.dps) || z.dps < 0 || !finite(z.until)) fail(`zone dps/until bad: ${z.dps} @${tick}`)
   }
   for (const t of sim.towers) {
     if (!t.active) continue
@@ -139,6 +146,10 @@ function validate(sim: Sim, tick: number): void {
     if (ev.t === 'damage' && (!finite(ev.amount) || ev.amount < 0)) fail(`damage event bad: ${ev.amount} @${tick}`)
     if (ev.t === 'gold' && (!finite(ev.amount) || ev.amount < 0)) fail(`gold event bad: ${ev.amount} @${tick}`)
     if (ev.t === 'combo' && (!finite(ev.mult) || ev.mult > COMBO_MAX + 1e-6)) fail(`combo event mult bad: ${ev.mult} @${tick}`)
+    if (ev.t === 'reaction') {
+      reactionEvents++
+      if (!finite(ev.x) || !finite(ev.y) || !finite(ev.radius) || ev.radius < 0) fail(`reaction event bad geometry @${tick}`)
+    }
   }
 }
 
@@ -210,6 +221,9 @@ function fingerprint(seed: number): string {
 if (fingerprint(1337) !== fingerprint(1337)) fail('non-deterministic: identical seed diverged')
 
 if (peak < 200) fail(`stress too light — only ${peak} concurrent enemies (need ≥200)`)
+// mixed-element towers + heroes MUST detonate elemental reactions during the runs
+if (reactionEvents === 0) fail('no elemental reactions fired across all stress runs')
+else console.log(`  elemental reactions fired: ${reactionEvents}`)
 
 if (failures > 0) {
   console.error(`\nSIMCHECK FAILED — ${failures} violation(s).`)
