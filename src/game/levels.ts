@@ -14,6 +14,10 @@ export interface WaveEntry {
   count: number
   spacing: number // seconds between spawns in this entry
   hpMul: number
+  /** kind 'keeper' only: which Corrupted Keeper this is (id from keepers.ts) */
+  keeperId?: string
+  /** final-gauntlet ghost: reduced HP, single phase, slower casts, no arc barks */
+  echo?: boolean
 }
 
 export interface Wave {
@@ -167,6 +171,10 @@ function w(entries: WaveEntry[], clearBonus: number): Wave {
 function e(kind: EnemyKind, count: number, spacing: number, hpMul = 1): WaveEntry {
   return { kind, count, spacing, hpMul }
 }
+// A Corrupted Keeper finale entry (hp lives on the KeeperDef; hpMul fine-tunes).
+function k(keeperId: string, hpMul = 1, echo = false): WaveEntry {
+  return { kind: 'keeper', count: 1, spacing: 1, hpMul, keeperId, echo }
+}
 
 export const LEVELS: LevelDef[] = [
   {
@@ -186,6 +194,8 @@ export const LEVELS: LevelDef[] = [
       w([e('runner', 12, 0.4, 1.1), e('grunt', 6, 0.6, 1.1)], 28),
       w([e('grunt', 10, 0.55, 1.2), e('runner', 8, 0.35, 1.2)], 34),
       w([e('runner', 16, 0.3, 1.35), e('grunt', 8, 0.5, 1.35)], 60),
+      // KEEPER FINALE — Kaelen, the Ashen Court (twists Ashka's Cindernova)
+      w([k('kaelen'), e('runner', 10, 0.55, 1.3)], 110),
     ],
   },
   {
@@ -207,6 +217,8 @@ export const LEVELS: LevelDef[] = [
       w([e('runner', 14, 0.3, 1.3), e('grunt', 8, 0.5, 1.3)], 36),
       w([e('brute', 3, 1.2, 1.2), e('grunt', 8, 0.5, 1.35)], 42),
       w([e('brute', 4, 1.0, 1.35), e('runner', 14, 0.28, 1.4)], 90),
+      // KEEPER FINALE — Maravelle, the Still Oracle (freezes your proudest tower)
+      w([k('maravelle'), e('grunt', 8, 0.6, 1.35)], 130),
     ],
   },
   {
@@ -228,6 +240,8 @@ export const LEVELS: LevelDef[] = [
       w([e('runner', 16, 0.28, 1.4), e('flyer', 6, 0.6, 1.15)], 38),
       w([e('grunt', 12, 0.45, 1.5), e('brute', 3, 1.1, 1.35)], 44),
       w([e('flyer', 10, 0.5, 1.3), e('brute', 4, 1.0, 1.45), e('grunt', 10, 0.4, 1.5)], 100),
+      // KEEPER FINALE — Admiral Vorn, the Becalmed (grey rigging heals his fleet)
+      w([k('vorn'), e('flyer', 6, 0.7, 1.25), e('grunt', 8, 0.55, 1.4)], 140),
     ],
   },
   {
@@ -249,6 +263,8 @@ export const LEVELS: LevelDef[] = [
       w([e('flyer', 10, 0.5, 1.3), e('shielded', 6, 0.8, 1.2)], 44),
       w([e('brute', 4, 1.0, 1.5), e('shielded', 6, 0.7, 1.25), e('runner', 14, 0.28, 1.55)], 50),
       w([e('shielded', 10, 0.6, 1.3), e('brute', 5, 1.0, 1.55), e('flyer', 8, 0.5, 1.35)], 120),
+      // KEEPER FINALE — Wessa, the Overgrown (thorn cocoons shield her brood)
+      w([k('wessa'), e('shielded', 6, 0.85, 1.3), e('runner', 12, 0.35, 1.5)], 160),
     ],
   },
   {
@@ -270,6 +286,8 @@ export const LEVELS: LevelDef[] = [
       w([e('healer', 4, 1.0, 1.2), e('flyer', 10, 0.5, 1.4), e('shielded', 6, 0.8, 1.3)], 46),
       w([e('brute', 5, 1.0, 1.6), e('healer', 4, 1.1, 1.25), e('swarm', 24, 0.13, 1.5)], 52),
       w([e('swarm', 36, 0.11, 1.5), e('healer', 5, 1.0, 1.3), e('brute', 5, 1.0, 1.65)], 140),
+      // KEEPER FINALE — High Cantor Aurelin (pacifying grace haloes your towers)
+      w([k('aurelin'), e('healer', 3, 1.2, 1.25), e('swarm', 20, 0.13, 1.45)], 180),
     ],
   },
   {
@@ -290,7 +308,11 @@ export const LEVELS: LevelDef[] = [
       w([e('swarm', 32, 0.11, 1.6), e('brute', 5, 1.0, 1.7), e('healer', 4, 1.1, 1.35)], 46),
       w([e('shielded', 10, 0.6, 1.5), e('flyer', 12, 0.45, 1.55), e('grunt', 14, 0.35, 1.7)], 52),
       w([e('brute', 6, 0.9, 1.8), e('healer', 5, 1.0, 1.4), e('swarm', 30, 0.11, 1.6)], 58),
-      w([e('boss', 1, 1, 1), e('shielded', 8, 0.7, 1.5)], 70),
+      // FINAL GAUNTLET I — Vesper, Margrave of Moths, guards the throne's door
+      w([k('vesper'), e('swarm', 20, 0.12, 1.6)], 90),
+      // FINAL GAUNTLET II — grey ECHOES of the five redeemed Keepers walk again
+      w([k('kaelen', 1, true), k('maravelle', 1, true), k('vorn', 1, true), k('wessa', 1, true), k('aurelin', 1, true), e('grunt', 12, 0.4, 1.7)], 120),
+      // FINAL GAUNTLET III — Morose's Titan engine, and everything he has left
       w([e('boss', 1, 1, 1.3), e('brute', 6, 0.9, 1.9), e('flyer', 12, 0.4, 1.6), e('swarm', 30, 0.1, 1.7)], 250),
     ],
   },

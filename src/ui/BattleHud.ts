@@ -295,6 +295,34 @@ const CSS = `
   white-space:nowrap; opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none; z-index:22; }
 .eld-hint.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
+/* ---- KEEPER BOSS BAR: name, phase pips, HP + shield, cast telegraph pulse ---- */
+.eld-boss { position:absolute; top:44px; left:50%; transform:translateX(-50%); z-index:21; width:min(430px, 86vw);
+  padding:7px 12px 9px; border-radius:14px; background:linear-gradient(180deg, rgba(24,16,44,.92), rgba(14,8,30,.92));
+  border:1px solid var(--bossc, #c9b6ff); box-shadow:0 6px 22px rgba(0,0,0,.5), 0 0 16px color-mix(in srgb, var(--bossc, #c9b6ff) 22%, transparent);
+  opacity:0; transition:opacity .35s ease, transform .35s ease; pointer-events:auto; }
+.eld-boss.show { opacity:1; }
+.eld-boss.echo { border-style:dashed; filter:saturate(.55); }
+.eld-boss .bn { display:flex; align-items:baseline; gap:8px; }
+.eld-boss .bname { flex:1 1 auto; font-size:12.5px; font-weight:900; letter-spacing:.14em; color:var(--bossc, #c9b6ff);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-shadow:0 1px 2px rgba(0,0,0,.6); }
+.eld-boss .bphase { flex:0 0 auto; display:flex; gap:4px; }
+.eld-boss .bphase i { width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); }
+.eld-boss .bphase i.on { background:var(--bossacc, #ffe14a); box-shadow:0 0 6px var(--bossacc, #ffe14a); border-color:transparent; }
+.eld-boss .bbar { position:relative; margin-top:5px; height:12px; border-radius:7px; overflow:hidden;
+  background:rgba(255,255,255,.09); border:1px solid rgba(0,0,0,.5); }
+.eld-boss .bhp { position:absolute; inset:0; transform-origin:left; background:linear-gradient(180deg, #ff7a9c, #d92a58);
+  transition:transform .18s ease-out; }
+.eld-boss .bsh { position:absolute; inset:0; transform-origin:left; background:linear-gradient(180deg, rgba(159,220,255,.85), rgba(90,150,220,.85));
+  transition:transform .18s ease-out; }
+.eld-boss .babl { margin-top:4px; display:flex; align-items:center; gap:7px; font-size:10.5px; font-weight:800;
+  letter-spacing:.1em; color:#bdaede; }
+.eld-boss .bcast { flex:1 1 auto; height:5px; border-radius:3px; overflow:hidden; background:rgba(255,255,255,.09); }
+.eld-boss .bcast i { display:block; height:100%; transform-origin:left; background:var(--bossacc, #ffe14a); }
+.eld-boss.warn { animation: eldbosswarn .6s ease-in-out infinite; }
+@keyframes eldbosswarn { 0%,100%{ box-shadow:0 6px 22px rgba(0,0,0,.5), 0 0 14px color-mix(in srgb, var(--bossacc, #ffe14a) 30%, transparent); }
+  50%{ box-shadow:0 6px 22px rgba(0,0,0,.5), 0 0 30px color-mix(in srgb, var(--bossacc, #ffe14a) 75%, transparent); } }
+.eld-hud.attract .eld-boss { display:none !important; }
+
 /* Morose intrusion veil: the world's edges drain grey for a beat */
 .eld-morose { position:absolute; inset:0; pointer-events:none; z-index:29; opacity:0;
   background: radial-gradient(115% 95% at 50% 45%, transparent 42%, rgba(128,124,146,.52) 100%);
@@ -362,6 +390,16 @@ export class BattleHud {
   private waveVal: HTMLElement
   private comboEl: HTMLElement
   private telegraphEl: HTMLElement
+  // Keeper boss bar (name · phase pips · HP+shield · next-cast meter)
+  private bossEl!: HTMLElement
+  private bossNameEl!: HTMLElement
+  private bossPips: HTMLElement[] = []
+  private bossHpEl!: HTMLElement
+  private bossShEl!: HTMLElement
+  private bossAblEl!: HTMLElement
+  private bossCastEl!: HTMLElement
+  private bossShown = false
+  private bossKey = ''
   private startBtn: HTMLButtonElement
   private pauseBtn: HTMLButtonElement
   private speedBtn: HTMLButtonElement
@@ -453,6 +491,31 @@ export class BattleHud {
     this.telegraphEl = el('div', 'eld-telegraph hidden pe')
     this.root.append(this.comboEl, this.telegraphEl)
     attachTip(this.telegraphEl, () => this.telegraphTip())
+
+    // Keeper boss bar — hidden until a Corrupted Keeper takes the field
+    this.bossEl = el('div', 'eld-boss')
+    const bossTop = el('div', 'bn')
+    this.bossNameEl = el('div', 'bname')
+    const bossPhase = el('div', 'bphase')
+    for (let i = 0; i < 3; i++) {
+      const pip = document.createElement('i')
+      bossPhase.append(pip)
+      this.bossPips.push(pip)
+    }
+    bossTop.append(this.bossNameEl, bossPhase)
+    const bossBar = el('div', 'bbar')
+    this.bossShEl = el('div', 'bsh')
+    this.bossHpEl = el('div', 'bhp')
+    bossBar.append(this.bossHpEl, this.bossShEl)
+    const bossAbl = el('div', 'babl')
+    this.bossAblEl = el('div')
+    const bossCast = el('div', 'bcast')
+    this.bossCastEl = document.createElement('i')
+    bossCast.append(this.bossCastEl)
+    bossAbl.append(this.bossAblEl, bossCast)
+    this.bossEl.append(bossTop, bossBar, bossAbl)
+    this.root.append(this.bossEl)
+    attachTip(this.bossEl, () => this.bossTip())
 
     // right controls
     const rc = el('div', 'eld-rc')
@@ -616,7 +679,9 @@ export class BattleHud {
       this.startBtn.classList.remove('hidden')
       const tg = sim.waveTelegraph()
       const elemPart = tg.element ? ` · ${tg.element}` : ''
-      this.telegraphEl.textContent = `${tg.boss ? '☠ BOSS · ' : 'INCOMING: '}${tg.armor}${elemPart}`
+      this.telegraphEl.textContent = tg.keeperName
+        ? `☠ ${tg.keeperName}`
+        : `${tg.boss ? '☠ BOSS · ' : 'INCOMING: '}${tg.armor}${elemPart}`
       this.telegraphEl.classList.remove('hidden')
     } else {
       this.startBtn.classList.add('hidden')
@@ -664,6 +729,57 @@ export class BattleHud {
 
     this.updateHeroBar(sim, ctx)
     this.updateSynergy(sim)
+    this.updateBossBar(sim)
+  }
+
+  // ---- Keeper boss bar --------------------------------------------------
+  private updateBossBar(sim: Sim): void {
+    const bs = sim.bossStatus()
+    if (!bs) {
+      if (this.bossShown) {
+        this.bossShown = false
+        this.bossKey = ''
+        this.bossEl.classList.remove('show', 'warn')
+      }
+      return
+    }
+    if (!this.bossShown) {
+      this.bossShown = true
+      this.bossEl.classList.add('show')
+    }
+    const key = bs.keeperId + (bs.echo ? ':echo' : '')
+    if (this.bossKey !== key) {
+      this.bossKey = key
+      this.bossNameEl.textContent = bs.name
+      this.bossAblEl.textContent = `⚠ ${bs.abilityName}`
+      this.bossEl.style.setProperty('--bossc', hex(bs.accent))
+      this.bossEl.style.setProperty('--bossacc', hex(bs.accent))
+      this.bossEl.classList.toggle('echo', bs.echo)
+    }
+    for (let i = 0; i < this.bossPips.length; i++) this.bossPips[i].classList.toggle('on', i < bs.phase)
+    const hpFrac = Math.max(0, Math.min(1, bs.hp / Math.max(1, bs.maxHp)))
+    const shFrac = Math.max(0, Math.min(1, bs.shield / Math.max(1, bs.maxHp)))
+    this.bossHpEl.style.transform = `scaleX(${hpFrac.toFixed(4)})`
+    this.bossShEl.style.transform = `scaleX(${shFrac.toFixed(4)})`
+    const castFrac = Math.max(0, Math.min(1, 1 - bs.castIn / Math.max(0.1, bs.castEvery)))
+    this.bossCastEl.style.transform = `scaleX(${castFrac.toFixed(4)})`
+    this.bossEl.classList.toggle('warn', bs.telegraphing)
+  }
+
+  private bossTip(): TipContent | null {
+    const bs = this.simRef?.bossStatus()
+    if (!bs) return null
+    return {
+      tag: bs.echo ? 'FINAL GAUNTLET · ECHO' : 'CORRUPTED KEEPER',
+      title: bs.name,
+      accent: hex(bs.accent),
+      body: bs.twist,
+      rows: [
+        { k: 'Phase', v: `${bs.phase} / ${bs.phases}`, c: '#ffe14a' },
+        { k: 'Next cast', v: `${Math.ceil(bs.castIn)}s · ${bs.abilityName}`, c: '#ff8fa5' },
+      ],
+      foot: 'Keepers are not slain — break the grey and they come home in colour.',
+    }
   }
 
   // ------------------------------------------------------------- hero bar + synergy

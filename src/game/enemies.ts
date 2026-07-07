@@ -18,6 +18,7 @@ export type EnemyKind =
   | 'healer'
   | 'swarm'
   | 'boss'
+  | 'keeper'
 
 import type { ArmorType, Element } from '../sim/combat'
 
@@ -150,6 +151,24 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     reward: 3,
     armor: 'Unarmored',
     flatArmor: 0,
+  },
+  // Fallback stat block for the 'keeper' kind — real Keeper fights override this
+  // with per-Keeper defs from keepers.ts at spawn (sim looks them up by wave
+  // entry). Exists so ENEMIES stays total over EnemyKind and any stray keeper
+  // spawn degrades gracefully instead of crashing.
+  keeper: {
+    kind: 'keeper',
+    name: 'Corrupted Keeper',
+    hp: 900,
+    speed: 0.5,
+    radius: 34,
+    color: 0x9a94b8,
+    accent: 0xc9b6ff,
+    shape: 'hex',
+    reward: 90,
+    boss: true,
+    armor: 'Light',
+    flatArmor: 2,
   },
   boss: {
     kind: 'boss',

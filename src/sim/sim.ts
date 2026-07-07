@@ -33,6 +33,10 @@ import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEff
 import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
 import { computeSynergies, neutralSynergy, type SynergyBonus, type SynergyEffects } from '../game/synergy'
 import { computeResonances, type ResonanceBonus } from '../game/resonance'
+import {
+  ECHO_CAST_MULT, ECHO_HP_MULT, KEEPER_BY_ID, KEEPER_PHASES, PHASE3_SPEED, PHASE_CAST_MULT,
+  keeperPhaseFor, type KeeperAbility, type KeeperDef,
+} from '../game/keepers'
 
 // ---- tunables --------------------------------------------------------------
 const COMBO_WINDOW = 2.2 // seconds a combo lingers before it breaks
@@ -52,6 +56,11 @@ const REACT_LOCK = 1.1 // per-enemy cooldown after a reaction (paces the firewor
 const AMPLIFY_TAKEN = 1.25 // damage multiplier on AMPLIFY-marked enemies
 const AMPLIFY_DURATION = 4
 const MAX_ZONES = 48 // burning-ground pool cap (oldest recycled beyond this)
+
+// ---- Corrupted Keeper boss fights (campaign finales; see keepers.ts) --------
+const KEEPER_FIRST_CAST = 0.6 // first cast at castEvery × this (show the twist early)
+const KEEPER_MIN_CAST_GAP = 3 // casts never come faster than this, any phase
+const KEEPER_COCOON_CAP = 0.6 // thornCocoon: ally shields cap at this × maxHp
 
 // ---- FUSION TOWERS (two adjacent max towers → one dual-element tower) -------
 // The host keeps its verb/branch and gains the partner's element, alternating
@@ -107,6 +116,14 @@ export interface SimEnemy {
   auraUntil: number
   reactLockUntil: number
   amplifyUntil: number
+  // Corrupted Keeper boss state ('' = not a keeper). Deterministic: casts on a
+  // fixed clock with a telegraph, phases on HP thresholds, zero RNG.
+  keeperId: string
+  keeperEcho: boolean
+  phase: number // 1..3 (echoes stay 1)
+  castAt: number // absolute clock time the next ability lands
+  castWarned: boolean // telegraph already emitted for the pending cast
+  speedMult: number // phase-3 stride (1 for everything else)
   // transient view hints
   hitFlash: number
 }
@@ -181,6 +198,9 @@ export interface SimHero {
   spell: HeroSpellDef
   spellCd: number
   spellMaxCd: number
+  // Moth Mirror (Vesper): while clock < greyUntil this hero is BORROWED — no
+  // attacks, no spell casts, no gate intercession. Same motif as tower greying.
+  greyUntil: number
   // SIGNATURE mechanic state — pure counters, no RNG, dormant below the unlock level
   sigAwake: boolean // level ≥ SIGNATURE_UNLOCK_LEVEL at deploy
   sigCounter: number // rhythm kinds (cindernova/foreseen/wager) + tithe text pacing
@@ -231,11 +251,28 @@ export type SimEvent =
   | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
   | { t: 'fuse'; towerId: number; name: string; x: number; y: number; px: number; py: number; color: number; color2: number }
   | { t: 'morose'; kind: 'warn' | 'greyTower' | 'stealDraft'; towerId: number; x: number; y: number; duration: number }
+  | {
+      t: 'keeper'
+      kind: 'reveal' | 'telegraph' | 'cast' | 'phase' | 'redeemed'
+      keeperId: string
+      name: string
+      ability: KeeperAbility
+      abilityName: string
+      x: number
+      y: number
+      radius: number // ability footprint in px (0 = not areal)
+      color: number
+      accent: number
+      phase: number
+      echo: boolean
+    }
 
 interface SpawnItem {
   kind: EnemyKind
   hpMul: number
   at: number
+  keeperId?: string
+  echo?: boolean
 }
 
 export class Sim {
@@ -644,7 +681,7 @@ export class Sim {
     let t = this.clock + 0.4
     for (const entry of wave.entries) {
       for (let i = 0; i < entry.count; i++) {
-        this.spawnQueue.push({ kind: entry.kind, hpMul: entry.hpMul, at: t })
+        this.spawnQueue.push({ kind: entry.kind, hpMul: entry.hpMul, at: t, keeperId: entry.keeperId, echo: entry.echo })
         t += Math.max(0.02, entry.spacing)
       }
       t += 0.5
@@ -713,8 +750,13 @@ export class Sim {
   }
 
   // ---- enemies ------------------------------------------------------------
-  private spawnEnemy(kind: EnemyKind, hpMul: number): void {
-    const def = ENEMIES[kind]
+  private spawnEnemy(kind: EnemyKind, hpMul: number, keeperId?: string, echo?: boolean): void {
+    // Corrupted Keepers ride the same pipeline with their own stat block. Echoes
+    // (final-gauntlet ghosts) come pre-weakened; an unknown id degrades to the
+    // fallback ENEMIES.keeper block instead of crashing.
+    const keeper = kind === 'keeper' && keeperId ? KEEPER_BY_ID[keeperId] : undefined
+    const def = keeper ? keeper.enemy : ENEMIES[kind]
+    if (echo) hpMul *= ECHO_HP_MULT
     const maxHp = Math.max(1, Math.round(def.hp * Math.max(0.1, hpMul)))
     const shieldMax = def.shield ? Math.max(0, Math.round(def.shield * Math.max(0.1, hpMul))) : 0
     const start = this.positionAt(0)
@@ -744,7 +786,18 @@ export class Sim {
     e.auraUntil = 0
     e.reactLockUntil = 0
     e.amplifyUntil = 0
+    e.keeperId = keeper ? keeper.id : ''
+    e.keeperEcho = !!echo
+    e.phase = 1
+    e.castAt = 0
+    e.castWarned = false
+    e.speedMult = 1
     e.hitFlash = 0
+    if (keeper) {
+      // first cast lands early so the twist is legible from the start
+      e.castAt = this.clock + Math.max(KEEPER_MIN_CAST_GAP, keeper.castEvery * KEEPER_FIRST_CAST * (echo ? ECHO_CAST_MULT : 1))
+      this.emitKeeper('reveal', e, keeper, 0)
+    }
   }
 
   private freeEnemy(): SimEnemy {
@@ -755,7 +808,8 @@ export class Sim {
       id: 0, active: false, def: ENEMIES.runner, kind: 'runner', maxHp: 1, hp: 1, shield: 0, shieldMax: 0,
       dist: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
       poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0,
-      auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0, hitFlash: 0,
+      auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0,
+      keeperId: '', keeperEcho: false, phase: 1, castAt: 0, castWarned: false, speedMult: 1, hitFlash: 0,
     }
     this.enemies.push(e)
     e.id = this.nextId++
@@ -766,7 +820,7 @@ export class Sim {
     if (this.state === 'active') {
       while (this.spawnQueue.length && this.spawnQueue[0].at <= this.clock) {
         const item = this.spawnQueue.shift()!
-        this.spawnEnemy(item.kind, item.hpMul)
+        this.spawnEnemy(item.kind, item.hpMul, item.keeperId, item.echo)
       }
     }
 
@@ -799,11 +853,14 @@ export class Sim {
         }
       }
 
+      // Corrupted Keeper driver: phases on HP, telegraphed casts on the clock
+      if (e.keeperId !== '') this.updateKeeper(e)
+
       // movement (stun overrides slow)
       const stunned = e.stunUntil > this.clock
       const slowed = e.slowUntil > this.clock
       if (!slowed) e.slowFactor = 1
-      let speed = e.def.speed * TILE
+      let speed = e.def.speed * TILE * e.speedMult
       if (stunned) speed = 0
       else if (slowed) speed *= clamp(e.slowFactor, 0.05, 1)
       e.dist = clamp(e.dist + speed * dt, 0, this.pathLength + 1)
@@ -838,11 +895,225 @@ export class Sim {
     if (any) this.emit({ t: 'heal', x: healer.x, y: healer.y, amount: 0, radius })
   }
 
+  // ======================================================================
+  //  CORRUPTED KEEPERS — boss driver. Fully deterministic: no RNG anywhere.
+  //  Phases flip on HP thresholds, casts land on a fixed clock after a visible
+  //  telegraph, and every target choice is a pure "strongest/nearest" scan.
+  // ======================================================================
+  private emitKeeper(kind: 'reveal' | 'telegraph' | 'cast' | 'phase' | 'redeemed', e: SimEnemy, k: KeeperDef, radius: number): void {
+    this.emit({
+      t: 'keeper', kind, keeperId: k.id, name: e.keeperEcho ? `ECHO OF ${k.trueName.split(',')[0].toUpperCase()}` : k.name,
+      ability: k.ability, abilityName: k.abilityName, x: e.x, y: e.y, radius,
+      color: k.enemy.color, accent: k.enemy.accent, phase: e.phase, echo: e.keeperEcho,
+    })
+  }
+
+  private updateKeeper(e: SimEnemy): void {
+    const k = KEEPER_BY_ID[e.keeperId]
+    if (!k) return
+    // phase flips (full Keepers only — echoes are memories, single phase)
+    if (!e.keeperEcho) {
+      const p = keeperPhaseFor(e.hp / Math.max(1, e.maxHp))
+      if (p > e.phase) {
+        e.phase = Math.min(p, KEEPER_PHASES)
+        if (e.phase >= 3) e.speedMult = PHASE3_SPEED
+        // the phase change is FELT: the pending cast hurries up (telegraph intact)
+        e.castAt = Math.min(e.castAt, this.clock + k.telegraph + 0.6)
+        this.emitKeeper('phase', e, k, 0)
+      }
+    }
+    if (!e.castWarned && this.clock >= e.castAt - k.telegraph) {
+      e.castWarned = true
+      this.emitKeeper('telegraph', e, k, this.keeperCastRadius(k))
+    }
+    if (this.clock >= e.castAt) {
+      e.castWarned = false
+      const mult = e.keeperEcho ? ECHO_CAST_MULT : PHASE_CAST_MULT[e.phase - 1]
+      e.castAt = this.clock + Math.max(KEEPER_MIN_CAST_GAP, k.castEvery * mult)
+      this.keeperCast(e, k)
+    }
+  }
+
+  private keeperCastRadius(k: KeeperDef): number {
+    if (k.ability === 'ashenSnuff') return k.power * TILE
+    if (k.ability === 'thornCocoon') return 3.2 * TILE
+    if (k.ability === 'becalm') return 2.8 * TILE
+    return 0
+  }
+
+  private keeperCast(e: SimEnemy, k: KeeperDef): void {
+    switch (k.ability) {
+      case 'ashenSnuff': {
+        // Kaelen: snuff every burn/poison/primed aura around him (Ashka, inverted)
+        const r2 = (k.power * TILE) ** 2
+        let snuffed = 0
+        for (const o of this.enemies) {
+          if (!o.active) continue
+          if (dist2(e.x, e.y, o.x, o.y) > r2) continue
+          if (o.burnUntil > this.clock || o.poisonUntil > this.clock || o.auraElem !== '' || o.amplifyUntil > this.clock) snuffed++
+          o.burnUntil = 0
+          o.burnDps = 0
+          o.poisonUntil = 0
+          o.poisonDps = 0
+          o.auraElem = ''
+          o.auraUntil = 0
+          o.amplifyUntil = 0
+        }
+        if (snuffed > 0) this.emit({ t: 'text', x: e.x, y: e.y - e.def.radius - 30, msg: `🌫 ${snuffed} FLAME${snuffed > 1 ? 'S' : ''} SNUFFED`, color: 0xb8b0d0, size: 16 })
+        break
+      }
+      case 'stillGrace':
+      case 'gildedHalo': {
+        // Maravelle / Aurelin: seal the strongest awake tower(s) in stillness.
+        // Same sleep field as Morose's intrusions — the view's veil just works.
+        const count = Math.max(1, Math.round(k.power))
+        for (let i = 0; i < count; i++) {
+          let best: SimTower | null = null
+          let bestDps = -1
+          for (const t of this.towers) {
+            if (!t.active || t.greyUntil > this.clock) continue
+            const dps = this.effDps(t)
+            if (dps > bestDps) { bestDps = dps; best = t }
+          }
+          if (!best) break
+          best.greyUntil = this.clock + k.greySeconds
+          this.emit({ t: 'aoe', x: best.x, y: best.y, radius: TILE * 0.9, color: k.enemy.accent, alpha: 0.55 })
+          this.emit({ t: 'text', x: best.x, y: best.y - 34, msg: k.ability === 'stillGrace' ? '❄ STILLED' : '😇 PACIFIED', color: k.enemy.accent, size: 16 })
+        }
+        break
+      }
+      case 'becalm': {
+        // Vorn: Galea's squall reversed — grey rigging links his fleet and heals it
+        const hopR2 = (2.8 * TILE) ** 2
+        const chain: SimEnemy[] = []
+        const used = new Set<number>([e.id])
+        let cx = e.x
+        let cy = e.y
+        while (chain.length < 4) {
+          let best: SimEnemy | null = null
+          let bd = Infinity
+          for (const o of this.enemies) {
+            if (!o.active || o.hp <= 0 || used.has(o.id) || o.keeperId !== '') continue
+            const d2 = dist2(cx, cy, o.x, o.y)
+            if (d2 <= hopR2 && d2 < bd) { bd = d2; best = o }
+          }
+          if (!best) break
+          chain.push(best)
+          used.add(best.id)
+          cx = best.x
+          cy = best.y
+        }
+        if (chain.length) {
+          const points: Array<[number, number]> = [[e.x, e.y]]
+          for (const o of chain) {
+            const heal = Math.max(0, o.maxHp * k.power)
+            o.hp = clamp(o.hp + heal, 0, o.maxHp)
+            points.push([o.x, o.y])
+            this.emit({ t: 'heal', x: o.x, y: o.y - o.def.radius - 8, amount: Math.round(heal), radius: 0 })
+          }
+          this.emit({ t: 'chain', points, color: 0x9a94b8, count: chain.length, supercharged: false })
+        }
+        break
+      }
+      case 'thornCocoon': {
+        // Wessa: preservative thorn-shields — nothing may die, so nothing may live
+        const r2 = (3.2 * TILE) ** 2
+        let wrapped = 0
+        for (const o of this.enemies) {
+          if (!o.active || o === e || o.keeperId !== '') continue
+          if (dist2(e.x, e.y, o.x, o.y) > r2) continue
+          const cap = o.maxHp * KEEPER_COCOON_CAP
+          const next = Math.min(cap, o.shield + o.maxHp * k.power)
+          if (next > o.shield) {
+            o.shield = next
+            o.shieldMax = Math.max(o.shieldMax, o.shield)
+            wrapped++
+          }
+        }
+        if (wrapped > 0) this.emit({ t: 'text', x: e.x, y: e.y - e.def.radius - 30, msg: `🌿 ${wrapped} COCOONED`, color: k.enemy.accent, size: 16 })
+        break
+      }
+      case 'mothMirror': {
+        // Vesper: BORROWS one of your heroes (lowest id = longest on the field).
+        // With no hero fielded he settles for your strongest tower.
+        let mark: SimHero | null = null
+        for (const h of this.heroes) {
+          if (!h.active || h.greyUntil > this.clock) continue
+          if (!mark || h.id < mark.id) mark = h
+        }
+        if (mark) {
+          mark.greyUntil = this.clock + k.greySeconds
+          this.emit({ t: 'aoe', x: mark.x, y: mark.y, radius: TILE * 1.0, color: k.enemy.accent, alpha: 0.6 })
+          this.emit({ t: 'text', x: mark.x, y: mark.y - 40, msg: `🦋 ${mark.def.name.toUpperCase()} IS BORROWED`, color: k.enemy.accent, size: 17 })
+        } else {
+          let best: SimTower | null = null
+          let bestDps = -1
+          for (const t of this.towers) {
+            if (!t.active || t.greyUntil > this.clock) continue
+            const dps = this.effDps(t)
+            if (dps > bestDps) { bestDps = dps; best = t }
+          }
+          if (best) {
+            best.greyUntil = this.clock + k.greySeconds
+            this.emit({ t: 'text', x: best.x, y: best.y - 34, msg: '🦋 BORROWED', color: k.enemy.accent, size: 16 })
+          }
+        }
+        break
+      }
+    }
+    this.emitKeeper('cast', e, k, this.keeperCastRadius(k))
+  }
+
+  /** view helper: is this hero currently borrowed by the Moth Mirror? */
+  heroGreyed(h: SimHero): boolean {
+    return h.greyUntil > this.clock
+  }
+
+  // Boss-bar snapshot for the HUD: the live Keeper (full fights outrank echoes,
+  // then the biggest). Null when no Keeper walks the field.
+  bossStatus(): {
+    keeperId: string; name: string; ability: KeeperAbility; abilityName: string; twist: string
+    hp: number; maxHp: number; shield: number; shieldMax: number
+    phase: number; phases: number; color: number; accent: number; echo: boolean
+    castIn: number; castEvery: number; telegraphing: boolean
+  } | null {
+    let best: SimEnemy | null = null
+    for (const e of this.enemies) {
+      if (!e.active || e.keeperId === '') continue
+      if (!best) { best = e; continue }
+      if (best.keeperEcho !== e.keeperEcho) { if (best.keeperEcho) best = e; continue }
+      if (e.maxHp > best.maxHp) best = e
+    }
+    if (!best) return null
+    const k = KEEPER_BY_ID[best.keeperId]
+    if (!k) return null
+    return {
+      keeperId: k.id,
+      name: best.keeperEcho ? `ECHO OF ${k.trueName.split(',')[0].toUpperCase()}` : k.name,
+      ability: k.ability,
+      abilityName: k.abilityName,
+      twist: k.twist,
+      hp: best.hp,
+      maxHp: best.maxHp,
+      shield: best.shield,
+      shieldMax: best.shieldMax,
+      phase: best.phase,
+      phases: KEEPER_PHASES,
+      color: k.enemy.color,
+      accent: k.enemy.accent,
+      echo: best.keeperEcho,
+      castIn: Math.max(0, best.castAt - this.clock),
+      castEvery: Math.max(KEEPER_MIN_CAST_GAP, k.castEvery * (best.keeperEcho ? ECHO_CAST_MULT : PHASE_CAST_MULT[best.phase - 1])),
+      telegraphing: best.castWarned,
+    }
+  }
+
   private enemyReachedBase(e: SimEnemy): void {
     // Hold the Line (Seraphine's signature): once per wave, the first enemy about
     // to breach the gate is smitten by dawn. If it dies, the leak never happens.
     for (const h of this.heroes) {
       if (!h.active || !h.sigAwake || h.def.signature.kind !== 'intercession' || h.sigGuardUsed) continue
+      if (h.greyUntil > this.clock) continue // borrowed by the Moth Mirror — the dawn is elsewhere
       h.sigGuardUsed = true
       const nuke = clamp(h.baseDamage * (h.def.signature.nukeMult ?? 8), 0, 1e7)
       this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: e.x, ty: e.y, color: h.def.color })
@@ -1653,6 +1924,11 @@ export class Sim {
     this.addGold(reward)
     this.emit({ t: 'gold', x: e.x, y: e.y, amount: reward })
     this.emit({ t: 'death', x: e.x, y: e.y, kind: e.kind, color: e.def.color, boss: !!e.def.boss })
+    // A Keeper is never slain — the grey breaks and the colour comes home.
+    if (e.keeperId !== '') {
+      const k = KEEPER_BY_ID[e.keeperId]
+      if (k) this.emitKeeper('redeemed', e, k, TILE * 3)
+    }
   }
 
   // ======================================================================
@@ -1690,7 +1966,7 @@ export class Sim {
         id: this.nextId++, active: false, heroId, def, role: def.role, level: pd.level, col, row, x: cc.x, y: cc.y,
         cd: 0, aimAngle: 0, fireFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
         slowDuration: 0, adjBuff: 1, buffMult: 1, buffUntil: 0, spell, spellCd: 0, spellMaxCd: 1,
-        sigAwake: false, sigCounter: 0, sigRamp: 0, sigGuardUsed: false,
+        greyUntil: 0, sigAwake: false, sigCounter: 0, sigRamp: 0, sigGuardUsed: false,
       }
       this.heroes.push(h)
     }
@@ -1718,6 +1994,7 @@ export class Sim {
     h.spell = spell
     h.spellCd = 0
     h.spellMaxCd = clamp(spell.cooldown * this.config.mods.spellCooldownMult, 0.5, 60)
+    h.greyUntil = 0
     h.sigAwake = signatureAwake(pd.level)
     h.sigCounter = 0
     h.sigRamp = 0
@@ -1820,6 +2097,7 @@ export class Sim {
       if (!h.active) continue
       if (h.fireFlash > 0) h.fireFlash = Math.max(0, h.fireFlash - dt)
       if (h.spellCd > 0) h.spellCd = Math.max(0, h.spellCd - dt)
+      if (h.greyUntil > this.clock) continue // borrowed by the Moth Mirror: no attacks
       h.cd -= dt
       if (h.cd > 0) continue
       const range = this.heroRange(h)
@@ -1988,6 +2266,7 @@ export class Sim {
     if (this.state === 'won' || this.state === 'lost' || this.state === 'draft') return false
     const h = this.heroBySlot(slotId)
     if (!h || h.spellCd > 0) return false
+    if (h.greyUntil > this.clock) return false // borrowed by the Moth Mirror
     const sp = h.spell
     const power = this.config.mods.spellPowerMult
     const color = h.def.color
@@ -2217,22 +2496,26 @@ export class Sim {
     return 1
   }
 
-  // Dominant incoming armor + affinity for the pre-wave telegraph.
-  waveTelegraph(): { armor: string; element?: Element; boss: boolean } {
+  // Dominant incoming armor + affinity for the pre-wave telegraph. When a
+  // Corrupted Keeper walks in this wave, the telegraph says WHO by name.
+  waveTelegraph(): { armor: string; element?: Element; boss: boolean; keeperName?: string } {
     const wave = this.currentWave()
     const counts = new Map<string, number>()
     let element: Element | undefined
     let boss = false
+    let keeperName: string | undefined
     for (const entry of wave.entries) {
-      const def = ENEMIES[entry.kind]
+      const keeper = entry.kind === 'keeper' && entry.keeperId ? KEEPER_BY_ID[entry.keeperId] : undefined
+      const def = keeper ? keeper.enemy : ENEMIES[entry.kind]
       counts.set(def.armor, (counts.get(def.armor) ?? 0) + entry.count)
       if (def.affinity) element = def.affinity
       if (def.boss) boss = true
+      if (keeper && !keeperName) keeperName = entry.echo ? 'ECHOES OF THE FIVE' : keeper.name
     }
     let armor = 'Unarmored'
     let max = -1
     for (const [k, v] of counts) if (v > max) { max = v; armor = k }
-    return { armor, element, boss }
+    return { armor, element, boss, keeperName }
   }
 
   liveEnemyCount(): number {

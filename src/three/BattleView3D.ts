@@ -70,6 +70,10 @@ interface EnemySlot {
   // so "one more different-element hit detonates" is readable at a glance.
   auraPip: THREE.Mesh | null
   auraPipMat: THREE.MeshBasicMaterial | null
+  // Corrupted Keeper crown — a slow-precessing halo ring in the Keeper's realm
+  // colour ('keeper' kind only; retinted per Keeper since the pool is shared)
+  crown: THREE.Mesh | null
+  crownMat: THREE.MeshBasicMaterial | null
 }
 
 interface TowerSlot {
@@ -981,11 +985,24 @@ export class BattleView3D {
       group.add(shield)
     }
 
+    // Corrupted Keeper: a floating crown-halo marks the boss at any zoom
+    let crown: THREE.Mesh | null = null
+    let crownMat: THREE.MeshBasicMaterial | null = null
+    if (e.kind === 'keeper') {
+      const cg = new THREE.TorusGeometry(r * 1.35, 0.07, 8, 28)
+      crownMat = new THREE.MeshBasicMaterial({ color: def.accent, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+      crown = new THREE.Mesh(cg, crownMat)
+      crown.position.y = r + 0.65
+      crown.rotation.x = Math.PI / 2.4
+      this.disposables.push(cg, crownMat)
+      group.add(crown)
+    }
+
     this.scene.add(group)
     return {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
-      auraPip: null, auraPipMat: null,
+      auraPip: null, auraPipMat: null, crown, crownMat,
     }
   }
 
@@ -1320,6 +1337,14 @@ export class BattleView3D {
       s.auraPip.visible = false
     }
 
+    // Keeper crown: retint per Keeper (shared pool), slow precession, phase pulse
+    if (s.crown && s.crownMat) {
+      s.crownMat.color.setHex(e.def.accent)
+      s.crown.rotation.z = clock * 0.9
+      const pulse = e.castWarned ? 0.55 + 0.45 * Math.sin(clock * 14) : 0.85
+      s.crownMat.opacity = pulse
+    }
+
     // HP bar (centred plane; scales symmetrically — clean at this size)
     const ratio = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)))
     s.hpFill.scale.x = Math.max(0.001, ratio)
@@ -1500,6 +1525,18 @@ export class BattleView3D {
   private updateHeroSlot(s: HeroSlot, h: SimHero): void {
     s.group.position.set(wx(h.x), GROUND, wz(h.y))
     s.figure.rotation.y = -h.aimAngle + Math.PI / 2
+    // Moth Mirror: a borrowed hero drains to grey — colour and glow gutter out
+    const greyed = this.sim.heroGreyed(h)
+    if (greyed) {
+      s.bodyMat.color.setHex(0x8f8a9e)
+      s.bodyMat.emissive.setHex(0x55516226)
+      s.bodyMat.emissiveIntensity = 0.12
+      s.orbMat.emissiveIntensity = 0.2
+      s.glow.intensity = 0.08
+      return
+    }
+    s.bodyMat.color.setHex(s.color)
+    s.bodyMat.emissive.setHex(s.color)
     const flashing = h.fireFlash > 0
     s.bodyMat.emissiveIntensity = flashing ? 1.2 : 0.5
     s.glow.intensity = 0.9 + (flashing ? 1.6 : 0)
