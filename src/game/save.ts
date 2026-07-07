@@ -19,6 +19,7 @@ export interface SaveData {
   diamonds: number
   stars: Record<string, number> // levelId -> best stars (0..3)
   firstClears: Record<string, boolean> // levelId -> cleared at least once
+  badges: Record<string, string[]> // levelId -> earned difficulty/challenge badge ids
   unlockedTowers: string[] // TowerKind ids the player owns
   workshop: Record<string, number> // workshop nodeId -> purchased level
   lastSeen: number // epoch ms, for idle offline earnings
@@ -67,6 +68,7 @@ export function defaultSave(): SaveData {
     diamonds: 0,
     stars: {},
     firstClears: {},
+    badges: {},
     unlockedTowers: ['cannon', 'frost', 'flame'],
     workshop: {},
     lastSeen: 0,
@@ -100,6 +102,11 @@ function coerce(raw: unknown): SaveData {
   if (o.firstClears && typeof o.firstClears === 'object') {
     for (const [k, v] of Object.entries(o.firstClears as Record<string, unknown>)) {
       if (v === true) d.firstClears[k] = true
+    }
+  }
+  if (o.badges && typeof o.badges === 'object') {
+    for (const [k, v] of Object.entries(o.badges as Record<string, unknown>)) {
+      if (Array.isArray(v)) d.badges[k] = v.filter((x) => typeof x === 'string') as string[]
     }
   }
   if (Array.isArray(o.unlockedTowers)) {

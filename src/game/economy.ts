@@ -284,6 +284,30 @@ class Economy {
     return this.data.stars[levelId] ?? 0
   }
 
+  // ---- difficulty / challenge badges (separate from campaign stars) ----
+  badgesFor(levelId: string): string[] {
+    return this.data.badges[levelId] ?? []
+  }
+  hasBadge(levelId: string, badge: string): boolean {
+    return (this.data.badges[levelId] ?? []).includes(badge)
+  }
+  totalBadges(): number {
+    let n = 0
+    for (const k in this.data.badges) n += this.data.badges[k].length
+    return n
+  }
+  // Record badges earned on a mode clear; returns the newly-earned ones.
+  recordBadges(levelId: string, badges: string[]): string[] {
+    if (badges.length === 0) return []
+    const have = new Set(this.data.badges[levelId] ?? [])
+    const fresh = badges.filter((b) => !have.has(b))
+    if (fresh.length === 0) return []
+    for (const b of fresh) have.add(b)
+    this.data.badges[levelId] = [...have]
+    this.save()
+    return fresh
+  }
+
   // ---- campaign clear reward ----
   awardCampaign(levelId: string, stars: number, baseCoins: number): CampaignResult {
     const prev = this.data.stars[levelId] ?? 0

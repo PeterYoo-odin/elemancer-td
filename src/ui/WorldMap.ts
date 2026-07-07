@@ -13,7 +13,8 @@ import { appSettings } from './settings'
 import { playUiTick, playNodeStinger, playDiscovery } from './sfx'
 import { barkEngine } from '../game/barks'
 import { showBark, dismissBark, speakerInfo } from './barkUi'
-import { REALM_ENTRY, LEVEL_STORY } from '../game/story'
+import { REALM_ENTRY, storyForLevel } from '../game/story'
+import { NORMAL_MODE, BADGE_META, BADGE_ORDER, type RunMode, type Challenge } from '../game/modes'
 import { unlockCodex, lockedMoroseFragments, codexFreshCount } from '../game/codex'
 import { CodexPanel } from './CodexPanel'
 import { heroById } from '../game/heroes'
@@ -21,7 +22,7 @@ import { glyphIcon, iconMarkup } from './icons'
 import { attachTip, dismissTip } from './tooltip'
 
 export interface WorldMapHandlers {
-  onPlay(levelId: string): void
+  onPlay(levelId: string, mode?: RunMode): void
   onBack(): void
 }
 
@@ -29,8 +30,13 @@ const KEYART_URL = import.meta.env.BASE_URL + 'concepts/00-keyart-v2.jpg'
 
 // Vertical layout (px inside the scroll track).
 const CROWN_H = 300 // key-art world header above The Hollow
-const REALM_H = 520 // one themed band per realm
+const REALM_H = 520 // legacy fixed band height (now only a floor; bands size to node count)
 const START_H = 190 // the Haven pad where the journey begins
+// The ladder is now LONG (dozens of stops/realm): bands grow to fit their nodes,
+// which snake down the band in a winding road rather than a 2-column zig-zag.
+const NODE_GAP = 98 // vertical px between consecutive stops
+const HEAD_PAD = 150 // room at the band top for the realm header
+const FOOT_PAD = 76 // room at the band bottom before the next realm
 
 const REACH_KEY = 'elemancer_map_reach_v1' // realms coloured at last visit
 const SEEN_KEY = 'elemancer_realms_seen_v1' // realm banners already shown
@@ -175,6 +181,15 @@ const CSS = `
   width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 900; color: #123312; background: linear-gradient(180deg, #b6f7a6, #4fd06a);
   border: 2px solid rgba(255,255,255,.7); box-shadow: 0 2px 6px rgba(0,0,0,.5); }
+/* landmark & finale stops read as distinct beats along the long ladder */
+.ewm-lm { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-size: 16px;
+  color: #ffe9a3; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
+.ewm-node.lm-landmark .ewm-circle { width: 70px; height: 70px; box-shadow: 0 0 0 3px rgba(255,233,163,.5), 0 6px 16px rgba(0,0,0,.5); }
+.ewm-node.lm-finale .ewm-circle { width: 78px; height: 78px;
+  box-shadow: 0 0 0 3px var(--a), 0 0 22px var(--a), 0 8px 20px rgba(0,0,0,.55); }
+.ewm-node.lm-finale .ewm-num { font-size: 30px; }
+.ewm-node.lm-finale .ewm-lm { top: -24px; font-size: 20px; color: var(--a); }
+.ewm-node.st-locked .ewm-lm { color: #7d739c; }
 .ewm-node.shake { animation: ewmShake .4s ease; }
 @keyframes ewmShake { 0%,100% { transform: translate(-50%,-50%); } 20% { transform: translate(calc(-50% - 6px),-50%); }
   40% { transform: translate(calc(-50% + 6px),-50%); } 60% { transform: translate(calc(-50% - 4px),-50%); }
@@ -298,6 +313,18 @@ const CSS = `
   font: inherit; font-size: 17px; font-weight: 900; letter-spacing: .06em; color: #fff; cursor: pointer;
   background: linear-gradient(180deg, #3ad07a, #1f9a54); box-shadow: 0 8px 22px rgba(31,154,84,.45); }
 .ewm-pgo:active { transform: scale(.95); }
+/* earned difficulty/challenge badges + the pre-level mode selector */
+.ewm-pbadges { display: flex; gap: 6px; justify-content: center; margin-top: 8px; }
+.ewm-bdg { width: 22px; height: 22px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 900; color: #241a06; border: 1px solid rgba(255,255,255,.5); box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  background: linear-gradient(180deg, #ffe9a3, #e6b24a); }
+.ewm-modes { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.ewm-mrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ewm-mlabel { font-size: 10px; font-weight: 900; letter-spacing: .12em; color: #9a8fc0; width: 74px; text-align: left; }
+.ewm-chip { font: inherit; font-size: 12px; font-weight: 800; letter-spacing: .02em; padding: 6px 12px; border-radius: 11px; cursor: pointer;
+  color: #d9cff5; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16); }
+.ewm-chip.on { color: #1a1230; background: var(--a); border-color: var(--a); box-shadow: 0 0 12px var(--a); }
+.ewm-chip:active { transform: scale(.94); }
 
 /* ---- small discovery (a find on the road) ---- */
 .ewm-disc { position: absolute; left: 50%; bottom: calc(120px + env(safe-area-inset-bottom)); z-index: 10;
@@ -353,16 +380,20 @@ export class WorldMap {
   private nodes: MapNode[] = []
   private currentIdx = 0
   private trackH: number
+  private bandTops: number[] = [] // y of each realm band's top edge
+  private bandHs: number[] = []   // each realm band's height (grows with node count)
   private leaving = false
   private timers: number[] = []
   private caravanEl: HTMLElement | null = null
   private walkRaf = 0
   private walkSkipFn: (() => void) | null = null
   private codexOpen = false
+  private selMode: RunMode = { ...NORMAL_MODE } // pre-level difficulty/challenge selection
 
   constructor(private handlers: WorldMapHandlers) {
     injectCss()
-    this.trackH = CROWN_H + REALMS.length * REALM_H + START_H
+    this.computeBands()
+    this.trackH = CROWN_H + this.bandHs.reduce((a, b) => a + b, 0) + START_H
     this.buildNodes()
 
     this.root = document.createElement('div')
@@ -462,27 +493,46 @@ export class WorldMap {
 
   // ---- model -------------------------------------------------------------
 
+  // Size each realm band to its node count (a long ladder = a tall band) and
+  // stack them bottom-to-top from the Haven, under the crown.
+  private computeBands(): void {
+    this.bandHs = REALMS.map((r) => {
+      const n = Math.max(1, r.levelIds.length)
+      return Math.max(REALM_H, HEAD_PAD + FOOT_PAD + (n - 1) * NODE_GAP)
+    })
+    this.bandTops = REALMS.map((_r, ri) => {
+      let t = CROWN_H
+      for (let rj = ri + 1; rj < REALMS.length; rj++) t += this.bandHs[rj]
+      return t
+    })
+  }
+
+  // The winding-road position of stop j (0 = closest to the Haven) in realm ri.
+  private nodeXY(ri: number, j: number, n: number): { x: number; y: number } {
+    const y = this.bandTops[ri] + this.bandHs[ri] - FOOT_PAD - j * NODE_GAP
+    const x = 50 + 23 * Math.sin(j * 0.66 + ri * 0.9)
+    return { x, y: n <= 1 ? this.bandTops[ri] + this.bandHs[ri] / 2 : y }
+  }
+
   private buildNodes(): void {
-    let idx = 0
     for (let ri = 0; ri < REALMS.length; ri++) {
       const realm = REALMS[ri]
-      const bandTop = CROWN_H + (REALMS.length - 1 - ri) * REALM_H
       const n = realm.levelIds.length
       for (let j = 0; j < n; j++) {
         const lvl = LEVELS.find((l) => l.id === realm.levelIds[j])
         if (!lvl) continue
         const stars = economy.starsFor(lvl.id)
         const unlocked = isLevelUnlocked(lvl.index, economy.data.stars)
+        const { x, y } = this.nodeXY(ri, j, n)
         this.nodes.push({
           lvl,
           realm,
           realmIdx: ri,
-          x: idx % 2 === 0 ? 33 : 67,
-          y: bandTop + REALM_H - (REALM_H * (j + 1)) / (n + 1),
+          x,
+          y,
           state: !unlocked ? 'locked' : stars >= 1 ? 'done' : 'avail',
           stars,
         })
-        idx++
       }
     }
     const firstOpen = this.nodes.findIndex((n) => n.state === 'avail')
@@ -497,16 +547,17 @@ export class WorldMap {
 
   private bandsHtml(): string {
     return REALMS.map((r, ri) => {
-      const top = CROWN_H + (REALMS.length - 1 - ri) * REALM_H
+      const top = this.bandTops[ri]
+      const h = this.bandHs[ri]
       const [far, near] = RIDGES[ri % RIDGES.length]
       const vars = `--a:${r.ui.accent};--deep:${r.ui.deep};--mid:${r.ui.mid};--glow:${r.ui.glow};--ridge:${r.ui.ridge};--ridgeFar:${r.ui.ridgeFar}`
       return `
-        <section class="ewm-band" data-realm="${ri}" style="top:${top}px;height:${REALM_H}px;${vars}">
+        <section class="ewm-band" data-realm="${ri}" style="top:${top}px;height:${h}px;${vars}">
           <div class="ewm-sky"></div>
           <div class="ewm-ridge far" style="clip-path:${far}"></div>
           <div class="ewm-ridge near" style="clip-path:${near}"></div>
           <div class="ewm-fog"></div>
-          <div class="ewm-hord">REALM ${ROMAN[ri]} · ${r.element.toUpperCase()}</div>
+          <div class="ewm-hord">REALM ${ROMAN[ri]} · ${r.element.toUpperCase()} · ${r.levelIds.length} STOPS</div>
           <div class="ewm-head">
             <span class="rule r"></span>
             <span class="ewm-hname"><span class="ewm-hemoji">${r.emoji}</span>${r.name.toUpperCase()}</span>
@@ -563,12 +614,15 @@ export class WorldMap {
         const stars = [0, 1, 2].map((i) => `<span class="s ${i < n.stars ? 'on' : ''}">★</span>`).join('')
         const label = n.state === 'locked' ? '???' : n.lvl.name
         const lock = n.state === 'locked' ? `<span class="ewm-lock">${iconMarkup('lock', { size: 13, color: '#cdbcff' })}</span>` : ''
+        // Landmark stops (finales / mid-realm mini-bosses) read as distinct beats.
+        const kind = n.lvl.landmark === 'finale' ? 'finale' : n.lvl.landmark === 'landmark' ? 'landmark' : ''
+        const badge = kind === 'finale' ? '<span class="ewm-lm">♛</span>' : kind === 'landmark' ? '<span class="ewm-lm">✦</span>' : ''
         return `
-        <button class="ewm-node st-${n.state}" data-level="${n.lvl.id}" data-state="${n.state}"
+        <button class="ewm-node st-${n.state} ${kind ? 'lm-' + kind : ''}" data-level="${n.lvl.id}" data-state="${n.state}"
           style="left:${n.x}%;top:${n.y}px;--a:${n.realm.ui.accent}"
           aria-label="Level ${n.lvl.index + 1}: ${label}">
           <span class="ewm-stars">${stars}</span>
-          <span class="ewm-circle"><span class="ewm-num">${n.lvl.index + 1}</span>${lock}</span>
+          <span class="ewm-circle">${badge}<span class="ewm-num">${n.lvl.index + 1}</span>${lock}</span>
           <span class="ewm-name">${label}</span>
         </button>`
       })
@@ -837,8 +891,20 @@ export class WorldMap {
       this.leave(() => this.handlers.onPlay(levelId))
       return
     }
-    const story = LEVEL_STORY[levelId]
+    const story = storyForLevel(node.lvl, node.realm)
     const sp = story ? speakerInfo(story.bark.speaker) : null
+    this.selMode = { ...NORMAL_MODE } // fresh selection each time the card opens
+    const earned = economy.badgesFor(levelId)
+    const badgesHtml = earned.length
+      ? `<div class="ewm-pbadges">${BADGE_ORDER.filter((b) => earned.includes(b)).map((b) => `<span class="ewm-bdg" title="${BADGE_META[b].blurb}">${BADGE_META[b].abbr}</span>`).join('')}</div>`
+      : ''
+    const chip = (on: boolean, attr: string, label: string): string =>
+      `<button class="ewm-chip${on ? ' on' : ''}" ${attr}>${label}</button>`
+    const modesHtml = `
+        <div class="ewm-modes">
+          <div class="ewm-mrow"><span class="ewm-mlabel">DIFFICULTY</span>${chip(false, 'data-md="heroic"', 'Heroic')}</div>
+          <div class="ewm-mrow" data-chgroup><span class="ewm-mlabel">CHALLENGE</span>${chip(true, 'data-ch=""', 'None')}${chip(false, 'data-ch="iron"', 'Iron')}${chip(false, 'data-ch="nohero"', 'No-Hero')}${chip(false, 'data-ch="towers"', 'Spare')}</div>
+        </div>`
     const el = document.createElement('div')
     el.className = 'ewm-pre'
     el.innerHTML = `
@@ -846,9 +912,11 @@ export class WorldMap {
         <button class="ewm-px" data-x aria-label="Back">✕</button>
         <div class="ewm-pord">LEVEL ${node.lvl.index + 1} · ${node.realm.name.toUpperCase()}</div>
         <div class="ewm-pname">${node.lvl.name}</div>
+        ${badgesHtml}
         ${story ? `<div class="ewm-pflavor">“${story.flavor}”</div>` : ''}
         ${story && sp ? `<div class="ewm-pbark"><span class="sp" style="color:${sp.color}">${glyphIcon(sp.glyph, { size: 14, color: sp.color })} ${sp.name}</span><span data-bark></span></div>` : ''}
-        <button class="ewm-pgo">${iconMarkup('blade', { size: 16, color: '#3a2604' })} TO BATTLE</button>
+        ${modesHtml}
+        <button class="ewm-pgo" data-go>${iconMarkup('blade', { size: 16, color: '#3a2604' })} TO BATTLE</button>
       </div>`
     if (story) {
       const t = el.querySelector('[data-bark]')
@@ -863,9 +931,28 @@ export class WorldMap {
         window.setTimeout(() => el.remove(), 220)
         return
       }
-      playUiTick()
-      el.classList.add('hide')
-      this.leave(() => this.handlers.onPlay(levelId))
+      // Difficulty toggle (Heroic on/off)
+      const md = target.closest('[data-md]') as HTMLElement | null
+      if (md) {
+        playUiTick()
+        this.selMode.difficulty = this.selMode.difficulty === 'heroic' ? 'normal' : 'heroic'
+        md.classList.toggle('on', this.selMode.difficulty === 'heroic')
+        return
+      }
+      // Challenge single-select
+      const ch = target.closest('[data-ch]') as HTMLElement | null
+      if (ch) {
+        playUiTick()
+        this.selMode.challenge = (ch.getAttribute('data-ch') || '') as Challenge
+        el.querySelectorAll('[data-ch]').forEach((x) => x.classList.toggle('on', x === ch))
+        return
+      }
+      if (target.closest('[data-go]')) {
+        playUiTick()
+        el.classList.add('hide')
+        const mode: RunMode = { ...this.selMode }
+        this.leave(() => this.handlers.onPlay(levelId, mode))
+      }
     })
     this.root.appendChild(el)
   }

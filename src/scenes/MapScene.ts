@@ -21,7 +21,7 @@ export class MapScene extends Phaser.Scene {
     music.setTrack('map')
 
     this.map = new WorldMap({
-      onPlay: (levelId) => this.scene.start('Battle', { levelId, endless: false }),
+      onPlay: (levelId, mode) => this.scene.start('Battle', { levelId, endless: false, difficulty: mode?.difficulty, challenge: mode?.challenge }),
       onBack: () => this.scene.start('Menu'),
     })
 

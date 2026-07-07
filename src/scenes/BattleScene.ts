@@ -10,6 +10,7 @@ import { LEVELS, levelById, pathCellsFor, starsForClear, DEMO_LEVEL, type LevelD
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
 import { NEUTRAL } from '../game/workshop'
+import { NORMAL_MODE, levelForMode, startLivesForMode, towerCapForMode, partyAllowedForMode, modeSeedSalt, badgesForClear, isNormalMode, BADGE_META, type RunMode } from '../game/modes'
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { CameraControls } from '../three/cameraControls'
@@ -52,6 +53,8 @@ type InputMode = 'idle' | 'building' | 'deploying' | 'aiming'
 
 export interface BattleLaunchData {
   levelId?: string
+  difficulty?: import('../game/modes').Difficulty // campaign: 'heroic' scales waves
+  challenge?: import('../game/modes').Challenge // campaign: iron / nohero / towers
   endless?: boolean
   demo?: boolean // "The Restoration of Ember Vale" — live play
   attract?: boolean // hands-free cinematic demo reel (?attract=1)
@@ -64,6 +67,7 @@ export interface BattleLaunchData {
 
 export class BattleScene extends Phaser.Scene {
   private levelId = 'l1'
+  private runMode: RunMode = NORMAL_MODE
   private endless = false
   private demoMode = false
   private attract = false
@@ -135,6 +139,10 @@ export class BattleScene extends Phaser.Scene {
     this.demoMode = this.attract || !!data?.demo || data?.levelId === 'demo'
     this.endless = !this.demoMode && !!data?.endless
     this.levelId = this.demoMode ? 'demo' : data?.levelId ?? 'l1'
+    // Difficulty/challenge modes apply to campaign play only (never demo/attract/endless).
+    this.runMode = (this.demoMode || data?.endless)
+      ? NORMAL_MODE
+      : { difficulty: data?.difficulty ?? 'normal', challenge: data?.challenge ?? '' }
     this.seedOverride = data?.seedOverride
     this.isDaily = !!data?.daily
     this.gameSpeed = this.attract ? Math.min(8, Math.max(0.25, data?.speed ?? 1)) : 1
@@ -145,19 +153,22 @@ export class BattleScene extends Phaser.Scene {
   create(): void {
     music.setTrack('battle')
     // ---- run config ----
-    this.level = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
+    const baseLevel = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
+    // Heroic scales the waves (deterministic, harder); other modes leave waves intact.
+    this.level = levelForMode(baseLevel, this.runMode)
     // Demo/attract runs are provably fair showcases: NEUTRAL modifiers always,
     // so a shared seed replays identically on every account.
     const mods = this.demoMode ? { ...NEUTRAL } : economy.runModifiers(this.endless)
     const startGold = this.endless ? ENDLESS_START_GOLD : this.level.startGold + mods.startGoldBonus
-    const startLives = this.endless ? ENDLESS_START_LIVES : this.level.startLives + mods.startLivesBonus
+    // Iron mode = one life; otherwise the level's lives + meta bonus.
+    const startLives = this.endless ? ENDLESS_START_LIVES : startLivesForMode(this.level.startLives + mods.startLivesBonus, this.runMode)
     // Every run's seed lives in the shareable WORD-WORD-NN code space, so the
     // "Copy seed link" on ANY run reproduces it exactly.
     const rawSeed = this.endless
       ? (0xE9D1E55 ^ (economy.data.endlessBest * 2654435761)) >>> 0
       : this.demoMode
         ? DEMO_SEED
-        : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234) >>> 0
+        : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234 ^ modeSeedSalt(this.runMode)) >>> 0
     this.seed = this.seedOverride ?? canonicalSeed(rawSeed)
     this.seedCode = seedToCode(this.seed)
     // resolve the chosen loadout into (heroId, level) pairs — economy.party() is
@@ -169,8 +180,10 @@ export class BattleScene extends Phaser.Scene {
       ? DEMO_PARTY.map((p) => ({ ...p }))
       : this.endless
         ? economy.rankedParty()
-        : economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
-    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party })
+        : partyAllowedForMode(this.runMode) // No-Hero challenge: leave the champions home
+          ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
+          : []
+    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
 
     // LIVE demo: Maddervane pre-places the Frost tower (the guaranteed-SHATTER
     // setup — the player adds Storm). Placement is refunded: a gift, not a cost.
@@ -983,6 +996,11 @@ export class BattleScene extends Phaser.Scene {
       battleSfx.victory()
       const stars = starsForClear(this.sim.lives, this.sim.startLives)
       const result = economy.awardCampaign(this.level.id, stars, this.level.baseCoins)
+      // Difficulty/challenge badges are earned on any clear of a non-normal run.
+      if (!isNormalMode(this.runMode)) {
+        const fresh = economy.recordBadges(this.level.id, badgesForClear(this.runMode))
+        if (fresh.length > 0) this.hud.banner(`BADGE EARNED · ${fresh.map((b) => BADGE_META[b]?.label ?? b).join(' + ')}`, 0xffd873)
+      }
       const shards = this.awardHeroes(20 + stars * 12, 55 + stars * 30)
       let unlocked: string | null = null
       if (result.firstClear && this.level.unlockTower && !economy.isTowerUnlocked(this.level.unlockTower)) {

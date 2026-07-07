@@ -52,6 +52,55 @@ export interface LevelStory {
   bark: StoryLine
 }
 
+// The realm hero who narrates its generated stops, + a deterministic bark pool.
+const REALM_HERO: Record<string, string> = {
+  emberwaste: 'ember', frostreach: 'glacia', stormpeaks: 'zephyra', verdant: 'sylvan', lumen: 'aurelia', hollow: 'vex',
+}
+const REALM_STOP_BARKS: Record<string, string[]> = {
+  emberwaste: ['Warm hands, steady eyes. Wake this stretch and move on.', 'Ash on the wind means embers underneath. Find them.', 'One hearth at a time. That is how you unburn a world.'],
+  frostreach: ['The ice remembers blue. Give it a reason to thaw.', 'Step light — this crust hides what it froze.', 'I have seen this stop go well. Make my sight true.'],
+  stormpeaks: ['Eyes up — the sky here has teeth and no manners.', 'Catch the wind before it catches you. Move!', 'Thunder used to live here. Let us evict the silence.'],
+  verdant: ['Patience cracks any shell. The moss agrees.', 'Everything grey was green once. Give it a minute.', 'Roots run under all of this. So does hope.'],
+  lumen: ['Hold the line, not the record. Light the way.', 'Even a dim lantern is a promise kept.', 'Grace is a trap here. Fight anyway.'],
+  hollow: ['Shadow is where colour rests. Wake it gently.', 'Mirrors lie. Your towers do not.', 'Say its true name and the grey lets go.'],
+}
+const MINIBOSS_BARKS = [
+  'A grey echo stands in the road. Break it and keep climbing.',
+  'Something old and hollow guards this stop. Answer it with fire.',
+  'The Greying left a warden here. Redeem it or route around it.',
+]
+const FINALE_BARKS = [
+  'Come in, little brush. Put down the wanting.',
+  'The Keeper waits at the top of the world. End it kindly.',
+  'This is the last colour they stole here. Take it back.',
+]
+
+function hashId(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) }
+  return (h >>> 0)
+}
+
+// Return the authored beat for a level, or a deterministic generated one so every
+// stop on the long ladder carries a line (never a blank pre-level card).
+export function storyForLevel(
+  lvl: { id: string; blurb: string; landmark?: 'landmark' | 'finale' },
+  realm: { id: string; name: string },
+): LevelStory {
+  const authored = LEVEL_STORY[lvl.id]
+  if (authored) return authored
+  const h = hashId(lvl.id)
+  if (lvl.landmark === 'finale') {
+    return { flavor: lvl.blurb, bark: { speaker: 'morose', text: FINALE_BARKS[h % FINALE_BARKS.length] } }
+  }
+  if (lvl.landmark === 'landmark') {
+    return { flavor: lvl.blurb, bark: { speaker: 'maddervane', text: MINIBOSS_BARKS[h % MINIBOSS_BARKS.length] } }
+  }
+  const pool = REALM_STOP_BARKS[realm.id] ?? REALM_STOP_BARKS.emberwaste
+  const speaker = REALM_HERO[realm.id] ?? 'maddervane'
+  return { flavor: lvl.blurb, bark: { speaker, text: pool[h % pool.length] } }
+}
+
 export const LEVEL_STORY: Record<string, LevelStory> = {
   l1: {
     flavor: 'The first forge of Kindlekeep, cold as a held breath.',
