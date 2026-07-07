@@ -88,6 +88,7 @@ interface EnemySlot {
   accentGlowMat: THREE.SpriteMaterial | null
   accent: number // signature Greying accent colour
   boss: boolean // keeper / Titan → set-piece scale + extra spectacle
+  castWarned: boolean // keeper telegraph active → flare the accent glow as a tell
 }
 
 // One animated garnish on a tower (floating ring / orb / flame / runestone):
@@ -1165,7 +1166,7 @@ export class BattleView3D {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
       auraPip: null, auraPipMat: null, crown, crownMat,
-      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss,
+      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false,
     }
 
     // Swap the primitive body for the painted "greyling" billboard once its PNG
@@ -1190,6 +1191,7 @@ export class BattleView3D {
       slot.art = sprite
       slot.artMat = mat
       slot.artH = artH
+      slot.accent = art.accent // bright signature glow (not def.accent's dark outline)
       body.visible = false
 
       // signature accent glow: a soft additive halo in the archetype's Greying
@@ -1553,7 +1555,11 @@ export class BattleView3D {
       s.auraPip.visible = false
     }
 
-    // Keeper crown: retint per Keeper (shared pool), slow precession, phase pulse
+    // Keeper crown: retint per Keeper (shared pool), slow precession, phase pulse.
+    // Match the accent glow to the same realm colour so the six Keepers read apart
+    // despite sharing the crimson 'elite' sprite.
+    s.castWarned = e.castWarned
+    if (e.kind === 'keeper') s.accent = e.def.accent
     if (s.crown && s.crownMat) {
       s.crownMat.color.setHex(e.def.accent)
       s.crown.rotation.z = clock * 0.9
@@ -1944,6 +1950,60 @@ export class BattleView3D {
     } else this.shake(0.035)
   }
 
+  // ---- Corrupted Keeper spectacle: view-only beats keyed off the sim's keeper
+  // events (reveal/telegraph/cast/phase/redeemed). No sim state invented — the
+  // shake/pushIn/bloomPulse helpers already no-op under reduce-motion, and the
+  // rings/particles stay subtle + additive so the fight reads instead of blinds.
+  fxKeeperReveal(simX: number, simY: number, color: number, accent: number): void {
+    this.pushRing(simX, simY, 90, accent, 0.9)
+    this.pushRing(simX, simY, 150, color, 0.65)
+    this.spellFlash(simX, simY, 80, accent, 2.4)
+    for (let i = 0; i < 3; i++) this.emitParticles(wx(simX), 0.6 + i * 0.5, wz(simY), accent, 8, 3)
+    this.pushIn(0.9)
+    this.shake(0.08)
+    this.bloomPulse(0.35)
+  }
+
+  fxKeeperTelegraph(simX: number, simY: number, radiusPx: number, accent: number): void {
+    // a warning footprint at the cast radius so the incoming attack is readable
+    this.pushRing(simX, simY, Math.max(70, radiusPx), accent, 0.85)
+    this.emitParticles(wx(simX), 0.7, wz(simY), accent, 6, 2)
+  }
+
+  fxKeeperCast(simX: number, simY: number, radiusPx: number, color: number, accent: number): void {
+    // the telegraphed attack lands — two-tone shock + flash + a measured bite
+    const r = Math.max(70, radiusPx)
+    this.pushRing(simX, simY, r, accent, 0.95)
+    this.pushRing(simX, simY, r * 1.4, color, 0.6)
+    this.spellFlash(simX, simY, r, color, 1.9)
+    this.emitParticles(wx(simX), 0.7, wz(simY), accent, 18, 4)
+    this.emitParticles(wx(simX), 0.7, wz(simY), 0xffffff, 6, 3)
+    this.shake(0.12)
+    this.pushIn(0.5)
+  }
+
+  fxKeeperPhase(simX: number, simY: number, color: number, accent: number): void {
+    // phase break — the grey cracks: hard bite, bloom, expanding shock, motes
+    this.pushRing(simX, simY, 130, 0xffffff, 0.85)
+    this.pushRing(simX, simY, 190, accent, 0.55)
+    this.spellFlash(simX, simY, 110, accent, 2.6)
+    this.emitParticles(wx(simX), 0.8, wz(simY), accent, 22, 4.5)
+    this.shake(0.2)
+    this.pushIn(0.9)
+    this.bloomPulse(0.4)
+  }
+
+  fxKeeperRedeem(simX: number, simY: number, color: number, accent: number): void {
+    // the payoff — the colour returns in a warm swell of the true palette
+    this.pushRing(simX, simY, 160, accent, 0.9)
+    this.pushRing(simX, simY, 240, color, 0.55)
+    this.spellFlash(simX, simY, 140, 0xfff2ff, 2.6)
+    for (let i = 0; i < 3; i++) this.emitParticles(wx(simX), 0.7 + i * 0.4, wz(simY), accent, 14, 3.5)
+    this.emitParticles(wx(simX), 0.8, wz(simY), color, 16, 4)
+    this.pushIn(0.7)
+    this.bloomPulse(0.5)
+  }
+
   fxMuzzle(simX: number, simY: number, tsimX: number, tsimY: number, color: number, kind: TowerKind): void {
     this.emitParticles(wx(simX), 0.95, wz(simY), color, 4, 1.6)
     if (kind === 'arcane' || kind === 'flame') this.fxBeam(simX, simY, tsimX, tsimY, color, 0.16)
@@ -2252,9 +2312,12 @@ export class BattleView3D {
         // accent glow: gentle breathing pulse, flares white on a hit
         if (s.accentGlow && s.accentGlowMat) {
           s.accentGlow.position.y = s.art.position.y
+          // keeper telegraph → the accent glow flares as a readable "attack incoming"
+          // tell; pulses when motion is on, else a static-but-brighter hold
+          const tell = s.castWarned ? (this.motionOk ? 0.35 + 0.35 * Math.abs(Math.sin(this.clockT * 12)) : 0.5) : 0
           const base = this.motionOk ? 0.32 + 0.12 * Math.sin(this.clockT * 2.4 + s.walkT) : 0.36
-          s.accentGlowMat.opacity = Math.min(0.95, base + hitK * 0.7)
-          const gs = Math.max(w, h) * (1.5 + hitK * 0.35)
+          s.accentGlowMat.opacity = Math.min(0.98, base + hitK * 0.7 + tell)
+          const gs = Math.max(w, h) * (1.5 + hitK * 0.35 + tell * 0.4)
           s.accentGlow.scale.set(gs, gs, 1)
           if (hitK > 0) s.accentGlowMat.color.setRGB(1, 1, 1)
           else s.accentGlowMat.color.setHex(s.accent)

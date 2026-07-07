@@ -1327,6 +1327,8 @@ export class BattleScene extends Phaser.Scene {
     const k = KEEPER_BY_ID[ev.keeperId]
     if (!k) return
     if (ev.kind === 'reveal') {
+      // the entrance beat fires once, even if the sim re-announces the reveal
+      if (!this.keeperTold.has(k.id)) this.view.fxKeeperReveal(ev.x, ev.y, ev.color, ev.accent)
       if (this.keeperTold.has(k.id)) return
       this.keeperTold.add(k.id)
       this.hud.chatBark(k.id, k.barks.reveal)
@@ -1335,7 +1337,12 @@ export class BattleScene extends Phaser.Scene {
       if (this.partyIds.includes(k.heroId)) {
         this.keeperTimers.push(window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark(k.heroId, k.barks.heroLine) }, 2100))
       }
+    } else if (ev.kind === 'telegraph') {
+      this.view.fxKeeperTelegraph(ev.x, ev.y, ev.radius, ev.accent)
+    } else if (ev.kind === 'cast') {
+      this.view.fxKeeperCast(ev.x, ev.y, ev.radius, ev.color, ev.accent)
     } else if (ev.kind === 'phase') {
+      this.view.fxKeeperPhase(ev.x, ev.y, ev.color, ev.accent)
       if (ev.phase === 2) this.hud.chatBark(k.id, k.barks.phase2)
       else if (ev.phase === 3) this.hud.chatBark(k.id, k.barks.phase3)
     } else if (ev.kind === 'redeemed') {
@@ -1345,7 +1352,7 @@ export class BattleScene extends Phaser.Scene {
       this.hud.chatBark(k.id, k.barks.redeemed)
       this.hud.banner(`✦ ${k.trueName.toUpperCase()} — REDEEMED`, k.enemy.accent)
       if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.3)
-      this.view.bloomPulse(0.45)
+      this.view.fxKeeperRedeem(ev.x, ev.y, ev.color, ev.accent)
       battleSfx.reaction()
       if (unlockCodexBatch(CODEX_ON_KEEPER_REDEEM[k.id]) > 0) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       // Morose's thread stinger, a beat later — his reaction degrades across the six
