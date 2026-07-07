@@ -18,9 +18,23 @@ import {
 } from './workshop'
 import { STARTER_HEROES, MAX_PARTY, heroById } from './heroes'
 import { MAX_HERO_LEVEL, clampLevel, xpForLevel, shardCostForLevel } from './heroProgress'
+import {
+  skuById,
+  passTierForXp,
+  PASS_SEASON,
+  PASS_TIERS,
+  PASS_TRACK,
+  PASS_PREMIUM_DIAMONDS,
+  type PassReward,
+  type Sku,
+} from './cosmetics'
 
 const IDLE_CAP_MS = 8 * 60 * 60 * 1000 // 8 hours
-const DAILY_DIAMONDS = 2
+const DAILY_DIAMONDS = 5 // diamonds drip free (~5-15/day with play)
+
+// RANKED NORMALIZATION: endless ignores hero progression — every fielded hero
+// plays at this fixed level, so no purchase OR grind buys ranked power.
+export const RANKED_HERO_LEVEL = 5
 
 export interface CampaignResult {
   levelId: string
@@ -51,6 +65,10 @@ class Economy {
 
   constructor() {
     this.data = loadSave()
+    // New season (or first run): reset pass progress to the current season.
+    if (this.data.pass.season !== PASS_SEASON) {
+      this.data.pass = { season: PASS_SEASON, xp: 0, premium: false, freeClaimed: 0, premClaimed: 0 }
+    }
   }
 
   save(): void {
@@ -86,6 +104,164 @@ class Economy {
     else this.data.diamonds -= amount
     this.save()
     return true
+  }
+
+  get prisms(): number {
+    return this.data.prisms
+  }
+  addPrisms(n: number): void {
+    if (n <= 0) return
+    this.data.prisms += Math.round(n)
+    this.save()
+  }
+
+  // ======================================================================
+  //  STORE — cosmetics + casual convenience. FAIRNESS INVARIANT: nothing in
+  //  this section is readable by the sim; Ranked cannot see any of it.
+  // ======================================================================
+  owns(id: string): boolean {
+    return this.data.owned.includes(id)
+  }
+
+  /** SKU id equipped in a slot ('tower:cannon', 'hero:ember', 'dye', …). */
+  equippedIn(slot: string): string | null {
+    return this.data.equipped[slot] ?? null
+  }
+
+  /** Purchase gate check (e.g. Redeemed-Keeper skins need that Keeper freed). */
+  skuGateOpen(sku: Sku): boolean {
+    if (!sku.gate) return true
+    return this.data.firstClears[sku.gate.levelClear] === true
+  }
+
+  /** Buy a shelf SKU with diamonds/prisms. Auto-equips cosmetics. */
+  buySku(id: string): boolean {
+    const sku = skuById(id)
+    if (!sku || this.owns(id) || sku.passExclusive) return false
+    if (!this.skuGateOpen(sku)) return false
+    const wallet = sku.currency === 'prisms' ? this.data.prisms : this.data.diamonds
+    if (wallet < sku.price) return false
+    if (sku.currency === 'prisms') this.data.prisms -= sku.price
+    else this.data.diamonds -= sku.price
+    this.grantSku(id)
+    return true
+  }
+
+  /** Own a SKU without paying (pass rewards). Auto-equips cosmetics. */
+  grantSku(id: string): void {
+    const sku = skuById(id)
+    if (!sku) return
+    if (!this.data.owned.includes(id)) this.data.owned.push(id)
+    if (sku.slot && !this.data.equipped[sku.slot]) this.data.equipped[sku.slot] = id
+    this.save()
+  }
+
+  /** Equip an owned SKU into its slot; pass null-ish to just re-save. */
+  equipSku(id: string): boolean {
+    const sku = skuById(id)
+    if (!sku || !sku.slot || !this.owns(id)) return false
+    this.data.equipped[sku.slot] = id
+    this.save()
+    return true
+  }
+
+  unequipSlot(slot: string): void {
+    delete this.data.equipped[slot]
+    this.save()
+  }
+
+  isEquipped(id: string): boolean {
+    const sku = skuById(id)
+    return !!sku?.slot && this.data.equipped[sku.slot] === id
+  }
+
+  // ---- casual convenience (meta-economy only; Ranked never reads these) ----
+  private hasIdle2x(): boolean {
+    return this.owns('conv-idle2x')
+  }
+  hasAutoCollect(): boolean {
+    return this.owns('conv-autocollect')
+  }
+
+  // ---- loadout slots (casual presets; Ranked ALWAYS uses slot 1) ----
+  loadoutSlots(): number {
+    return 1 + (this.owns('conv-slot2') ? 1 : 0) + (this.owns('conv-slot3') ? 1 : 0)
+  }
+  activeLoadout(): number {
+    return Math.min(this.data.activeLoadout, this.loadoutSlots() - 1)
+  }
+  setActiveLoadout(i: number): void {
+    this.data.activeLoadout = Math.max(0, Math.min(this.loadoutSlots() - 1, Math.floor(i)))
+    this.save()
+  }
+  private rawParty(slot: number): string[] {
+    if (slot <= 0) return this.data.party
+    return this.data.loadouts[slot - 1] ?? []
+  }
+  private writeParty(slot: number, ids: string[]): void {
+    if (slot <= 0) this.data.party = ids
+    else {
+      while (this.data.loadouts.length < slot) this.data.loadouts.push([])
+      this.data.loadouts[slot - 1] = ids
+    }
+  }
+
+  // ======================================================================
+  //  PRISM PASS — advances by PLAY only. There is no XP purchase path.
+  // ======================================================================
+  get passXp(): number {
+    return this.data.pass.xp
+  }
+  get passPremium(): boolean {
+    return this.data.pass.premium
+  }
+  passTier(): number {
+    return passTierForXp(this.data.pass.xp)
+  }
+  addPassXp(n: number): void {
+    if (n <= 0) return
+    this.data.pass.xp += Math.round(n)
+    this.save()
+  }
+  /** Unlock premium with diamonds (diamonds are earnable free). */
+  unlockPassPremium(): boolean {
+    if (this.data.pass.premium) return false
+    if (!this.spend('diamonds', PASS_PREMIUM_DIAMONDS)) return false
+    this.data.pass.premium = true
+    this.save()
+    return true
+  }
+  /** Tiers claimable right now on each track. */
+  passClaimable(): { free: number; premium: number } {
+    const tier = this.passTier()
+    return {
+      free: Math.max(0, tier - this.data.pass.freeClaimed),
+      premium: this.data.pass.premium ? Math.max(0, tier - this.data.pass.premClaimed) : 0,
+    }
+  }
+  /** Claim everything available; returns the granted rewards for the UI. */
+  claimPassRewards(): PassReward[] {
+    const tier = this.passTier()
+    const granted: PassReward[] = []
+    const apply = (r: PassReward) => {
+      if (r.coins) this.data.coins += r.coins
+      if (r.diamonds) this.data.diamonds += r.diamonds
+      if (r.prisms) this.data.prisms += r.prisms
+      if (r.sku) this.grantSku(r.sku)
+      granted.push(r)
+    }
+    while (this.data.pass.freeClaimed < Math.min(tier, PASS_TIERS)) {
+      apply(PASS_TRACK[this.data.pass.freeClaimed].free)
+      this.data.pass.freeClaimed++
+    }
+    if (this.data.pass.premium) {
+      while (this.data.pass.premClaimed < Math.min(tier, PASS_TIERS)) {
+        apply(PASS_TRACK[this.data.pass.premClaimed].premium)
+        this.data.pass.premClaimed++
+      }
+    }
+    this.save()
+    return granted
   }
 
   // ---- workshop modifiers ----
@@ -129,6 +305,8 @@ class Economy {
     if (firstClear) this.data.firstClears[levelId] = true
     this.data.coins += coins
     this.data.diamonds += diamonds
+    // Prism Pass advances by PLAY only (see PASS_DUTIES in cosmetics.ts).
+    if (stars >= 1) this.data.pass.xp += 12 + 6 * gainedStars + (firstClear ? 10 : 0)
     this.save()
 
     return { levelId, stars, bestStars, gainedStars, firstClear, coins, diamonds }
@@ -141,6 +319,8 @@ class Economy {
     const best = wavesReached > this.data.endlessBest
     if (best) this.data.endlessBest = wavesReached
     this.data.coins += coins
+    // Playing Ranked also feeds the pass — earning is fine; SPENDING can't touch it.
+    this.data.pass.xp += Math.min(40, wavesReached * 2)
     this.save()
     return { coins, best }
   }
@@ -151,10 +331,13 @@ class Economy {
     if (!last) return { coins: 0, seconds: 0, capped: false }
     const rawMs = now() - last
     if (rawMs <= 0) return { coins: 0, seconds: 0, capped: false }
-    const capped = rawMs > IDLE_CAP_MS
-    const ms = Math.min(rawMs, IDLE_CAP_MS)
+    // Store convenience (CASUAL meta only): auto-collect stretches the offline
+    // cap 8h→24h; 2× idle doubles the rate. Neither is readable by the sim.
+    const capMs = this.hasAutoCollect() ? IDLE_CAP_MS * 3 : IDLE_CAP_MS
+    const capped = rawMs > capMs
+    const ms = Math.min(rawMs, capMs)
     const meta = this.meta()
-    const perMs = (meta.idlePerMin * meta.idleBoost * meta.coinBoost) / 60000
+    const perMs = (meta.idlePerMin * meta.idleBoost * meta.coinBoost * (this.hasIdle2x() ? 2 : 1)) / 60000
     const coins = Math.floor(ms * perMs)
     return { coins, seconds: Math.floor(ms / 1000), capped }
   }
@@ -259,9 +442,13 @@ class Economy {
 
   // ---- loadout ----
   // Validated party: only unlocked, known heroes, deduped, capped at MAX_PARTY.
+  // Reads the ACTIVE casual loadout slot (slot 1 unless extra slots are owned).
   party(): string[] {
+    return this.validateParty(this.rawParty(this.activeLoadout()))
+  }
+  private validateParty(ids: string[]): string[] {
     const out: string[] = []
-    for (const id of this.data.party) {
+    for (const id of ids) {
       if (out.length >= MAX_PARTY) break
       if (out.includes(id)) continue
       if (heroById(id) && this.isHeroUnlocked(id)) out.push(id)
@@ -274,8 +461,14 @@ class Economy {
       if (clean.length >= MAX_PARTY) break
       if (!clean.includes(id) && heroById(id) && this.isHeroUnlocked(id)) clean.push(id)
     }
-    this.data.party = clean
+    this.writeParty(this.activeLoadout(), clean)
     this.save()
+  }
+
+  // RANKED loadout: ALWAYS slot 1, hero levels normalized — no purchase and no
+  // grind changes ranked hero strength. This is the constitution, in code.
+  rankedParty(): Array<{ heroId: string; level: number }> {
+    return this.validateParty(this.data.party).map((id) => ({ heroId: id, level: RANKED_HERO_LEVEL }))
   }
   // Toggle a hero in/out of the party (respecting the cap). Returns the new party.
   toggleParty(id: string): string[] {

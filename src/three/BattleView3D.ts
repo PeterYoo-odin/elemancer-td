@@ -16,6 +16,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
 import { COLS, ROWS, MAP_X, MAP_Y, MAP_W, MAP_H, AURA_COLOR, worldToCell } from '../sim'
 import { TOWERS, type TowerKind } from '../game/towers'
+import { towerPalette, spellColor, heroDye } from '../game/skins'
 import { RARITY_COLOR } from '../game/heroes'
 import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
@@ -135,6 +136,7 @@ interface HeroSlot {
   artMat: THREE.SpriteMaterial | null
   color: number
   heroId: string
+  artTint: number // equipped hero-skin dye (0xffffff = stock)
 }
 
 // painted cutout textures, keyed by heroId — shared across battles, never disposed
@@ -412,7 +414,8 @@ export class BattleView3D {
     this.disposables.push(this.atlasBaseMat)
 
     for (const kind of Object.keys(TOWERS) as TowerKind[]) {
-      const col = TOWERS[kind].color
+      // equipped store skin = palette swap; falls back to the stock element color
+      const col = towerPalette(kind).color
       const sig = new THREE.MeshStandardMaterial({
         map: atlas ?? null, color: atlas ? 0xffffff : col,
         emissive: col, emissiveIntensity: 0.6, roughness: 0.5, metalness: 0.25,
@@ -1112,7 +1115,7 @@ export class BattleView3D {
   }
 
   private createTowerSlot(t: SimTower): TowerSlot {
-    const def = t.def
+    const def = { ...t.def, ...towerPalette(t.kind) } // skin palette overrides color/accent
     const g = new THREE.Group()
     g.position.set(wx(t.x), GROUND, wz(t.y)) // sits on the tile top
     const bodyGroup = new THREE.Group()
@@ -1169,7 +1172,7 @@ export class BattleView3D {
     this.assembleTower(slot, t)
     // upgrade flourish: scale-punch + sparkle fountain + glow spike (via pulseT)
     slot.pulseT = 0.5
-    this.emitParticles(wx(t.x), GROUND + 1.1, wz(t.y), t.def.color, 20, 2.6)
+    this.emitParticles(wx(t.x), GROUND + 1.1, wz(t.y), towerPalette(t.kind).color, 20, 2.6)
     this.emitParticles(wx(t.x), GROUND + 1.3, wz(t.y), 0xffffff, 8, 2)
   }
 
@@ -1379,7 +1382,7 @@ export class BattleView3D {
       }
       if (t.level !== s.level || t.branch !== s.branch) {
         this.rebuildTurret(s, t)
-        this.pushRing(t.x, t.y, this.sim.effRange(t), t.def.color, 0.9)
+        this.pushRing(t.x, t.y, this.sim.effRange(t), towerPalette(t.kind).color, 0.9)
         this.buffDirty = true
       }
       // aim turret (target only — render() eases toward it for weighty turns)
@@ -1399,8 +1402,9 @@ export class BattleView3D {
         if (greyed) {
           this.pushRing(t.x, t.y, 60, 0x9a94b8, 0.9)
         } else {
-          this.pushRing(t.x, t.y, 70, t.def.color, 0.9)
-          this.emitParticles(wx(t.x), GROUND + 1.0, wz(t.y), t.def.color, 14, 2.2)
+          const pc = towerPalette(t.kind).color
+          this.pushRing(t.x, t.y, 70, pc, 0.9)
+          this.emitParticles(wx(t.x), GROUND + 1.0, wz(t.y), pc, 14, 2.2)
         }
       }
       s.glow.intensity = greyed ? 0.05 : 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
@@ -1533,6 +1537,7 @@ export class BattleView3D {
       group: g, figure, bodyMat, orb, orbMat, ring, ringMat, glow,
       badge: badge.sprite, badgeTex: badge.tex, badgeMat: badge.mat,
       art: null, artMat: null, color: def.color, heroId: h.heroId,
+      artTint: heroDye(h.heroId)?.tint ?? 0xffffff, // equipped hero-skin dye
     }
 
     // swap the low-poly figure for the painted billboard token once the cached
@@ -1575,7 +1580,7 @@ export class BattleView3D {
       if (s.artMat) s.artMat.color.setHex(0x777486) // painted token drains to grey
       return
     }
-    if (s.artMat) s.artMat.color.setHex(0xffffff)
+    if (s.artMat) s.artMat.color.setHex(s.artTint)
     s.bodyMat.color.setHex(s.color)
     s.bodyMat.emissive.setHex(s.color)
     const flashing = h.fireFlash > 0
@@ -1604,7 +1609,9 @@ export class BattleView3D {
       let s = this.projViews.get(p.id)
       if (!s || s.kind !== p.sourceKind) {
         if (s) this.releaseProj(p.id)
-        s = this.acquireProj(p.sourceKind, p.color)
+        // skinned towers recolor their shots too (sim color is only a default)
+        const pal = towerPalette(p.sourceKind)
+        s = this.acquireProj(p.sourceKind, pal.skinned ? pal.color : p.color)
         this.projViews.set(p.id, s)
       }
       const x = wx(p.x)
@@ -1819,6 +1826,7 @@ export class BattleView3D {
   }
 
   fxSpell(key: string, simX: number, simY: number, radiusPx: number, color: number): void {
+    color = spellColor(key, color) // equipped VFX recolor (paint only)
     if (key === 'meteor') {
       this.pushRing(simX, simY, radiusPx, color, 0.95)
       this.emitParticles(wx(simX), 0.8, wz(simY), 0xffb15c, 60, 5)

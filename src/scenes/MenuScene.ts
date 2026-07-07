@@ -35,7 +35,7 @@ export class MenuScene extends Phaser.Scene {
       // Replay from settings: the user has interacted, so no tap gate needed.
       onReplayIntro: () => showOdinSplash({ gate: false }),
     })
-    this.front.setCurrencies(economy.coins, economy.diamonds)
+    this.front.setCurrencies(economy.coins, economy.diamonds, economy.prisms)
     this.front.setBestWave(economy.data.endlessBest)
 
     this.events.once('shutdown', () => {
@@ -66,7 +66,7 @@ export class MenuScene extends Phaser.Scene {
     }
     if (lines.length) {
       this.front.showRewards(title, lines)
-      this.front.setCurrencies(economy.coins, economy.diamonds)
+      this.front.setCurrencies(economy.coins, economy.diamonds, economy.prisms)
     }
   }
 }

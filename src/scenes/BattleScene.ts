@@ -160,9 +160,13 @@ export class BattleScene extends Phaser.Scene {
     // resolve the chosen loadout into (heroId, level) pairs — economy.party() is
     // already filtered to unlocked, valid heroes, so no bad id reaches the sim.
     // The attract reel uses a FIXED party so the footage never depends on a save.
+    // RANKED (endless): loadout slot 1 with NORMALIZED hero levels — no purchase
+    // and no grind changes ranked strength (the store constitution, enforced).
     const party = this.attract
       ? DEMO_PARTY.map((p) => ({ ...p }))
-      : economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
+      : this.endless
+        ? economy.rankedParty()
+        : economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level }))
     this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party })
 
     // LIVE demo: Maddervane pre-places the Frost tower (the guaranteed-SHATTER
@@ -260,6 +264,10 @@ export class BattleScene extends Phaser.Scene {
       this.buildTakeoverOverlay()
     } else if (this.demoMode) {
       this.hud.banner('MADDERVANE LEFT YOU A FROST TOWER', 0x9fdcff)
+    } else if (this.endless) {
+      // The store constitution, on screen: Ranked ignores every purchase —
+      // heroes normalized, boosts/convenience/extra slots disabled.
+      this.hud.banner('RANKED · NOTHING YOU CAN BUY WORKS HERE', 0x9fe8ff)
     }
     if (this.attract) this.hud.setSpeed(this.gameSpeed)
 

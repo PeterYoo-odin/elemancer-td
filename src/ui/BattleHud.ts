@@ -6,6 +6,7 @@
 import type { Sim, SimHero } from '../sim'
 import { GRID, WHEEL, DAMAGE_TYPES, REACTIONS, type ArmorType, type DamageType, type Element, type ReactionKey } from '../sim'
 import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/towers'
+import { towerPalette, spellColor, heroDye } from '../game/skins'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import { ENEMIES, type EnemyKind } from '../game/enemies'
 import { RARITY_COLOR } from '../game/heroes'
@@ -557,9 +558,10 @@ export class BattleHud {
     const spells = el('div', 'eld-spells')
     for (const key of SPELL_ORDER) {
       const def = SPELLS[key]
+      const c = spellColor(key, def.color) // equipped VFX recolor
       const b = el('div', 'eld-spell ready pe')
-      b.style.borderColor = hex(def.color)
-      b.style.color = hex(def.color)
+      b.style.borderColor = hex(c)
+      b.style.color = hex(c)
       const glyph = key === 'meteor' ? '☄' : key === 'freeze' ? '❄' : '💰'
       b.append(el('span', undefined, glyph))
       const mask = el('div', 'cdmask')
@@ -573,10 +575,11 @@ export class BattleHud {
     const towers = el('div', 'eld-towers')
     for (const kind of TOWER_ORDER) {
       const def = TOWERS[kind]
+      const pal = towerPalette(kind) // equipped skin palette (or stock)
       const b = el('div', 'eld-tower pe')
       const gem = el('div', 'gem')
-      gem.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
-      gem.style.color = hex(def.color)
+      gem.style.background = `linear-gradient(160deg, ${hex(pal.color)}, ${hex(pal.accent)})`
+      gem.style.color = hex(pal.color)
       const nm = el('div', 'tn', def.name)
       const cost = el('div', 'tc', '$0')
       const tt = el('div', 'tt', def.damageType.slice(0, 4).toUpperCase() + (def.element ? ' · ' + def.element[0] : ''))
@@ -698,8 +701,7 @@ export class BattleHud {
       ref.cost.textContent = unlocked ? `$${cost}` : ''
       ref.cost.classList.toggle('no', unlocked && !afford)
       ref.lock.style.display = unlocked ? 'none' : 'grid'
-      const def = TOWERS[kind]
-      ref.root.style.borderColor = ctx.buildKind === kind ? hex(def.color) : '#444'
+      ref.root.style.borderColor = ctx.buildKind === kind ? hex(towerPalette(kind).color) : '#444'
       ref.root.classList.toggle('sel', ctx.buildKind === kind)
       const dim = !unlocked || !afford
       if (this.lastAfford.get(kind) !== !dim) {
@@ -794,6 +796,8 @@ export class BattleHud {
       if (art) {
         // painted portrait, zoomed to the face (the chip is only 50px)
         port.style.background = `url('${art}') 50% 12% / 210% auto no-repeat, linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
+        const dye = heroDye(entry.heroId) // equipped hero-skin recolor
+        if (dye) port.style.filter = dye.css
       } else {
         port.style.background = `linear-gradient(160deg, ${hex(def.color)}, ${hex(def.accent)})`
         port.append(el('span', 'hglyph', def.glyph))

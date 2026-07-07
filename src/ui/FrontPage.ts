@@ -10,6 +10,7 @@ import { appSettings } from './settings'
 import { playUiTick } from './sfx'
 import { music } from './music'
 import { keyartBackdropUrl } from './heroArt'
+import { menuBanner, prestigeTitle, hasFrame, uiDyeAccent } from '../game/skins'
 
 export interface FrontPageHandlers {
   onPlay(): void
@@ -83,6 +84,13 @@ const CSS = `
   background: linear-gradient(135deg, #eafcff, #7fe3ff 55%, #2aa4d6); box-shadow: 0 0 8px rgba(127,227,255,.55); }
 .efp-chip.c-coin { color: #ffe08a; }
 .efp-chip.c-dia { color: #c9f2ff; }
+.efp-chip.c-prism { color: #e2c9ff; }
+.efp-chip[hidden] { display: none; }
+/* equipped store cosmetics: banner ribbon + prestige title flourish */
+.efp-banner { width: min(300px, 72vw); height: 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.22);
+  box-shadow: 0 0 14px rgba(255,255,255,.12); }
+.efp-prestige { font-size: 11px; font-weight: 900; letter-spacing: .34em; margin-right: -.34em; text-transform: uppercase;
+  color: transparent; background: linear-gradient(180deg, #fff6d8, #ffd76a 45%, #c08a12); background-clip: text; -webkit-background-clip: text; }
 .efp-gear {
   margin-left: auto; width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(255,255,255,.14);
   background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
@@ -329,6 +337,8 @@ export class FrontPage {
   private coinEl: HTMLElement
   private diaEl: HTMLElement
   private bestEl: HTMLElement
+  private prismEl!: HTMLElement
+  private prismChip!: HTMLElement
   private leaving = false
 
   constructor(private handlers: FrontPageHandlers) {
@@ -345,6 +355,7 @@ export class FrontPage {
       <div class="efp-top efp-in" style="animation-delay:.05s">
         <div class="efp-chip c-coin"><span class="efp-coin"></span><span data-coin>0</span></div>
         <div class="efp-chip c-dia"><span class="efp-dia"></span><span data-dia>0</span></div>
+        <div class="efp-chip c-prism" data-prismchip hidden>✦ <span data-prism>0</span></div>
         <button class="efp-gear" data-act="settings" aria-label="Settings">${svg(ICONS.gear)}</button>
       </div>
 
@@ -362,6 +373,8 @@ export class FrontPage {
           <div class="efp-rule"></div>
         </div>
         <div class="efp-tag efp-in" style="animation-delay:.3s"><span>Paint the world back</span> &middot; <span>Hold the line</span></div>
+        <div class="efp-prestige efp-in" data-prestige hidden style="animation-delay:.32s"></div>
+        <div class="efp-banner efp-in" data-banner hidden style="animation-delay:.34s"></div>
       </div>
 
       <div class="efp-menu">
@@ -382,7 +395,7 @@ export class FrontPage {
         </button>
         <button class="efp-btn efp-in" style="animation-delay:.54s; --a:#c06bff" data-act="shop">
           <span class="efp-ic">${svg(ICONS.gem)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">SHOP</span><span class="efp-bsub">Gems &amp; bundles</span></span>
+          <span class="efp-btxt"><span class="efp-blabel">STORE</span><span class="efp-bsub">Skins &amp; Prism Pass &middot; zero power sold</span></span>
           <span class="efp-chev">&#8250;</span>
         </button>
         <button class="efp-btn efp-in" style="animation-delay:.6s; --a:#ff7a4a" data-act="endless">
@@ -411,6 +424,31 @@ export class FrontPage {
     this.coinEl = this.root.querySelector<HTMLElement>('[data-coin]')!
     this.diaEl = this.root.querySelector<HTMLElement>('[data-dia]')!
     this.bestEl = this.root.querySelector<HTMLElement>('[data-best]')!
+    this.prismEl = this.root.querySelector<HTMLElement>('[data-prism]')!
+    this.prismChip = this.root.querySelector<HTMLElement>('[data-prismchip]')!
+
+    // equipped store cosmetics (banner ribbon, prestige title, dye, frame glow)
+    const banner = menuBanner()
+    const bEl = this.root.querySelector<HTMLElement>('[data-banner]')!
+    if (banner) {
+      bEl.hidden = false
+      bEl.style.background = banner.css
+      bEl.title = banner.name
+    }
+    const title = prestigeTitle()
+    const pEl = this.root.querySelector<HTMLElement>('[data-prestige]')!
+    if (title) {
+      pEl.hidden = false
+      pEl.textContent = '✦ ' + title + ' ✦'
+    }
+    const dye = uiDyeAccent()
+    if (dye) for (const r of this.root.querySelectorAll<HTMLElement>('.efp-tag, .efp-bsub')) r.style.color = dye
+    if (hasFrame()) {
+      const wrap = this.root.querySelector<HTMLElement>('.efp-logo-wrap')!
+      wrap.style.border = '1px solid rgba(255,215,106,.45)'
+      wrap.style.borderRadius = '18px'
+      wrap.style.boxShadow = '0 0 30px rgba(255,190,70,.16), inset 0 0 24px rgba(255,190,70,.07)'
+    }
 
     this.root.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')
@@ -426,9 +464,11 @@ export class FrontPage {
     })
   }
 
-  setCurrencies(coins: number, diamonds: number): void {
+  setCurrencies(coins: number, diamonds: number, prisms = 0): void {
     this.coinEl.textContent = String(coins)
     this.diaEl.textContent = String(diamonds)
+    this.prismEl.textContent = String(prisms)
+    this.prismChip.hidden = prisms <= 0 // event currency: chip appears once earned
   }
 
   setBestWave(wave: number): void {

@@ -3,7 +3,7 @@
 // default, so a missing `workshop`/`diamonds`/etc. resolves to a default, not
 // `undefined`. economy.ts is the only module that mutates + persists this.
 
-export const SAVE_VERSION = 3
+export const SAVE_VERSION = 4
 const SAVE_KEY = 'elemancer_td_save_v1'
 
 // Persisted per-hero progression (see heroProgress.ts for the scaling rules).
@@ -27,7 +27,27 @@ export interface SaveData {
   // --- slice-6 heroes ---
   heroShards: number // free currency for unlocking + levelling heroes
   heroes: Record<string, SavedHero> // heroId -> progression (starters unlocked)
-  party: string[] // chosen loadout (hero ids, up to MAX_PARTY)
+  party: string[] // chosen loadout (hero ids, up to MAX_PARTY) — this is SLOT 1; Ranked always uses it
+  // --- store / economy (all cosmetic or casual-only; Ranked ignores everything here) ---
+  prisms: number // event-only cosmetic currency, earned by play, never sold
+  owned: string[] // owned SKU ids (skins, dyes, convenience, prestige)
+  equipped: Record<string, string> // equip slot -> SKU id (e.g. 'tower:cannon')
+  loadouts: string[][] // extra casual loadouts (slots 2+); party above is slot 1
+  activeLoadout: number // 0 = party (slot 1); 1+ index into loadouts
+  pass: PassSave // Prism Pass season progress (advances by play only)
+  restorerName: string // Restorers Wall display name stub ('' = unset)
+}
+
+export interface PassSave {
+  season: string
+  xp: number
+  premium: boolean
+  freeClaimed: number // tiers 1..n already claimed on the free track
+  premClaimed: number // tiers 1..n already claimed on the premium track
+}
+
+function defaultPass(): PassSave {
+  return { season: '', xp: 0, premium: false, freeClaimed: 0, premClaimed: 0 }
 }
 
 // Heroes owned from a fresh save. Kept local (like unlockedTowers) so save.ts has
@@ -55,6 +75,13 @@ export function defaultSave(): SaveData {
     heroShards: 0,
     heroes: starterHeroes(),
     party: [...STARTER_HERO_IDS],
+    prisms: 0,
+    owned: [],
+    equipped: {},
+    loadouts: [],
+    activeLoadout: 0,
+    pass: defaultPass(),
+    restorerName: '',
   }
 }
 
@@ -111,6 +138,41 @@ function coerce(raw: unknown): SaveData {
     for (const p of o.party) if (typeof p === 'string' && party.length < 3 && !party.includes(p)) party.push(p)
     d.party = party
   }
+
+  // --- store / economy (each field defended; old blobs keep defaults) ---
+  if (typeof o.prisms === 'number' && isFinite(o.prisms)) d.prisms = Math.max(0, Math.floor(o.prisms))
+  if (Array.isArray(o.owned)) {
+    const set = new Set<string>()
+    for (const id of o.owned) if (typeof id === 'string') set.add(id)
+    d.owned = [...set]
+  }
+  if (o.equipped && typeof o.equipped === 'object') {
+    for (const [k, v] of Object.entries(o.equipped as Record<string, unknown>)) {
+      if (typeof v === 'string') d.equipped[k] = v
+    }
+  }
+  if (Array.isArray(o.loadouts)) {
+    d.loadouts = []
+    for (const lo of o.loadouts) {
+      if (!Array.isArray(lo)) continue
+      const clean: string[] = []
+      for (const p of lo) if (typeof p === 'string' && clean.length < 3 && !clean.includes(p)) clean.push(p)
+      d.loadouts.push(clean)
+      if (d.loadouts.length >= 2) break // slots 2+3 at most
+    }
+  }
+  if (typeof o.activeLoadout === 'number' && isFinite(o.activeLoadout)) {
+    d.activeLoadout = Math.max(0, Math.min(d.loadouts.length, Math.floor(o.activeLoadout)))
+  }
+  if (o.pass && typeof o.pass === 'object') {
+    const p = o.pass as Record<string, unknown>
+    if (typeof p.season === 'string') d.pass.season = p.season
+    if (typeof p.xp === 'number' && isFinite(p.xp)) d.pass.xp = Math.max(0, Math.floor(p.xp))
+    d.pass.premium = p.premium === true
+    if (typeof p.freeClaimed === 'number' && isFinite(p.freeClaimed)) d.pass.freeClaimed = Math.max(0, Math.floor(p.freeClaimed))
+    if (typeof p.premClaimed === 'number' && isFinite(p.premClaimed)) d.pass.premClaimed = Math.max(0, Math.floor(p.premClaimed))
+  }
+  if (typeof o.restorerName === 'string') d.restorerName = o.restorerName.slice(0, 24)
   return d
 }
 

@@ -52,6 +52,9 @@ const CSS = `
   border:2px dashed rgba(255,255,255,.25); background:rgba(0,0,0,.2); color:#6a5da0; }
 .hc-slot.filled { border-style:solid; box-shadow:0 0 12px currentColor, inset 0 2px 5px rgba(255,255,255,.3); }
 .hc-party-hint { margin-left:auto; font-size:12px; font-weight:700; color:#9f90d0; }
+.hc-lo { padding:7px 13px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.06);
+  color:#b9adde; font:inherit; font-size:11px; font-weight:900; letter-spacing:.08em; cursor:pointer; }
+.hc-lo.on { background:linear-gradient(180deg,#3ad07a,#1f9a54); color:#fff; border-color:rgba(120,255,180,.5); }
 
 /* grid */
 .hc-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(168px, 1fr)); gap:12px; max-width:760px; margin:0 auto; }
@@ -203,6 +206,7 @@ export class HeroCollection {
   private partySlots: HTMLDivElement
   private partyHint: HTMLElement
   private onBack: () => void
+  private rebuildLoadoutBar: (() => void) | null = null
 
   constructor(onBack: () => void) {
     this.onBack = onBack
@@ -231,6 +235,28 @@ export class HeroCollection {
     this.partyHint = el('div', 'hc-party-hint', '')
     pbar.append(this.partyHint)
     this.scroll.append(pbar)
+
+    // loadout slots (store convenience, casual only — Ranked always uses Slot 1)
+    if (economy.loadoutSlots() > 1) {
+      const lb = el('div', 'hc-party-bar')
+      lb.append(el('div', 'hc-party-lbl', 'LOADOUT'))
+      const chips = el('div', 'hc-party-slots')
+      for (let i = 0; i < economy.loadoutSlots(); i++) {
+        const chip = el('button', 'hc-lo' + (economy.activeLoadout() === i ? ' on' : ''), `SLOT ${i + 1}`)
+        chip.onclick = () => {
+          economy.setActiveLoadout(i)
+          this.rebuildLoadoutBar?.()
+          this.render()
+        }
+        chips.append(chip)
+      }
+      lb.append(chips, el('div', 'hc-party-hint', 'Ranked always uses Slot 1'))
+      this.scroll.append(lb)
+      this.rebuildLoadoutBar = () => {
+        const btns = lb.querySelectorAll<HTMLButtonElement>('.hc-lo')
+        btns.forEach((b, i) => b.classList.toggle('on', economy.activeLoadout() === i))
+      }
+    }
 
     // grid
     this.grid = el('div', 'hc-grid')
