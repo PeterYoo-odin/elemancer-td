@@ -1,0 +1,13 @@
+{
+  "note": "Painted 'greyling' enemy sprites (transparent PNG billboards). Grey/ashen corrupted creatures, each with a signature Greying accent glow. Wire as camera-facing billboards replacing primitive-shape enemies.",
+  "archetypes": {
+    "brute":    { "file": "brute.png",    "role": "tank",      "accent": "#e8a23c" },
+    "runner":   { "file": "runner.png",   "role": "fast",      "accent": "#7fe05a" },
+    "flyer":    { "file": "flyer.png",     "role": "anti-air",  "accent": "#63d6e0" },
+    "shielded": { "file": "shielded.png",  "role": "shielded",  "accent": "#b07de0" },
+    "healer":   { "file": "healer.png",    "role": "healer",    "accent": "#4fd6b0" },
+    "swarm":    { "file": "swarm.png",     "role": "swarm",     "accent": "#e8d24a" },
+    "armored":  { "file": "armored.png",   "role": "armored",   "accent": "#7fa8d6" },
+    "elite":    { "file": "elite.png",     "role": "elite/miniboss", "accent": "#e0507d" }
+  }
+}
