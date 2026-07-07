@@ -56,6 +56,15 @@ interface EnemySlot {
   spawnT: number // spawn squash timer (counts up)
   hitT: number // hit flash / squash timer
   radius: number
+  // procedural walk/status animation state (view-only)
+  prevX: number // last sim px position, for travel-direction facing
+  prevY: number
+  yaw: number // smoothed facing
+  walkT: number // walk-bob phase, advances with movement speed
+  animSpeed: number // 1 normal · <1 slowed · 0 stunned/frozen
+  burning: boolean
+  emberAcc: number // throttles burning-ember emission
+  isAir: boolean
 }
 
 interface TowerSlot {
@@ -70,11 +79,27 @@ interface TowerSlot {
   branch: number
   kind: TowerKind
   fireT: number
+  // motion state (view-only)
+  aimYaw: number // smoothed turret yaw
+  targetYaw: number
+  recoilT: number // fire kick-back timer
+  lastFireFlash: number // detects a fresh shot (fireFlash rising edge)
+  dropT: number // placement drop-in timer (counts up; 0 = settled)
+  dropDone: boolean
+  pulseT: number // upgrade flourish scale-punch timer
+  phase: number // per-tower idle sway phase
+  turretY0: number // turret rest height (recoil/bob offsets from here)
+  baseRange: number
 }
 
 interface ProjSlot {
   mesh: THREE.Mesh
-  light: THREE.PointLight | null
+  mat: THREE.MeshBasicMaterial
+  kind: string
+  trailAcc: number
+  hasPrev: boolean
+  prevX: number
+  prevZ: number
 }
 
 // A deployed hero: an element-tinted robed figure with a floating element crystal,
@@ -85,6 +110,7 @@ interface HeroSlot {
   bodyMat: THREE.MeshStandardMaterial
   orb: THREE.Mesh
   orbMat: THREE.MeshStandardMaterial
+  ring: THREE.Mesh
   ringMat: THREE.MeshBasicMaterial
   glow: THREE.PointLight
   badgeTex: THREE.CanvasTexture
@@ -99,7 +125,7 @@ interface Transient {
   geo?: THREE.BufferGeometry
   t: number
   life: number
-  kind: 'ring' | 'flash' | 'beam' | 'spark'
+  kind: 'ring' | 'flash' | 'beam' | 'spark' | 'pop' | 'crack'
   vx?: number
   vy?: number
   vz?: number
@@ -108,6 +134,15 @@ interface Transient {
 }
 
 const MAX_PARTICLES = 900
+const MAX_MOTES = 110 // ambient atmosphere dust
+
+// shortest-path angle lerp (keeps facing turns smooth across the ±π seam)
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = (b - a) % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  if (d < -Math.PI) d += Math.PI * 2
+  return a + d * t
+}
 
 export class BattleView3D {
   readonly canvas: HTMLCanvasElement
@@ -155,7 +190,7 @@ export class BattleView3D {
   private heroOrbGeo!: THREE.IcosahedronGeometry
   private heroRingGeo!: THREE.RingGeometry
   private projViews = new Map<number, ProjSlot>()
-  private projPool: ProjSlot[] = []
+  private projPools = new Map<string, ProjSlot[]>()
   private activeScratch = new Set<number>()
 
   private transients: Transient[] = []
@@ -184,6 +219,19 @@ export class BattleView3D {
   private tmpV = new THREE.Vector3()
   private tmpQ = new THREE.Quaternion()
 
+  // camera juice: base pose from frameCamera(); render() layers drift/shake/push on it
+  private camBasePos = new THREE.Vector3()
+  private camLook = new THREE.Vector3(0, -0.2, -0.4)
+  private shakeAmp = 0 // decaying screenshake amplitude (world units)
+  private pushAmp = 0 // current push-in strength 0..1
+  private pushTarget = 0
+  private portalPulse = 0 // portal scale-punch on spawns
+
+  // ambient motes (second small Points cloud for depth/atmosphere)
+  private motes!: THREE.Points
+  private motePos!: Float32Array
+  private moteSeed!: Float32Array
+
   constructor(
     private sim: Sim,
     private palette: FieldPalette,
@@ -201,9 +249,8 @@ export class BattleView3D {
     this.renderer.toneMappingExposure = 1.05
 
     this.scene = new THREE.Scene()
-    const bg = new THREE.Color(0x140a2a)
-    this.scene.background = bg
-    this.scene.fog = new THREE.Fog(0x140a2a, 22, 40)
+    this.scene.background = this.makeSkyTexture()
+    this.scene.fog = new THREE.Fog(0x180d33, 22, 40)
 
     this.camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 100)
 
@@ -226,6 +273,7 @@ export class BattleView3D {
     this.setupDetails()
     this.setupBuildHighlight()
     this.setupParticles()
+    this.setupMotes()
     this.setupHover()
 
     // post-processing: single bloom pass for neon glow
@@ -244,6 +292,28 @@ export class BattleView3D {
 
   mount(parent: HTMLElement): void {
     parent.appendChild(this.canvas)
+  }
+
+  // ---------------------------------------------------------------- sky
+  // Vertical gradient backdrop: violet glow at the horizon sinking to deep space
+  // at the bottom, tinted faintly toward the world's element accent for mood.
+  private makeSkyTexture(): THREE.CanvasTexture {
+    const cv = document.createElement('canvas')
+    cv.width = 2
+    cv.height = 512
+    const ctx = cv.getContext('2d')!
+    const accent = new THREE.Color(this.accent).lerp(new THREE.Color(0x5a3cae), 0.7)
+    const grad = ctx.createLinearGradient(0, 0, 0, 512)
+    grad.addColorStop(0, '#3b2378')
+    grad.addColorStop(0.35, '#' + accent.getHexString())
+    grad.addColorStop(0.7, '#1a0f38')
+    grad.addColorStop(1, '#0b0620')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, 2, 512)
+    const tex = new THREE.CanvasTexture(cv)
+    tex.colorSpace = THREE.SRGBColorSpace
+    this.disposables.push(tex)
+    return tex
   }
 
   // ---------------------------------------------------------------- lights
@@ -557,6 +627,46 @@ export class BattleView3D {
     this.scene.add(this.particles)
   }
 
+  // Slow-drifting ambient dust motes: parametric paths (base + time), so the
+  // per-frame cost is one small buffer write and zero allocation.
+  private setupMotes(): void {
+    const geo = new THREE.BufferGeometry()
+    this.motePos = new Float32Array(MAX_MOTES * 3)
+    this.moteSeed = new Float32Array(MAX_MOTES * 4) // baseX, baseZ, phase, rise
+    const col = new Float32Array(MAX_MOTES * 3)
+    const tints = [new THREE.Color(0xc9b0ff), new THREE.Color(0x8fe9ff), new THREE.Color(0xffe2a0), new THREE.Color(this.accent).lerp(new THREE.Color(0xffffff), 0.5)]
+    for (let i = 0; i < MAX_MOTES; i++) {
+      this.moteSeed[i * 4] = (Math.random() - 0.5) * 15
+      this.moteSeed[i * 4 + 1] = (Math.random() - 0.5) * 13
+      this.moteSeed[i * 4 + 2] = Math.random() * Math.PI * 2
+      this.moteSeed[i * 4 + 3] = 0.12 + Math.random() * 0.25 // rise speed
+      const c = tints[i % tints.length]
+      col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(this.motePos, 3))
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+    this.disposables.push(geo)
+    const mat = new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true })
+    this.disposables.push(mat)
+    this.motes = new THREE.Points(geo, mat)
+    this.motes.frustumCulled = false
+    this.scene.add(this.motes)
+  }
+
+  private updateMotes(): void {
+    const t = this.clockT
+    for (let i = 0; i < MAX_MOTES; i++) {
+      const bx = this.moteSeed[i * 4]
+      const bz = this.moteSeed[i * 4 + 1]
+      const ph = this.moteSeed[i * 4 + 2]
+      const rise = this.moteSeed[i * 4 + 3]
+      this.motePos[i * 3] = bx + Math.sin(t * 0.22 + ph) * 0.6
+      this.motePos[i * 3 + 1] = 0.25 + ((t * rise + ph) % 4.4)
+      this.motePos[i * 3 + 2] = bz + Math.cos(t * 0.17 + ph * 1.7) * 0.5
+    }
+    ;(this.motes.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
+  }
+
   private emitParticles(x: number, y: number, z: number, color: number, count: number, speed: number): void {
     const c = new THREE.Color(color)
     for (let n = 0; n < count; n++) {
@@ -618,9 +728,22 @@ export class BattleView3D {
     const targetY = -0.2
     const camY = dist * Math.sin(pitch)
     const camZ = dist * Math.cos(pitch)
-    this.camera.position.set(Math.sin(this.camBaseAngle) * 0.6, camY, camZ + 0.5)
-    this.camera.lookAt(0, targetY, -0.4)
+    this.camBasePos.set(Math.sin(this.camBaseAngle) * 0.6, camY, camZ + 0.5)
+    this.camLook.set(0, targetY, -0.4)
+    this.camera.position.copy(this.camBasePos)
+    this.camera.lookAt(this.camLook)
     this.camera.updateProjectionMatrix()
+  }
+
+  // Screenshake, scaled to impact: amplitudes stack via max (never spiral), decay
+  // fast. Reserve ≥0.12 for big moments — small hits should stay readable.
+  shake(amp: number): void {
+    this.shakeAmp = Math.min(0.3, Math.max(this.shakeAmp, amp))
+  }
+
+  // Subtle dolly toward the board (boss spawns / big spells); eases in then releases.
+  pushIn(strength = 1): void {
+    this.pushTarget = Math.min(1, Math.max(this.pushTarget, strength))
   }
 
   resize(): void {
@@ -742,7 +865,10 @@ export class BattleView3D {
     }
 
     this.scene.add(group)
-    return { kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r }
+    return {
+      kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
+      prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
+    }
   }
 
   private shadowMatCache: THREE.MeshBasicMaterial | null = null
@@ -814,6 +940,7 @@ export class BattleView3D {
 
     // aiming cap pivots at the top of the body
     slot.turret.position.y = y
+    slot.turretY0 = y
     const capMat = this.elemMats.get(kind)!
     const grow = 1 + Math.min(level, 3) * 0.07
     const putWeapon = (name: string) => {
@@ -862,7 +989,11 @@ export class BattleView3D {
     glow.position.y = 1.1
     g.add(glow)
 
-    const slot: TowerSlot = { group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0 }
+    const slot: TowerSlot = {
+      group: g, bodyGroup, turret, orbs: [], ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
+      aimYaw: -t.aimAngle, targetYaw: -t.aimAngle, recoilT: 0, lastFireFlash: 0,
+      dropT: 0.0001, dropDone: false, pulseT: 0, phase: (t.x * 13.37 + t.y * 7.77) % (Math.PI * 2), turretY0: 0, baseRange: 0,
+    }
     this.assembleTower(slot, t)
     this.scene.add(g)
     return slot
@@ -870,24 +1001,52 @@ export class BattleView3D {
 
   private rebuildTurret(slot: TowerSlot, t: SimTower): void {
     this.assembleTower(slot, t)
+    // upgrade flourish: scale-punch + sparkle fountain + glow spike (via pulseT)
+    slot.pulseT = 0.5
+    this.emitParticles(wx(t.x), GROUND + 1.1, wz(t.y), t.def.color, 20, 2.6)
+    this.emitParticles(wx(t.x), GROUND + 1.3, wz(t.y), 0xffffff, 8, 2)
   }
 
   // ---------------------------------------------------------------- projectiles
-  private acquireProj(color: number): ProjSlot {
-    const s = this.projPool.pop()
+  // Element-shaped, pooled per kind: fireballs, frost shards, storm bolts, arcane
+  // orbs, cannon shells. Trails are throttled emits into the shared particle pool.
+  private projGeoCache = new Map<string, THREE.BufferGeometry>()
+  private projGeometry(kind: string): THREE.BufferGeometry {
+    let g = this.projGeoCache.get(kind)
+    if (g) return g
+    switch (kind) {
+      case 'flame': g = new THREE.SphereGeometry(0.16, 10, 8); break
+      case 'frost': g = new THREE.OctahedronGeometry(0.17, 0); break
+      case 'storm': g = new THREE.OctahedronGeometry(0.13, 0); break
+      case 'arcane': g = new THREE.IcosahedronGeometry(0.16, 0); break
+      default: g = new THREE.SphereGeometry(0.14, 10, 8)
+    }
+    this.projGeoCache.set(kind, g)
+    this.disposables.push(g)
+    return g
+  }
+
+  private static readonly TRAIL_COLOR: Record<string, number> = {
+    flame: 0xffa04c, frost: 0xbfeaff, storm: 0xffe97a, arcane: 0xd6a6ff, cannon: 0x9aa0b8,
+  }
+
+  private acquireProj(kind: string, color: number): ProjSlot {
+    let pool = this.projPools.get(kind)
+    if (!pool) { pool = []; this.projPools.set(kind, pool) }
+    const s = pool.pop()
     if (s) {
-      ;(s.mesh.material as THREE.MeshBasicMaterial).color.set(color)
+      s.mat.color.set(color)
       s.mesh.visible = true
-      if (s.light) { s.light.color.set(color); s.light.visible = true }
+      s.trailAcc = 0
+      s.hasPrev = false
       return s
     }
-    const geo = new THREE.SphereGeometry(0.14, 10, 8)
-    this.disposables.push(geo)
-    const mat = new THREE.MeshBasicMaterial({ color })
+    const geo = this.projGeometry(kind)
+    const mat = new THREE.MeshBasicMaterial({ color, toneMapped: false })
     this.disposables.push(mat)
     const mesh = new THREE.Mesh(geo, mat)
     this.scene.add(mesh)
-    return { mesh, light: null }
+    return { mesh, mat, kind, trailAcc: 0, hasPrev: false, prevX: 0, prevZ: 0 }
   }
 
   private releaseProj(id: number): void {
@@ -895,8 +1054,9 @@ export class BattleView3D {
     if (!s) return
     this.projViews.delete(id)
     s.mesh.visible = false
-    if (s.light) s.light.visible = false
-    this.projPool.push(s)
+    let pool = this.projPools.get(s.kind)
+    if (!pool) { pool = []; this.projPools.set(s.kind, pool) }
+    pool.push(s)
   }
 
   // ---------------------------------------------------------------- sync
@@ -922,7 +1082,18 @@ export class BattleView3D {
         s = this.acquireEnemySlot(e)
         this.enemyViews.set(e.id, s)
         s.spawnT = 0.001
+        s.hitT = 0
+        s.prevX = e.x
+        s.prevY = e.y
+        s.yaw = 0
+        s.burning = false
+        s.emberAcc = 0
         this.configureShield(s, e)
+        // portal birth: glow ring at the spawn point + a pulse of the portal torus
+        this.pushRing(e.x, e.y, e.def.radius + 34, 0x9a5cff, 0.8)
+        this.emitParticles(wx(e.x), s.hoverY + 0.2, wz(e.y), 0xb98aff, 6, 1.8)
+        this.portalPulse = 1
+        if (e.def.boss) { this.pushIn(1); this.shake(0.14) }
       }
       this.updateEnemySlot(s, e, clock)
     }
@@ -937,10 +1108,19 @@ export class BattleView3D {
 
   private updateEnemySlot(s: EnemySlot, e: SimEnemy, clock: number): void {
     s.group.position.set(wx(e.x), s.hoverY, wz(e.y))
-    // face travel direction (approx via aim toward base along +Z path handled by billboard-free body)
+    // face travel direction: yaw from the position delta this frame (smoothed in render)
+    const dx = e.x - s.prevX
+    const dy = e.y - s.prevY
+    if (dx * dx + dy * dy > 0.01) s.yaw = lerpAngle(s.yaw, Math.atan2(dx, dy), 0.2)
+    s.prevX = e.x
+    s.prevY = e.y
+    if (!s.isAir) s.group.rotation.y = s.yaw
+
     const stunned = e.stunUntil > clock
     const slowed = e.slowUntil > clock
     const burning = e.burnUntil > clock
+    s.animSpeed = stunned ? 0 : slowed ? 0.45 : 1
+    s.burning = burning
     // status tint
     if (e.hitFlash > 0) { s.bodyMat.emissive.setHex(0xffffff); s.bodyMat.emissiveIntensity = 0.9 }
     else if (stunned) { s.bodyMat.color.setHex(0xbfeaff); s.bodyMat.emissive.setHex(0x6fc4ff); s.bodyMat.emissiveIntensity = 0.4 }
@@ -950,9 +1130,6 @@ export class BattleView3D {
 
     // hit squash impulse
     if (e.hitFlash > 0 && s.hitT <= 0) s.hitT = 0.14
-
-    // spin flyers gently; rotate cone-shaped bodies to point up already
-    s.body.rotation.y += 0.02
 
     // HP bar (centred plane; scales symmetrically — clean at this size)
     const ratio = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)))
@@ -981,15 +1158,15 @@ export class BattleView3D {
         this.pushRing(t.x, t.y, this.sim.effRange(t), t.def.color, 0.9)
         this.buffDirty = true
       }
-      // aim turret
-      s.turret.rotation.y = -t.aimAngle
-      // range ring
-      const rr = wr(this.sim.effRange(t))
-      s.ring.scale.setScalar(rr / 0.94)
+      // aim turret (target only — render() eases toward it for weighty turns)
+      s.targetYaw = -t.aimAngle
+      // range ring (pulse animated in render while selected)
+      s.baseRange = wr(this.sim.effRange(t)) / 0.94
       s.ring.visible = selectedId === t.id
-      s.ringMat.opacity = 0.85
-      // fire flash → brief glow bump
-      s.glow.intensity = 0.5 + (t.fireFlash > 0 ? 1.4 : 0)
+      // fresh shot → recoil kick + light pop (fireFlash rising edge)
+      if (t.fireFlash > s.lastFireFlash) s.recoilT = 0.16
+      s.lastFireFlash = t.fireFlash
+      s.glow.intensity = 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
     }
     for (const [id, s] of this.towerViews) {
       if (!active.has(id)) {
@@ -1085,7 +1262,7 @@ export class BattleView3D {
     g.add(badge.sprite)
 
     this.scene.add(g)
-    return { group: g, figure, bodyMat, orb, orbMat, ringMat, glow, badgeTex: badge.tex, badgeMat: badge.mat, color: def.color, heroId: h.heroId }
+    return { group: g, figure, bodyMat, orb, orbMat, ring, ringMat, glow, badgeTex: badge.tex, badgeMat: badge.mat, color: def.color, heroId: h.heroId }
   }
 
   private updateHeroSlot(s: HeroSlot, h: SimHero): void {
@@ -1114,14 +1291,39 @@ export class BattleView3D {
       if (!p.active) continue
       active.add(p.id)
       let s = this.projViews.get(p.id)
-      if (!s) {
-        s = this.acquireProj(p.color)
+      if (!s || s.kind !== p.sourceKind) {
+        if (s) this.releaseProj(p.id)
+        s = this.acquireProj(p.sourceKind, p.color)
         this.projViews.set(p.id, s)
       }
-      s.mesh.position.set(wx(p.x), 0.85, wz(p.y))
+      const x = wx(p.x)
+      const z = wz(p.y)
+      // face travel + spin (shards/orbs tumble; the yaw keeps stretch believable)
+      if (s.hasPrev) {
+        const dx = x - s.prevX
+        const dz = z - s.prevZ
+        if (dx * dx + dz * dz > 1e-6) s.mesh.rotation.y = Math.atan2(dx, dz)
+      }
+      s.mesh.rotation.x += 0.3
+      s.prevX = x
+      s.prevZ = z
+      s.hasPrev = true
+      s.mesh.position.set(x, 0.85, z)
     }
     for (const [id] of this.projViews) {
       if (!active.has(id)) this.releaseProj(id)
+    }
+  }
+
+  // called from render() with real dt: throttled ember/mist/rune trails
+  private updateProjTrails(dt: number): void {
+    for (const [, s] of this.projViews) {
+      s.trailAcc += dt
+      if (s.trailAcc > 0.055) {
+        s.trailAcc = 0
+        const c = BattleView3D.TRAIL_COLOR[s.kind] ?? 0xffffff
+        this.emitParticles(s.mesh.position.x, s.mesh.position.y, s.mesh.position.z, c, 1, 0.55)
+      }
     }
   }
 
@@ -1173,8 +1375,9 @@ export class BattleView3D {
     this.emitParticles(wx(simX), 0.7, wz(simY), color, 6, 2.2)
   }
 
-  fxDeath(simX: number, simY: number, color: number, boss: boolean): void {
+  fxDeath(simX: number, simY: number, color: number, boss: boolean, kind?: EnemyKind): void {
     this.emitParticles(wx(simX), 0.7, wz(simY), color, boss ? 40 : 14, boss ? 4 : 3)
+    this.emitParticles(wx(simX), 0.7, wz(simY), 0xffffff, boss ? 14 : 4, boss ? 3 : 2.2)
     // white flash sphere
     const geo = new THREE.SphereGeometry(0.3, 10, 8)
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -1182,6 +1385,19 @@ export class BattleView3D {
     mesh.position.set(wx(simX), 0.7, wz(simY))
     this.scene.add(mesh)
     this.transients.push({ obj: mesh, mat, geo, t: 0, life: 0.3, kind: 'flash', baseScale: boss ? 3.5 : 1.8, fade: true })
+    // dissolving body ghost: pops up + inflates + fades — the "kill" read
+    const bodyGeo = kind ? this.enemyGeo.get(kind) : undefined
+    if (bodyGeo) {
+      const gm = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+      const ghost = new THREE.Mesh(bodyGeo, gm) // shares pooled geometry — never disposed here
+      ghost.position.set(wx(simX), 0.55, wz(simY))
+      this.scene.add(ghost)
+      this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.5 : 0.34, kind: 'pop', baseScale: boss ? 2 : 1.45, fade: true, vy: boss ? 2.4 : 1.8 })
+    }
+    // ground shockwave on every kill; camera speaks only for bosses
+    this.pushRing(simX, simY, boss ? 120 : 55, color, boss ? 0.9 : 0.5)
+    if (boss) { this.shake(0.18); this.pushIn(0.8) }
+    else this.shake(0.035)
   }
 
   fxMuzzle(simX: number, simY: number, tsimX: number, tsimY: number, color: number, kind: TowerKind): void {
@@ -1199,16 +1415,77 @@ export class BattleView3D {
     this.transients.push({ obj: line, mat, geo, t: 0, life, kind: 'beam', fade: true })
   }
 
+  // Jagged glowing lightning: each hop is subdivided with perpendicular jitter,
+  // drawn twice (bright white core + coloured aura) so bloom reads it as a bolt.
   fxChain(points: Array<[number, number]>, color: number, supercharged: boolean): void {
     if (points.length < 2) return
     const pts: THREE.Vector3[] = []
-    for (const p of points) pts.push(new THREE.Vector3(wx(p[0]), 0.8, wz(p[1])))
+    for (let i = 0; i < points.length - 1; i++) {
+      const ax = wx(points[i][0]), az = wz(points[i][1])
+      const bx = wx(points[i + 1][0]), bz = wz(points[i + 1][1])
+      const dx = bx - ax, dz = bz - az
+      const len = Math.max(0.001, Math.hypot(dx, dz))
+      const px = -dz / len, pz = dx / len // perpendicular
+      const segs = Math.min(6, Math.max(3, Math.round(len * 3)))
+      for (let sg = 0; sg <= segs; sg++) {
+        const k = sg / segs
+        const amp = (sg === 0 || sg === segs) ? 0 : (Math.random() - 0.5) * 0.3
+        pts.push(new THREE.Vector3(ax + dx * k + px * amp, 0.8 + (Math.random() - 0.5) * 0.12, az + dz * k + pz * amp))
+      }
+    }
     const geo = new THREE.BufferGeometry().setFromPoints(pts)
-    const mat = new THREE.LineBasicMaterial({ color: supercharged ? 0xffffff : color, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, linewidth: 2 })
-    const line = new THREE.Line(geo, mat)
-    this.scene.add(line)
-    this.transients.push({ obj: line, mat, geo, t: 0, life: 0.28, kind: 'beam', fade: true })
+    const core = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false })
+    const aura = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+    const coreLine = new THREE.Line(geo, core)
+    const auraLine = new THREE.Line(geo, aura)
+    auraLine.position.y = 0.03
+    this.scene.add(coreLine, auraLine)
+    // same life so the shared geometry is disposed only after BOTH lines retire
+    this.transients.push({ obj: auraLine, mat: aura, t: 0, life: 0.26, kind: 'beam', fade: true })
+    this.transients.push({ obj: coreLine, mat: core, geo, t: 0, life: 0.26, kind: 'beam', fade: true })
     for (const p of points) this.emitParticles(wx(p[0]), 0.8, wz(p[1]), color, 3, 2)
+    if (supercharged) this.fxShatter(points[0][0], points[0][1], color)
+  }
+
+  // SIGNATURE Frost→Storm combo: ice cracks radiating on the ground + a cold
+  // flash + lightning burst + camera bite. Loud on purpose — it's the money shot.
+  private fxShatter(simX: number, simY: number, color: number): void {
+    const x = wx(simX)
+    const z = wz(simY)
+    // radiating jagged ground cracks
+    const pts: THREE.Vector3[] = []
+    const arms = 7
+    for (let a = 0; a < arms; a++) {
+      const th = (a / arms) * Math.PI * 2 + Math.random() * 0.5
+      let px = x, pz = z
+      let dirX = Math.cos(th), dirZ = Math.sin(th)
+      const segs = 3
+      for (let sg = 0; sg < segs; sg++) {
+        const stepLen = 0.28 + Math.random() * 0.3
+        const nx = px + dirX * stepLen
+        const nz = pz + dirZ * stepLen
+        pts.push(new THREE.Vector3(px, GROUND + 0.03, pz), new THREE.Vector3(nx, GROUND + 0.03, nz))
+        px = nx; pz = nz
+        const bend = (Math.random() - 0.5) * 0.9
+        const c = Math.cos(bend), s = Math.sin(bend)
+        const ndx = dirX * c - dirZ * s
+        dirZ = dirX * s + dirZ * c
+        dirX = ndx
+      }
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts)
+    const mat = new THREE.LineBasicMaterial({ color: 0xcdf3ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false })
+    const cracks = new THREE.LineSegments(geo, mat)
+    this.scene.add(cracks)
+    this.transients.push({ obj: cracks, mat, geo, t: 0, life: 0.55, kind: 'crack', fade: true })
+
+    this.pushRing(simX, simY, 130, 0x9fdcff, 0.95)
+    this.spellFlash(simX, simY, 100, 0xd6f4ff, 1.9)
+    this.emitParticles(x, 0.7, z, 0x9fdcff, 26, 4)
+    this.emitParticles(x, 0.7, z, 0xffffff, 12, 3)
+    this.emitParticles(x, 0.7, z, color, 14, 4.5)
+    this.shake(0.12)
+    this.pushIn(0.6)
   }
 
   fxPlace(simX: number, simY: number, color: number, radiusPx: number): void {
@@ -1227,8 +1504,11 @@ export class BattleView3D {
       mesh.position.set(wx(simX), 0.8, wz(simY))
       this.scene.add(mesh)
       this.transients.push({ obj: mesh, mat, geo, t: 0, life: 0.4, kind: 'flash', baseScale: 2.2, fade: true })
+      this.shake(0.2)
+      this.pushIn(1)
     } else if (key === 'freeze') {
       for (const [, s] of this.enemyViews) this.emitParticles(s.group.position.x, s.group.position.y, s.group.position.z, 0x9fdcff, 4, 1.5)
+      this.shake(0.07)
     } else {
       this.emitParticles(wx(simX), 0.8, wz(simY), 0xffd54a, 24, 3)
     }
@@ -1249,6 +1529,8 @@ export class BattleView3D {
   fxHeroSpell(effect: SpellEffect, simX: number, simY: number, radiusPx: number, color: number): void {
     const wxp = wx(simX)
     const wzp = wz(simY)
+    this.shake(effect === 'aoeBurn' || effect === 'execute' ? 0.13 : 0.07)
+    this.pushIn(0.7)
     if (effect === 'aoeBurn') {
       this.pushRing(simX, simY, radiusPx, 0xff8a3c, 0.95)
       this.emitParticles(wxp, 0.8, wzp, 0xffb15c, 54, 5)
@@ -1302,6 +1584,12 @@ export class BattleView3D {
         tr.obj.scale.setScalar(sc)
       } else if (tr.kind === 'flash' && tr.baseScale) {
         tr.obj.scale.setScalar(0.3 + tr.baseScale * k)
+      } else if (tr.kind === 'pop') {
+        // death ghost: quick inflate + rise, then the generic fade dissolves it
+        const e = 1 - (1 - k) * (1 - k)
+        tr.obj.scale.setScalar((tr.baseScale ?? 1.4) * (0.9 + e * 0.9))
+        tr.obj.position.y += (tr.vy ?? 1.8) * (1 - k) * dt
+        tr.obj.rotation.y += dt * 3
       }
       if (tr.fade) {
         const m = Array.isArray(tr.mat) ? tr.mat[0] : tr.mat
@@ -1314,12 +1602,24 @@ export class BattleView3D {
   render(dt: number): void {
     if (this.disposed) return
     this.clockT += dt
-    // gentle idle camera drift
-    this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12
-    this.camera.position.x = Math.sin(this.camBaseAngle) * 0.9
-    this.camera.lookAt(0, -0.2, -0.4)
 
-    // billboard HP bars + shadows follow camera facing (bars face camera on Y)
+    // camera: idle drift + push-in on big moments + decaying screenshake
+    this.camBaseAngle = Math.sin(this.clockT * 0.12) * 0.12
+    this.pushAmp += (this.pushTarget - this.pushAmp) * Math.min(1, dt * 6)
+    this.pushTarget = Math.max(0, this.pushTarget - dt * 1.1) // release
+    this.shakeAmp = Math.max(0, this.shakeAmp - dt * 1.4)
+    const sh = this.shakeAmp
+    const jx = sh > 0.001 ? (Math.sin(this.clockT * 91) + Math.sin(this.clockT * 47)) * 0.5 * sh : 0
+    const jy = sh > 0.001 ? (Math.sin(this.clockT * 83 + 1.7) + Math.sin(this.clockT * 59)) * 0.5 * sh : 0
+    this.tmpV.copy(this.camLook).sub(this.camBasePos).normalize().multiplyScalar(this.pushAmp * 1.4)
+    this.camera.position.set(
+      this.camBasePos.x + Math.sin(this.camBaseAngle) * 0.9 + this.tmpV.x + jx,
+      this.camBasePos.y + Math.sin(this.clockT * 0.31) * 0.12 + this.tmpV.y + jy,
+      this.camBasePos.z + this.tmpV.z,
+    )
+    this.camera.lookAt(this.camLook)
+
+    // enemies: spawn pop, walk bob (squash & stretch), hit knockback, status anim
     for (const [, s] of this.enemyViews) {
       // spawn squash
       if (s.spawnT > 0) {
@@ -1329,29 +1629,93 @@ export class BattleView3D {
         s.group.scale.setScalar(sc)
         if (p >= 1) s.spawnT = 0
       }
+      // procedural walk: bob hops + counter-phased squash/stretch; freezes when
+      // stunned/frozen (animSpeed 0) and drags when slowed — status you can SEE.
+      s.walkT += dt * 10 * s.animSpeed
+      const hop = Math.abs(Math.sin(s.walkT))
+      const stretch = 1 + Math.sin(s.walkT * 2) * 0.06 * s.animSpeed
+      let sqX = 1 / Math.sqrt(stretch)
+      let sqY = stretch
       if (s.hitT > 0) {
         s.hitT -= dt
-        const squash = 1 + Math.max(0, s.hitT / 0.14) * 0.25
-        s.body.scale.set(squash, 1 / squash, squash)
+        const k = Math.max(0, s.hitT / 0.14)
+        sqX *= 1 + k * 0.3
+        sqY *= 1 - k * 0.22
+        s.body.position.z = -k * 0.09 // knockback nudge, opposite travel
       } else {
-        s.body.scale.set(1, 1, 1)
+        s.body.position.z = 0
       }
-      // billboard the hp bar group toward camera (only yaw)
-      s.hpBg.quaternion.copy(this.camera.quaternion)
-      s.hpFill.quaternion.copy(this.camera.quaternion)
+      s.body.scale.set(sqX, sqY, sqX)
+      s.body.position.y = s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.08 : hop * 0.07 * s.animSpeed
+      if (s.isAir) s.body.rotation.y += dt * 1.4
+      // burning → embers (throttled per enemy so swarms stay cheap)
+      if (s.burning) {
+        s.emberAcc += dt
+        if (s.emberAcc > 0.13) {
+          s.emberAcc = 0
+          this.emitParticles(s.group.position.x, s.group.position.y + 0.25, s.group.position.z, 0xff8a3c, 1, 1.1)
+        }
+      }
+      // billboard the hp bar toward camera in WORLD space (group may be yawed)
+      this.tmpQ.copy(s.group.quaternion).invert().multiply(this.camera.quaternion)
+      s.hpBg.quaternion.copy(this.tmpQ)
+      s.hpFill.quaternion.copy(this.tmpQ)
     }
     // billboard particles handled by Points automatically
 
-    // portal spin + base bob (cached refs — no per-frame scene-graph walk)
+    // portal spin + spawn pulse; base bob (cached refs — no per-frame graph walk)
     this.portalMesh.rotation.z += dt * 1.2
+    this.portalPulse = Math.max(0, this.portalPulse - dt * 3.5)
+    this.portalMesh.scale.setScalar(1 + this.portalPulse * 0.35)
     this.baseMesh.rotation.y += dt * 0.8
     this.baseMesh.position.y = GROUND + 0.55 + Math.sin(this.clockT * 2) * 0.06
 
     // hover pulse
     if (this.hoverMesh.visible) this.hoverMesh.scale.setScalar(1 + Math.sin(this.clockT * 6) * 0.06)
 
-    // bob tower accent orbs
+    // towers: drop-in, eased aiming, fire recoil, idle sway, upgrade pulse, orbs
     for (const [, s] of this.towerViews) {
+      // placement drop-in: fall from above, land with a pop + dust puff
+      if (!s.dropDone) {
+        s.dropT += dt
+        const p = Math.min(1, s.dropT / 0.32)
+        s.group.position.y = GROUND + (1 - p * p) * 2.4
+        if (p >= 1) {
+          s.dropDone = true
+          s.group.position.y = GROUND
+          s.pulseT = Math.max(s.pulseT, 0.35)
+          this.emitParticles(s.group.position.x, GROUND + 0.15, s.group.position.z, 0xcbb9a0, 10, 1.6)
+          this.shake(0.05)
+        }
+      }
+      // smooth turret aim
+      s.aimYaw = lerpAngle(s.aimYaw, s.targetYaw, Math.min(1, dt * 11))
+      s.turret.rotation.y = s.aimYaw
+      // recoil: quick kick opposite the aim + a snap back
+      if (s.recoilT > 0) {
+        s.recoilT -= dt
+        const k = Math.sin(Math.max(0, s.recoilT / 0.16) * Math.PI) * 0.085
+        s.turret.position.x = -Math.cos(s.aimYaw) * k
+        s.turret.position.z = Math.sin(s.aimYaw) * k
+        s.turret.position.y = s.turretY0 + k * 0.35
+      } else {
+        s.turret.position.x = 0
+        s.turret.position.z = 0
+        s.turret.position.y = s.turretY0 + Math.sin(this.clockT * 1.8 + s.phase) * 0.015 // idle hum
+      }
+      // upgrade flourish scale-punch (decays)
+      if (s.pulseT > 0) {
+        s.pulseT = Math.max(0, s.pulseT - dt)
+        const k = s.pulseT / 0.5
+        s.group.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.14)
+      } else {
+        s.group.scale.setScalar(1)
+      }
+      // selected range ring: breathe
+      if (s.ring.visible) {
+        s.ring.scale.setScalar(s.baseRange * (1 + Math.sin(this.clockT * 4) * 0.015))
+        s.ringMat.opacity = 0.62 + Math.sin(this.clockT * 4) * 0.22
+      }
       for (const o of s.orbs) {
         const y0 = o.userData.y0 as number
         o.position.y = y0 + Math.sin(this.clockT * 2.2 + (o.userData.phase as number)) * 0.07
@@ -1359,16 +1723,21 @@ export class BattleView3D {
       }
     }
 
-    // hero: bob + spin the element crystal, gentle idle sway of the figure
+    // hero: bob + spin the element crystal, idle sway, breathing aura ring
     for (const [, s] of this.heroViews) {
       const y0 = s.orb.userData.y0 as number
       s.orb.position.y = y0 + Math.sin(this.clockT * 2.6) * 0.06
       s.orb.rotation.y += dt * 2.2
       s.orb.rotation.x += dt * 1.1
-      s.figure.position.y = Math.sin(this.clockT * 2 + s.group.position.x) * 0.03
+      s.figure.position.y = Math.abs(Math.sin(this.clockT * 2 + s.group.position.x)) * 0.05
+      s.ring.rotation.z += dt * 0.7
+      s.ringMat.opacity = 0.72 + Math.sin(this.clockT * 3 + s.group.position.z) * 0.22
+      s.glow.intensity = Math.max(s.glow.intensity, 0.9 + Math.sin(this.clockT * 2.4) * 0.18)
     }
 
+    this.updateProjTrails(dt)
     this.updateParticles(dt)
+    this.updateMotes()
     this.updateTransients(dt)
     this.composer.render()
   }
@@ -1443,7 +1812,8 @@ export class BattleView3D {
 
     // projectiles pooled — geos/mats tracked in disposables
     this.projViews.clear()
-    this.projPool = []
+    this.projPools.clear()
+    this.projGeoCache.clear()
 
     // everything registered
     for (const d of this.disposables) {

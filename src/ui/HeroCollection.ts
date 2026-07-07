@@ -56,8 +56,37 @@ const CSS = `
 
 /* card */
 .hc-card { position:relative; border-radius:18px; padding:3px; box-shadow:0 8px 22px rgba(0,0,0,.5);
-  background:linear-gradient(160deg, var(--rar), rgba(0,0,0,.25)); }
+  background:linear-gradient(160deg, var(--rar), rgba(0,0,0,.25));
+  animation: hcin .4s cubic-bezier(.2,1.3,.4,1) both; transition: transform .18s ease, box-shadow .18s ease; }
+@keyframes hcin { from { opacity:0; transform:translateY(18px) scale(.92); } to { opacity:1; transform:none; } }
 .hc-card.inparty { box-shadow:0 0 0 3px var(--rar), 0 8px 24px rgba(0,0,0,.55); }
+/* rarity-frame glow: rare/epic frames breathe their colour */
+.hc-card.r-rare { animation: hcin .4s cubic-bezier(.2,1.3,.4,1) both, hcglow 2.6s ease-in-out .4s infinite; }
+.hc-card.r-epic { animation: hcin .4s cubic-bezier(.2,1.3,.4,1) both, hcglow 1.9s ease-in-out .4s infinite; }
+@keyframes hcglow { 0%,100% { box-shadow:0 8px 22px rgba(0,0,0,.5), 0 0 6px 0 var(--rar); }
+  50% { box-shadow:0 8px 22px rgba(0,0,0,.5), 0 0 20px 2px var(--rar); } }
+/* hover tilt + lift (pointer devices) */
+@media (hover:hover) {
+  .hc-card:hover { transform: perspective(700px) rotateX(4deg) rotateY(-4deg) translateY(-5px) scale(1.02); z-index:2; }
+  .hc-card:hover .hc-portrait::after { animation: hcshine .8s ease-out; }
+}
+/* portrait shine sweep */
+.hc-portrait::after { content:''; position:absolute; inset:0; border-radius:12px; pointer-events:none;
+  background:linear-gradient(115deg, transparent 30%, rgba(255,255,255,.45) 48%, transparent 62%);
+  background-size:260% 100%; background-position:130% 0; }
+@keyframes hcshine { from { background-position:130% 0; } to { background-position:-130% 0; } }
+/* element badge shimmer */
+.hc-elem { position:relative; overflow:hidden; }
+.hc-elem::after { content:''; position:absolute; top:0; bottom:0; left:-60%; width:40%;
+  background:linear-gradient(105deg, transparent, rgba(255,255,255,.55), transparent);
+  animation: hcbadge 3.2s ease-in-out infinite; }
+@keyframes hcbadge { 0%,70% { left:-60%; } 100% { left:130%; } }
+/* level-up burst: expanding ring + flash + punch */
+.hc-card.burst { animation: hcburstcard .5s cubic-bezier(.2,1.6,.4,1); }
+@keyframes hcburstcard { 0% { transform:scale(1); } 35% { transform:scale(1.07); } 100% { transform:scale(1); } }
+.hc-card.burst::after { content:''; position:absolute; inset:-4px; border-radius:20px; pointer-events:none;
+  border:3px solid var(--elem); box-shadow:0 0 24px var(--elem); animation: hcburstring .65s ease-out forwards; }
+@keyframes hcburstring { 0% { opacity:1; transform:scale(.96); } 100% { opacity:0; transform:scale(1.22); } }
 .hc-frame { position:relative; border-radius:16px; padding:10px 10px 12px; background:linear-gradient(180deg,#241743,#150b2c);
   display:flex; flex-direction:column; gap:6px; overflow:hidden; }
 .hc-frame::before { content:''; position:absolute; inset:0; background:radial-gradient(80% 55% at 50% 0%, var(--elem) 0%, transparent 60%); opacity:.22; pointer-events:none; }
@@ -158,14 +187,23 @@ export class HeroCollection {
     this.render()
   }
 
+  private burstHeroId: string | null = null // card that just levelled → play burst
+
   private render(): void {
     this.renderWallet()
     this.renderParty()
     this.grid.innerHTML = ''
+    let i = 0
     for (const id of HERO_ORDER) {
       const def = HEROES[id]
-      if (def) this.grid.append(this.buildCard(def))
+      if (def) {
+        const card = this.buildCard(def)
+        card.style.animationDelay = `${Math.min(0.36, i * 0.045)}s`
+        this.grid.append(card)
+        i++
+      }
     }
+    this.burstHeroId = null
   }
 
   private renderWallet(): void {
@@ -206,6 +244,11 @@ export class HeroCollection {
     card.style.setProperty('--rar', hex(RARITY_COLOR[def.rarity]))
     const inParty = economy.party().includes(def.id)
     if (inParty) card.classList.add('inparty')
+    card.classList.add('r-' + def.rarity)
+    if (this.burstHeroId === def.id) {
+      card.classList.add('burst')
+      window.setTimeout(() => card.classList.remove('burst'), 700)
+    }
 
     const frame = el('div', 'hc-frame')
 
@@ -287,7 +330,7 @@ export class HeroCollection {
     b.innerHTML = free ? 'LEVEL UP<br>FREE ★' : `LEVEL UP<br>${cost} 🔹`
     b.onclick = () => {
       const res = economy.levelUpHero(def.id)
-      if (res) { this.toast(`${def.name} → Lv ${economy.heroState(def.id).level}!`, def.color); this.render() }
+      if (res) { this.burstHeroId = def.id; this.toast(`${def.name} → Lv ${economy.heroState(def.id).level}!`, def.color); this.render() }
       else this.toast('Not enough shards', 0xff5b7a)
     }
     return b

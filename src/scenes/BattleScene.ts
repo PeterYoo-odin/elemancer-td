@@ -42,6 +42,8 @@ export class BattleScene extends Phaser.Scene {
   private onMove = (e: PointerEvent) => this.handleMove(e)
   private onResize = () => this.view?.resize()
   private lastTime = 0
+  private hitstopT = 0 // brief slow-mo on big kills (view pacing only)
+  private lastSimState = ''
 
   constructor() { super('Battle') }
 
@@ -76,6 +78,8 @@ export class BattleScene extends Phaser.Scene {
     this.aimingHeroSlot = null
     this.selectedId = null
     this.lastTime = 0
+    this.hitstopT = 0
+    this.lastSimState = ''
 
     // ---- 3D view ----
     const accent = this.level.palette.pathEdge
@@ -126,10 +130,21 @@ export class BattleScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (!this.sim) return
     const dt = Math.min(0.05, delta / 1000)
-    const simDt = this.paused ? 0 : dt * this.gameSpeed
+    let simDt = this.paused ? 0 : dt * this.gameSpeed
+    // hitstop: big kills bite for a beat (render keeps animating at full rate)
+    if (this.hitstopT > 0) {
+      this.hitstopT -= dt
+      simDt *= 0.12
+    }
     this.sim.advance(simDt)
 
     for (const ev of this.sim.drainEvents()) this.handleEvent(ev)
+
+    // wave-start flourish on the prep→active transition
+    if (this.sim.state === 'active' && this.lastSimState === 'prep') {
+      this.hud.waveBanner(`WAVE ${this.sim.waveIndex + 1}`)
+    }
+    this.lastSimState = this.sim.state
 
     this.view.syncFrom(this.selectedId)
     this.view.render(dt)
@@ -422,8 +437,8 @@ export class BattleScene extends Phaser.Scene {
         break
       }
       case 'death':
-        this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss)
-        if (ev.boss) this.hud.flash(0xff6ad5, 0.35)
+        this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22 }
         break
       case 'shieldBreak':
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
@@ -440,6 +455,7 @@ export class BattleScene extends Phaser.Scene {
         break
       case 'chain':
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
+        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SHATTER!'); this.hitstopT = Math.max(this.hitstopT, 0.12) }
         if (ev.count > 1) {
           const last = ev.points[ev.points.length - 1]
           this.floatAt(last[0], last[1], `CHAIN ×${ev.count}`, 0xffe14a, 20)
@@ -457,7 +473,10 @@ export class BattleScene extends Phaser.Scene {
         else this.floatAt(ev.x, ev.y, `+${ev.amount}`, 0x6bffb0, 18)
         break
       case 'gold':
-        if (ev.amount >= 4) this.floatAt(ev.x, ev.y, `+${ev.amount}`, 0xffd54a, 18)
+        if (ev.amount >= 4) {
+          const s = this.view.projectToScreen(ev.x, ev.y, 0.8)
+          if (s.visible) this.hud.coinBurst(s.x, s.y, ev.amount)
+        }
         break
       case 'place':
         this.view.fxPlace(ev.x, ev.y, ev.color, ev.radius)

@@ -175,10 +175,13 @@ const CSS = `
 .eld-fx { position:absolute; inset:0; pointer-events:none; z-index:30; overflow:hidden; }
 .eld-float { position:absolute; font-weight:900; transform:translate(-50%,-50%); white-space:nowrap;
   text-shadow:0 2px 3px rgba(0,0,0,.7); will-change:transform,opacity; }
-@keyframes eldfloat { 0%{ transform:translate(-50%,-50%) scale(.4);} 20%{ transform:translate(-50%,-80%) scale(1);}
-  100%{ transform:translate(-50%,-160%) scale(1); opacity:0; } }
-@keyframes eldcombo { 0%{ transform:translate(-50%,-50%) scale(.2) rotate(-6deg);} 30%{ transform:translate(-50%,-70%) scale(1.15) rotate(3deg);}
-  100%{ transform:translate(-50%,-150%) scale(1) rotate(0); opacity:0; } }
+.eld-float { --dx: 0px; }
+@keyframes eldfloat { 0%{ transform:translate(-50%,-50%) scale(.3);} 22%{ transform:translate(calc(-50% + var(--dx)*.5),-95%) scale(1.18);}
+  40%{ transform:translate(calc(-50% + var(--dx)*.7),-110%) scale(1);}
+  100%{ transform:translate(calc(-50% + var(--dx)),-185%) scale(.92); opacity:0; } }
+@keyframes eldcombo { 0%{ transform:translate(-50%,-50%) scale(.2) rotate(-8deg);} 28%{ transform:translate(-50%,-78%) scale(1.35) rotate(4deg);}
+  46%{ transform:translate(-50%,-88%) scale(1.05) rotate(-1deg);}
+  100%{ transform:translate(calc(-50% + var(--dx)),-165%) scale(1) rotate(0); opacity:0; } }
 .eld-banner { position:absolute; left:50%; top:34%; transform:translateX(-50%); font-size:40px; font-weight:900;
   text-shadow:0 3px 0 rgba(0,0,0,.55); animation:eldbanner 1.6s ease-out forwards; white-space:nowrap; }
 @keyframes eldbanner { 0%{ opacity:0; transform:translateX(-50%) scale(.6);} 15%{ opacity:1; transform:translateX(-50%) scale(1);}
@@ -216,6 +219,60 @@ const CSS = `
 .eld-syn .syn-chip .sn { font-size:12px; font-weight:900; }
 .eld-syn .syn-chip .sd { font-size:10px; font-weight:700; color:#d8d0ff; opacity:.9; }
 @keyframes eldsynin { from { transform:translateX(-14px); opacity:0; } to { transform:translateX(0); opacity:1; } }
+
+/* ---- motion pass: scene entrance, counter pops, pings, banners, coins ---- */
+.battle3d-canvas { animation: eldscenein .6s ease-out both; }
+.eld-hud { animation: eldhudin .5s ease-out both; }
+@keyframes eldscenein { from { opacity:0; } to { opacity:1; } }
+@keyframes eldhudin { from { opacity:0; transform:translateY(8px);} to { opacity:1; transform:none;} }
+
+.eld-stat { transition: transform .12s; }
+.eld-stat.pop { animation: eldstatpop .3s cubic-bezier(.2,1.6,.4,1); }
+@keyframes eldstatpop { 0%{ transform:scale(1);} 40%{ transform:scale(1.13);} 100%{ transform:scale(1);} }
+.eld-life.hurt { animation: eldhurt .4s ease-out; }
+@keyframes eldhurt { 0%,60%{ background:linear-gradient(180deg,#8a2038,#5a1024); transform:translateX(0) scale(1.08);}
+  15%{ transform:translateX(-4px);} 30%{ transform:translateX(4px);} 45%{ transform:translateX(-3px);} 100%{ transform:none;} }
+
+@media (hover:hover) {
+  .eld-tower:hover:not(.dim) { transform:translateY(-3px); border-color:#777; }
+  .eld-spell:hover, .eld-hero:hover .hport { filter:brightness(1.15); }
+  .eld-rc button:hover, .eld-btn:hover { filter:brightness(1.12); }
+}
+.eld-start { position:relative; overflow:hidden; }
+.eld-start::after { content:''; position:absolute; top:0; bottom:0; left:-70%; width:44%;
+  background:linear-gradient(105deg, transparent, rgba(255,255,255,.4), transparent);
+  animation: eldsheen 2.4s ease-in-out infinite; }
+@keyframes eldsheen { 0%,55%{ left:-70%; } 100%{ left:130%; } }
+
+.eld-upg { animation: eldpanelin .28s cubic-bezier(.2,1.4,.4,1) both; }
+@keyframes eldpanelin { from { opacity:0; transform:translateX(-50%) translateY(26px) scale(.94);} to { opacity:1; transform:translateX(-50%) translateY(0) scale(1);} }
+.eld-ov { animation: eldovin .3s ease-out both; }
+@keyframes eldovin { from { opacity:0; } to { opacity:1; } }
+.eld-ov h1 { animation: eldtitlein .55s cubic-bezier(.2,1.5,.4,1) both; }
+@keyframes eldtitlein { 0%{ opacity:0; transform:scale(.35) rotate(-4deg);} 60%{ opacity:1; transform:scale(1.12) rotate(1.5deg);} 100%{ transform:scale(1) rotate(0);} }
+.eld-stars .st { display:inline-block; animation: eldstarpop .5s cubic-bezier(.2,1.6,.4,1) both; }
+@keyframes eldstarpop { 0%{ opacity:0; transform:scale(0) rotate(-40deg);} 60%{ opacity:1; transform:scale(1.4) rotate(8deg);} 100%{ transform:scale(1) rotate(0);} }
+.eld-rewards { animation: eldpanelfade .4s ease-out .5s both; }
+.eld-btnrow { animation: eldpanelfade .4s ease-out .7s both; }
+@keyframes eldpanelfade { from { opacity:0; transform:translateY(12px);} to { opacity:1; transform:none;} }
+
+/* cooldown-complete ping: a bright ring bursts off the button */
+.eld-spell.ping::before, .eld-hero.ping .hport::before { content:''; position:absolute; inset:-3px; border-radius:50%;
+  border:3px solid currentColor; animation: eldping .5s ease-out forwards; pointer-events:none; }
+@keyframes eldping { 0%{ opacity:1; transform:scale(1);} 100%{ opacity:0; transform:scale(1.7);} }
+
+/* wave banner: bigger, sweeping, letter-spaced */
+.eld-wavebanner { position:absolute; left:50%; top:30%; transform:translateX(-50%); font-size:54px; font-weight:900;
+  letter-spacing:6px; white-space:nowrap; color:#fff;
+  text-shadow:0 4px 0 rgba(0,0,0,.5), 0 0 26px rgba(176,107,255,.9);
+  animation: eldwaveb 1.7s cubic-bezier(.2,1.2,.4,1) forwards; }
+@keyframes eldwaveb { 0%{ opacity:0; transform:translateX(-50%) scale(1.9); letter-spacing:18px; }
+  22%{ opacity:1; transform:translateX(-50%) scale(1); letter-spacing:6px; }
+  78%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-24px) scale(.96); } }
+
+/* flying coins (world kill → gold counter) */
+.eld-coin { position:absolute; width:16px; height:16px; border-radius:50%; z-index:31; pointer-events:none;
+  background:radial-gradient(circle at 35% 30%, #fff2b0, #ffd54a 60%, #c89600); box-shadow:0 0 8px rgba(255,213,74,.9); }
 `
 
 export class BattleHud {
@@ -252,6 +309,13 @@ export class BattleHud {
   private lastGoldTarget = -1
   private lastAfford = new Map<TowerKind, boolean>()
 
+  // motion-pass state: detect transitions so we ping/pop exactly once
+  private goldStat!: HTMLElement
+  private lifeStat!: HTMLElement
+  private lastLives = -1
+  private spellWasReady = new Map<SpellKey, boolean>()
+  private heroWasReady = new Map<string, boolean>()
+
   constructor(cb: HudCallbacks) {
     this.cb = cb
     this.styleEl = el('style')
@@ -269,6 +333,8 @@ export class BattleHud {
     const wave = el('div', 'eld-stat eld-wave')
     wave.append((this.waveVal = el('span', 'val', 'WAVE 1')))
     top.append(gold, life, wave)
+    this.goldStat = gold
+    this.lifeStat = life
     this.root.append(top)
 
     const levelName = el('div', 'eld-levelname')
@@ -360,11 +426,17 @@ export class BattleHud {
 
   // ------------------------------------------------------------- per-frame
   update(sim: Sim, ctx: HudContext): void {
-    // animated gold counter
-    if (sim.gold !== this.lastGoldTarget) this.lastGoldTarget = sim.gold
+    // animated gold counter (+ a pop when a meaningful chunk lands)
+    if (sim.gold !== this.lastGoldTarget) {
+      if (sim.gold >= this.lastGoldTarget + 8 && this.lastGoldTarget >= 0) this.popClass(this.goldStat, 'pop', 320)
+      this.lastGoldTarget = sim.gold
+    }
     this.displayGold += (sim.gold - this.displayGold) * 0.25
     if (Math.abs(this.displayGold - sim.gold) < 0.6) this.displayGold = sim.gold
     this.goldVal.textContent = String(Math.round(this.displayGold))
+    // lives: shake + flash red when the base takes a hit
+    if (this.lastLives >= 0 && sim.lives < this.lastLives) this.popClass(this.lifeStat, 'hurt', 450)
+    this.lastLives = sim.lives
     this.livesVal.textContent = String(sim.lives)
     this.waveVal.textContent = ctx.endless
       ? `WAVE ${sim.waveIndex + 1} ∞`
@@ -422,9 +494,12 @@ export class BattleHud {
         ref.mask.style.background = `conic-gradient(rgba(6,4,16,.78) ${deg}deg, transparent ${deg}deg)`
         ref.txt.textContent = String(Math.ceil(cd))
         ref.root.classList.remove('ready')
+        this.spellWasReady.set(key, false)
       } else {
         ref.mask.style.background = 'transparent'
         ref.root.classList.add('ready')
+        if (this.spellWasReady.get(key) === false) this.popClass(ref.root, 'ping', 550)
+        this.spellWasReady.set(key, true)
       }
     }
 
@@ -476,10 +551,13 @@ export class BattleHud {
           ref.cdtxt.textContent = String(Math.ceil(cd))
           ref.root.classList.remove('ready')
           ref.badge.textContent = h.spell.glyph
+          this.heroWasReady.set(entry.heroId, false)
         } else {
           ref.mask.style.background = 'transparent'
           ref.cdtxt.textContent = ''
           ref.root.classList.add('ready')
+          if (this.heroWasReady.get(entry.heroId) === false) this.popClass(ref.root, 'ping', 550)
+          this.heroWasReady.set(entry.heroId, true)
           ref.badge.textContent = `${h.spell.glyph} CAST`
         }
         ref.badge.style.color = hex(entry.def.color)
@@ -624,8 +702,13 @@ export class BattleHud {
     h1.style.color = hex(opts.color)
     ov.append(h1)
     if (opts.win && !opts.endless) {
-      const s = el('div', 'eld-stars', '★★★☆☆☆'.slice(0, 0))
-      s.textContent = '★'.repeat(opts.stars) + '☆'.repeat(3 - opts.stars)
+      const s = el('div', 'eld-stars')
+      for (let i = 0; i < 3; i++) {
+        const star = el('span', 'st', i < opts.stars ? '★' : '☆')
+        star.style.animationDelay = `${0.35 + i * 0.22}s`
+        if (i >= opts.stars) star.style.color = '#6a5da0'
+        s.append(star)
+      }
       s.style.color = '#ffd54a'
       ov.append(s)
     } else if (opts.sub) {
@@ -678,15 +761,58 @@ export class BattleHud {
   setSpeed(speed: number): void { this.speedBtn.textContent = `${speed}×` }
 
   // ------------------------------------------------------------- floating fx
+  // restartable one-shot CSS animation (reflow flush re-arms the keyframes)
+  private popClass(target: HTMLElement, cls: string, ms: number): void {
+    target.classList.remove(cls)
+    void target.offsetWidth
+    target.classList.add(cls)
+    window.setTimeout(() => target.classList.remove(cls), ms)
+  }
+
   floatText(x: number, y: number, msg: string, color: number, size: number, combo = false): void {
     const d = el('div', 'eld-float', msg)
     d.style.left = `${x}px`
     d.style.top = `${y}px`
     d.style.fontSize = `${size}px`
     d.style.color = hex(color)
+    d.style.setProperty('--dx', `${Math.round((Math.random() - 0.5) * 56)}px`)
     d.style.animation = `${combo ? 'eldcombo' : 'eldfloat'} ${combo ? 1 : 0.9}s ease-out forwards`
     this.fxLayer.append(d)
     window.setTimeout(() => d.remove(), combo ? 1050 : 950)
+  }
+
+  // coins burst from a kill and arc into the gold counter, popping it on arrival
+  coinBurst(x: number, y: number, amount: number): void {
+    const n = Math.max(2, Math.min(6, 2 + Math.floor(amount / 6)))
+    const rect = this.goldStat.getBoundingClientRect()
+    const tx = rect.left + rect.width * 0.5
+    const ty = rect.top + rect.height * 0.5
+    for (let i = 0; i < n; i++) {
+      const c = el('div', 'eld-coin')
+      c.style.left = '0'
+      c.style.top = '0'
+      this.fxLayer.append(c)
+      const midX = x + (Math.random() - 0.5) * 110
+      const midY = y - 46 - Math.random() * 60
+      const anim = c.animate(
+        [
+          { transform: `translate(${x - 8}px, ${y - 8}px) scale(.3)`, opacity: '1' },
+          { transform: `translate(${midX - 8}px, ${midY - 8}px) scale(1)`, opacity: '1', offset: 0.32 },
+          { transform: `translate(${tx - 8}px, ${ty - 8}px) scale(.45)`, opacity: '.95' },
+        ],
+        { duration: 480 + i * 65 + Math.random() * 90, easing: 'cubic-bezier(.45,.05,.55,.95)', fill: 'forwards' },
+      )
+      anim.onfinish = () => {
+        c.remove()
+        this.popClass(this.goldStat, 'pop', 320)
+      }
+    }
+  }
+
+  waveBanner(msg: string): void {
+    const d = el('div', 'eld-wavebanner', msg)
+    this.fxLayer.append(d)
+    window.setTimeout(() => d.remove(), 1750)
   }
 
   flash(color: number, alpha = 0.45, dur = 240): void {
