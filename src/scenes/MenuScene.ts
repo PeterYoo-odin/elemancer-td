@@ -1,11 +1,13 @@
 import Phaser from 'phaser'
 import { economy } from '../game/economy'
-import { UI, makeButton, currencyBar, orbBackdrop, popupCard } from './ui'
+import { FrontPage } from '../ui/FrontPage'
+import { showOdinSplash } from '../ui/OdinSplash'
 
-// Main menu / hub. Shows currencies, routes to Map / Workshop / Shop / Endless,
-// and surfaces idle offline earnings + the daily diamond bonus on entry.
+// Main menu / hub. The visuals live in FrontPage (an HTML/CSS overlay, like
+// BattleHud); this scene owns its lifecycle, routes navigation to the other
+// scenes, and surfaces idle offline earnings + the daily diamond bonus.
 export class MenuScene extends Phaser.Scene {
-  private bar!: { refresh: () => void }
+  private front: FrontPage | null = null
 
   constructor() {
     super('Menu')
@@ -13,50 +15,35 @@ export class MenuScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale
-    orbBackdrop(this)
+    // Solid backdrop behind the DOM overlay (visible for a frame on scene swaps).
+    this.add.rectangle(width / 2, height / 2, width, height, 0x0a0716)
 
-    const title = this.add
-      .text(width / 2, height * 0.16, 'ELEMANCER', { fontFamily: 'Arial Black', fontSize: '78px', color: '#ffd54a' })
-      .setOrigin(0.5)
-    title.setStroke('#7b2ff7', 12)
-    title.setShadow(0, 6, '#000000', 8, true, true)
-    this.add
-      .text(width / 2, height * 0.16 + 66, 'TOWER DEFENSE', { fontFamily: 'Arial Black', fontSize: '34px', color: '#ffffff' })
-      .setOrigin(0.5)
-      .setStroke('#2ff7c3', 6)
+    this.front = new FrontPage({
+      onPlay: () => this.scene.start('Map'),
+      onHeroes: () => this.scene.start('Heroes'),
+      onWorkshop: () => this.scene.start('Workshop'),
+      onShop: () => this.scene.start('Shop'),
+      onEndless: () => this.scene.start('Battle', { endless: true }),
+      // Replay from settings: the user has interacted, so no tap gate needed.
+      onReplayIntro: () => showOdinSplash({ gate: false }),
+    })
+    this.front.setCurrencies(economy.coins, economy.diamonds)
+    this.front.setBestWave(economy.data.endlessBest)
 
-    this.bar = currencyBar(this, 340)
-
-    const cx = width / 2
-    let y = 540
-    makeButton(this, cx, y, '▶  PLAY', () => this.go('Map'), { color: UI.green, w: 420, h: 88, fontSize: 40 })
-    y += 108
-    makeButton(this, cx, y, '🦸  HEROES', () => this.go('Heroes'), { color: 0xffb43c, w: 420, h: 76, fontSize: 30 })
-    y += 92
-    makeButton(this, cx, y, '⚒  WORKSHOP', () => this.go('Workshop'), { color: 0x4a7bff, w: 420, h: 72 })
-    y += 88
-    makeButton(this, cx, y, '💎  SHOP', () => this.go('Shop'), { color: 0xc06bff, w: 420, h: 72 })
-    y += 88
-    makeButton(this, cx, y, '🏆  ENDLESS — RANKED', () => this.startEndless(), { color: 0xff6a3c, w: 420, h: 72, fontSize: 26 })
-
-    this.add
-      .text(width / 2, height - 90, 'Ranked is fair: purchases never affect it', { fontFamily: 'Arial', fontSize: '20px', color: '#8f7fc0' })
-      .setOrigin(0.5)
-    if (economy.data.endlessBest > 0) {
-      this.add
-        .text(width / 2, height - 58, `Best endless wave: ${economy.data.endlessBest}`, { fontFamily: 'Arial Black', fontSize: '22px', color: '#ffb27a' })
-        .setOrigin(0.5)
-    }
+    this.events.once('shutdown', () => {
+      this.front?.destroy()
+      this.front = null
+    })
 
     // Idle offline earnings + daily bonus, shown once on entry.
-    this.time.delayedCall(400, () => this.showRewards())
+    this.time.delayedCall(500, () => this.showRewards())
   }
 
   private showRewards(): void {
+    if (!this.front) return
     const idle = economy.claimIdle()
     const daily = economy.claimDaily()
     const lines: string[] = []
-    let color = UI.coin
     let title = ''
     if (idle.coins > 0) {
       const mins = Math.round(idle.seconds / 60)
@@ -68,21 +55,10 @@ export class MenuScene extends Phaser.Scene {
       if (!title) title = 'DAILY BONUS'
       else lines.push('')
       lines.push(`Daily bonus: +${daily} 💎 diamonds`)
-      color = idle.coins > 0 ? UI.coin : UI.diamond
     }
     if (lines.length) {
-      popupCard(this, title, lines, color)
-      this.bar.refresh()
+      this.front.showRewards(title, lines)
+      this.front.setCurrencies(economy.coins, economy.diamonds)
     }
-  }
-
-  private go(scene: string): void {
-    this.cameras.main.fadeOut(200, 20, 12, 50)
-    this.time.delayedCall(210, () => this.scene.start(scene))
-  }
-
-  private startEndless(): void {
-    this.cameras.main.fadeOut(200, 20, 12, 50)
-    this.time.delayedCall(210, () => this.scene.start('Battle', { endless: true }))
   }
 }
