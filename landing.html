@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050308" />
+    <title>CHROMANCER — Paint the world back.</title>
+    <meta
+      name="description"
+      content="The hand-painted tower defense that doesn't cheat — provably-fair runs, and a leaderboard money can't climb. Play free in your browser."
+    />
+    <link rel="canonical" href="https://chromancer.io/landing" />
+    <link rel="icon" type="image/svg+xml" href="./brand/odin-icon.svg" />
+
+    <!-- Open Graph / unfurls (seed-link prove-it cards ride the same tags later) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="CHROMANCER" />
+    <meta property="og:title" content="CHROMANCER — Paint the world back." />
+    <meta
+      property="og:description"
+      content="The hand-painted tower defense that doesn't cheat — provably-fair runs, and a leaderboard money can't climb. Play free in your browser."
+    />
+    <meta property="og:url" content="https://chromancer.io/landing" />
+    <meta property="og:image" content="https://chromancer.io/concepts/00-keyart-v2.jpg" />
+    <meta property="og:image:alt" content="CHROMANCER key art — the Chromancers painting color back into a greying world" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="CHROMANCER — Paint the world back." />
+    <meta
+      name="twitter:description"
+      content="Provably-fair runs. A leaderboard money can't climb. Every run is a seed you can share."
+    />
+    <meta name="twitter:image" content="https://chromancer.io/concepts/00-keyart-v2.jpg" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Baloo+2:wght@600;700;800&family=Nunito:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script type="module" src="/src/landing/landing.ts"></script>
+  </head>
+  <body>
+    <!-- ============================== NAV ============================== -->
+    <header class="nav">
+      <a class="nav-brand" href="#top">CHROMANCER</a>
+      <nav class="nav-links">
+        <a href="#world">The World</a>
+        <a href="#heroes">Heroes</a>
+        <a href="#fairness-ledger">Fairness</a>
+      </nav>
+      <a class="btn btn-gold btn-sm" href="./" data-cta="nav-play">PLAY FREE</a>
+    </header>
+
+    <!-- ============================== HERO ============================== -->
+    <section class="hero" id="top">
+      <div class="hero-bg" aria-hidden="true">
+        <!-- painted key art always underneath; the live attract-mode embed fades
+             in over it once loaded (skipped on reduced-motion / save-data) -->
+        <img class="hero-bg-art" src="./concepts/00-keyart-v2.jpg" alt="" />
+        <div class="hero-embed" id="attract-slot"></div>
+        <div class="hero-shade"></div>
+      </div>
+      <div class="hero-copy">
+        <p class="hero-kicker">A grey king is eating the world's color.</p>
+        <h1>Paint the world back.</h1>
+        <p class="hero-sub">
+          The hand-painted tower defense that doesn't cheat — provably-fair runs,
+          and a leaderboard money can't climb.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn btn-gold btn-lg" href="./" data-cta="hero-play">PLAY FREE NOW</a>
+          <a class="btn btn-ghost btn-lg" href="#trailer">Watch the trailer</a>
+        </div>
+        <p class="hero-live-note" id="hero-live-note" hidden>
+          ▲ That's not a video — it's the game, playing itself live behind this page.
+        </p>
+      </div>
+    </section>
+
+    <!-- ========================= PROMISE BADGES ========================= -->
+    <section class="badges" aria-label="Our promises">
+      <div class="badge-grid">
+        <div class="badge">
+          <span class="badge-glyph">🎲</span>
+          <h3>Every run is a seed you can share</h3>
+          <p>One code — <code>EMBER-FOX-42</code> — replays your exact run on any device. Beat my run means <em>my actual run</em>.</p>
+        </div>
+        <div class="badge">
+          <span class="badge-glyph">🛡</span>
+          <h3>Server-verified leaderboard</h3>
+          <p>Every ranked score is replayed and checked, tick for tick. If it's on the board, it happened.</p>
+        </div>
+        <div class="badge">
+          <span class="badge-glyph">⚖</span>
+          <h3>Purchases never touch Ranked</h3>
+          <p>Cosmetics only. Boosts are disabled, heroes normalized. Nothing you can buy works there.</p>
+        </div>
+      </div>
+      <p class="badges-link"><a href="#fairness-ledger">Read the fairness ledger →</a></p>
+    </section>
+
+    <!-- ========================== TODAY'S SEED ========================== -->
+    <section class="seed" aria-label="Today's seed">
+      <div class="seed-card">
+        <div class="seed-head">
+          <h2>Today's Seed</h2>
+          <span class="seed-date" id="seed-date"></span>
+        </div>
+        <div class="seed-code" id="seed-code">····-····-··</div>
+        <p class="seed-note">Same seed for everyone, everywhere, until midnight UTC. Same waves. No excuses.</p>
+        <div class="seed-actions">
+          <a class="btn btn-gold" id="seed-play" href="./" data-cta="seed-play">Beat it</a>
+          <button class="btn btn-ghost" id="seed-copy" type="button">Copy seed link</button>
+        </div>
+        <ol class="seed-board" aria-label="Today's top runs">
+          <li class="seed-board-ghost">Live top 5 lands here when the ranked servers open.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ========================== THE WORLD ========================== -->
+    <section class="world" id="world">
+      <h2 class="section-title">The World</h2>
+      <div class="world-strip">
+        <figure class="world-panel">
+          <img src="./concepts/00-keyart-v2.jpg" alt="Aetheria — a hand-painted world of living color" loading="lazy" />
+          <figcaption>
+            <h3>Aetheria</h3>
+            <p>A world painted into being, where every meadow, tide and ember holds its own living color.</p>
+          </figcaption>
+        </figure>
+        <figure class="world-panel world-panel-grey">
+          <img src="./concepts/00-keyart-poster-framed.jpg" alt="Morose, the Grey King, and the Greying" loading="lazy" />
+          <figcaption>
+            <h3>Morose &amp; the Greying</h3>
+            <p>A grieving king who decided color was the problem — and began drinking it out of the world.</p>
+          </figcaption>
+        </figure>
+        <figure class="world-panel">
+          <img src="./concepts/hero-01-ashka-fire.jpg" alt="The eight Chromancers" loading="lazy" />
+          <figcaption>
+            <h3>The 8 Chromancers</h3>
+            <p>Eight painters-in-arms, each with one signature stroke nobody else can make. Paint it back.</p>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ========================== HEROES ROW ========================== -->
+    <section class="heroes" id="heroes">
+      <h2 class="section-title">The Chromancers</h2>
+      <p class="section-sub">Hover a card for their signature — one mechanic nobody else has. No gacha: every hero earnable free.</p>
+      <div class="hero-row" id="hero-row"><!-- cards rendered by landing.ts from the game's own roster data --></div>
+    </section>
+
+    <!-- ========================== TRAILER ========================== -->
+    <section class="trailer" id="trailer">
+      <h2 class="section-title">The Trailer</h2>
+      <div class="trailer-frame" id="trailer-frame">
+        <img src="./concepts/00-keyart-poster-framed.jpg" alt="CHROMANCER trailer poster" loading="lazy" />
+        <button class="trailer-play" id="trailer-play" type="button" aria-label="Play the trailer">▶</button>
+      </div>
+      <p class="trailer-line">
+        No pre-renders. No fake ads. <strong>The trailer is just the game</strong> —
+        a live run playing itself. Tap it to take over.
+      </p>
+    </section>
+
+    <!-- ====================== EMAIL / DISCORD ====================== -->
+    <section class="signup" id="signup">
+      <h2 class="section-title">Get the seed drops</h2>
+      <p class="section-sub">Weekly seed races, hero reveals, and beta keys. No spam — we're too busy painting.</p>
+      <form class="signup-form" id="signup-form" novalidate>
+        <input
+          type="email" id="signup-email" name="email" required
+          placeholder="you@example.com" autocomplete="email"
+          aria-label="Email address"
+        />
+        <button class="btn btn-gold" type="submit">Join the waitlist</button>
+      </form>
+      <p class="signup-status" id="signup-status" role="status"></p>
+      <div class="signup-alt">
+        <a class="btn btn-discord" href="https://discord.gg/chromancer" target="_blank" rel="noopener" data-cta="discord">
+          Join the Discord
+        </a>
+        <span class="signup-alt-note">#daily-seed · #prove-it · #impossible-seeds</span>
+      </div>
+    </section>
+
+    <!-- ====================== FAIRNESS LEDGER ====================== -->
+    <section class="ledger" id="fairness-ledger">
+      <h2 class="section-title">The Fairness Ledger</h2>
+      <p class="section-sub">Every thing we will ever sell, and exactly what it does to Ranked. This list is the whole trick: there is no trick.</p>
+      <table class="ledger-table">
+        <thead>
+          <tr><th>What's in the store</th><th>What it does</th><th>Effect on Ranked</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Hero &amp; tower skins</td><td>Looks. Barks. Sparkles.</td><td class="ledger-none">NONE</td></tr>
+          <tr><td>Map palettes &amp; dyes</td><td>Repaint the scenery</td><td class="ledger-none">NONE</td></tr>
+          <tr><td>Spell VFX &amp; emotes</td><td>Style points</td><td class="ledger-none">NONE</td></tr>
+          <tr><td>Redeemed-Keeper skins</td><td>Gated on <em>beating</em> that Keeper — status, not wallet</td><td class="ledger-none">NONE</td></tr>
+          <tr><td>Convenience (idle 2×, auto-collect)</td><td>Casual modes only</td><td class="ledger-disabled">DISABLED</td></tr>
+          <tr><td>Boosts of any kind</td><td>—</td><td class="ledger-disabled">DISABLED</td></tr>
+          <tr><td>Power, damage, loot RNG, energy</td><td colspan="2" class="ledger-never">NOT SOLD. EVER.</td></tr>
+        </tbody>
+      </table>
+      <p class="ledger-note">The replay verifier rejects any ranked run with a paid modifier active. Nothing you can buy works there.</p>
+    </section>
+
+    <!-- ============================ FOOTER ============================ -->
+    <footer class="footer">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <img src="./brand/odin-raven-mark.png" alt="Odin Platforms" width="36" height="36" />
+          <div>
+            <strong>CHROMANCER</strong>
+            <span>an Odin Platforms game</span>
+          </div>
+        </div>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="./" data-cta="footer-play">Play free</a>
+          <a href="#fairness-ledger">Fairness ledger</a>
+          <a href="#" class="stub" data-stub="Press kit — coming with the S7 press push">Press kit</a>
+          <a href="https://discord.gg/chromancer" target="_blank" rel="noopener">Discord</a>
+          <a href="#" class="stub" data-stub="YouTube — first honest trailer coming soon">YouTube</a>
+          <a href="#" class="stub" data-stub="TikTok — bloom clips coming soon">TikTok</a>
+          <a href="#" class="stub" data-stub="X — dev-log honesty numbers coming soon">X</a>
+        </nav>
+      </div>
+      <p class="footer-fine">
+        © <span id="footer-year"></span> Odin Platforms · Hand-painted, provably fair, and proud of both.
+      </p>
+    </footer>
+  </body>
+</html>
