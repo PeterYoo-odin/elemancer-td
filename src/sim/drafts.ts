@@ -77,6 +77,10 @@ export const DRAFT_POOL: DraftCard[] = [
   { id: 'firerate', title: 'Overclock', desc: '+14% fire rate', color: 0x9ad0ff, rarity: 'rare', apply: (u) => { u.fireRateMult *= 0.86 } },
   { id: 'splash', title: 'Bigger Booms', desc: '+30% splash radius', color: 0xff6a3c, rarity: 'rare', apply: (u) => { u.splashBonus += 0.3 } },
   { id: 'heal', title: 'Reinforce', desc: 'Restore 4 lives now', color: 0xff5b7a, rarity: 'common', livesDelta: 4, apply: () => {} },
-  { id: 'combo', title: 'Chain Reactor', desc: 'Combos escalate 60% faster', color: 0xc06bff, rarity: 'relic', apply: (u) => { u.comboRamp *= 1.6 } },
+  // BALANCE (harness pass 18): comboRamp trimmed 1.6→1.45. The auto-tuning harness
+  // flagged Tempest+Blizzard+Chain-Reactor as degenerate — on scarce early resources
+  // it snowballed ~3× deeper than a balanced build by racing the 6× combo cap. A
+  // smaller step slows that race without gutting the relic. See BALANCE_REPORT.md.
+  { id: 'combo', title: 'Chain Reactor', desc: 'Combos escalate 45% faster', color: 0xc06bff, rarity: 'relic', apply: (u) => { u.comboRamp *= 1.45 } },
   { id: 'glass', title: 'Glass Cannon', desc: '+45% ALL damage, -2 lives', color: 0xff3b6b, rarity: 'relic', livesDelta: -2, apply: (u) => { u.allDmg *= 1.45 } },
 ]

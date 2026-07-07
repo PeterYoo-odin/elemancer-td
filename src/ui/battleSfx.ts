@@ -14,7 +14,7 @@
 //  · Respects appSettings.sound; silent when the tab is hidden.
 
 import { appSettings } from './settings'
-import { audioContext } from './sfx'
+import { audioContext, sfxOut } from './sfx'
 
 let master: GainNode | null = null
 let noiseBuf: AudioBuffer | null = null
@@ -31,7 +31,7 @@ function chain(): { ac: AudioContext; out: GainNode } | null {
     comp.ratio.value = 5
     comp.attack.value = 0.004
     comp.release.value = 0.16
-    comp.connect(ac.destination)
+    comp.connect(sfxOut(ac))
     master = ac.createGain()
     master.gain.value = 0.82
     master.connect(comp)

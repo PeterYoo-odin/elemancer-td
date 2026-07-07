@@ -9,6 +9,7 @@
 import { appSettings } from './settings'
 import { playUiTick } from './sfx'
 import { music } from './music'
+import { SettingsPanel } from './SettingsPanel'
 import { keyartBackdropUrl } from './heroArt'
 import { menuBanner, prestigeTitle, hasFrame, uiDyeAccent } from '../game/skins'
 import { economy } from '../game/economy'
@@ -529,50 +530,12 @@ export class FrontPage {
   }
 
   private openSettings(): void {
-    const overlay = document.createElement('div')
-    overlay.className = 'efp-overlay'
-    const card = document.createElement('div')
-    card.className = 'efp-card'
-    card.innerHTML = `
-      <div class="efp-ctitle">SETTINGS</div>
-      <div class="efp-row"><span>Sound FX</span><div class="efp-switch ${appSettings.data.sound ? 'on' : ''}" data-set="sound" role="switch"></div></div>
-      <div class="efp-row"><span>Music</span><div class="efp-switch ${appSettings.data.music ? 'on' : ''}" data-set="music" role="switch"></div></div>
-      <div class="efp-row"><span>Music volume</span>
-        <input class="efp-vol" type="range" min="0" max="100" value="${Math.round(appSettings.data.musicVol * 100)}" data-vol aria-label="Music volume" /></div>
-      <div class="efp-row"><span>Reduce motion</span><div class="efp-switch ${appSettings.data.reduceMotion ? 'on' : ''}" data-set="reduceMotion" role="switch"></div></div>
-      <button class="efp-mbtn" data-set="replay">&#9889;&nbsp; REPLAY INTRO</button>
-      <button class="efp-mbtn ghost" data-set="close">CLOSE</button>
-      <div class="efp-lic">Music: Kevin MacLeod (incompetech.com) &middot; CC BY 4.0</div>
-    `
-    overlay.appendChild(card)
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.remove()
+    // The full, unified settings screen (audio · accessibility · difficulty ·
+    // controls · privacy). Replaces the old inline mini-panel.
+    new SettingsPanel({
+      onReplayIntro: () => this.handlers.onReplayIntro(),
+      onClose: () => this.root.classList.toggle('efp-reduced', appSettings.reducedMotion()),
     })
-    card.querySelector<HTMLInputElement>('[data-vol]')!.addEventListener('input', (e) => {
-      const v = Number((e.target as HTMLInputElement).value) / 100
-      appSettings.set({ musicVol: v })
-      music.refresh(80)
-    })
-    card.addEventListener('click', (e) => {
-      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-set]')
-      if (!el) return
-      const key = el.dataset.set
-      if (key === 'sound' || key === 'music' || key === 'reduceMotion') {
-        const next = !appSettings.data[key]
-        appSettings.set({ [key]: next })
-        el.classList.toggle('on', next)
-        this.root.classList.toggle('efp-reduced', appSettings.reducedMotion())
-        if (key === 'music') music.refresh(400)
-        playUiTick()
-      } else if (key === 'replay') {
-        playUiTick()
-        overlay.remove()
-        this.handlers.onReplayIntro()
-      } else if (key === 'close') {
-        overlay.remove()
-      }
-    })
-    this.root.appendChild(overlay)
   }
 
   /** Fade the page out, then hand control back (scene switch). */

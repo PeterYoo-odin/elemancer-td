@@ -119,7 +119,11 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
       { damage: 12, range: 3.0, cooldown: 0.5, upgradeCost: 125, slowFactor: 0.35, slowDuration: 1.7 },
     ],
     branches: [
-      { key: 'blizzard', name: 'Blizzard', blurb: 'Wide chilling storm', damage: 18, range: 4.0, cooldown: 0.45, upgradeCost: 280, slowFactor: 0.32, slowDuration: 2.0 },
+      // BALANCE (harness pass 18): range 4.0→3.5. Blizzard's board-wide slow kept the
+      // pack clustered so Tempest chains hit everything and the combo ramped — the
+      // clustering half of the flagged degenerate loop. Still the "wide chill", just
+      // not the whole board. Keeps the no-immunity discipline (slow, never stop).
+      { key: 'blizzard', name: 'Blizzard', blurb: 'Wide chilling storm', damage: 18, range: 3.5, cooldown: 0.45, upgradeCost: 280, slowFactor: 0.32, slowDuration: 2.0 },
       { key: 'glacier', name: 'Glacier', blurb: 'Deep freeze · hard stun', damage: 26, range: 2.8, cooldown: 0.75, upgradeCost: 280, slowFactor: 0.25, slowDuration: 2.2, stunDuration: 0.5 },
     ],
   },
@@ -197,7 +201,11 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
       // Amplify widens the buff NETWORK (reach 2 cells — visibly longer glow links);
       // Prism reforges the beam into armour-piercing shots while still buffing.
       { key: 'amplify', name: 'Amplify', blurb: 'Buff aura reaches 2 tiles', damage: 14, range: 1.6, cooldown: 1.0, upgradeCost: 300, buffDamage: 0.55, buffRange: 0.18, buffReach: 2 },
-      { key: 'prism', name: 'Prism', blurb: 'Piercing beam · buffs AND blasts', damage: 52, range: 3.0, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true, damageType: 'Pierce', armorPen: 6 },
+      // BALANCE (harness pass 18): damage 52→66. Prism was the FLOOR of the tower
+      // sweep (~25 waves vs ~39 for the top) — it neither buffs as widely as Amplify
+      // nor out-damages a real DPS branch. A modest bump makes "buffs AND blasts"
+      // worth the slot without touching its support role.
+      { key: 'prism', name: 'Prism', blurb: 'Piercing beam · buffs AND blasts', damage: 66, range: 3.0, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true, damageType: 'Pierce', armorPen: 6 },
     ],
   },
 }

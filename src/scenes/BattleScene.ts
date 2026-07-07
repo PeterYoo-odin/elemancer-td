@@ -164,9 +164,16 @@ export class BattleScene extends Phaser.Scene {
     // Demo/attract runs are provably fair showcases: NEUTRAL modifiers always,
     // so a shared seed replays identically on every account.
     const mods = this.demoMode ? { ...NEUTRAL } : economy.runModifiers(this.endless)
-    const startGold = this.endless ? ENDLESS_START_GOLD : this.level.startGold + mods.startGoldBonus
-    // Iron mode = one life; otherwise the level's lives + meta bonus.
-    const startLives = this.endless ? ENDLESS_START_LIVES : startLivesForMode(this.level.startLives + mods.startLivesBonus, this.runMode)
+    // ASSIST (accessibility): a personal, opt-in easier ride for NORMAL campaign play
+    // only — never endless/ranked/demo, so leaderboards and showcases stay fair. It
+    // only ever GRANTS resources (never makes the game harder) and adds no immunities.
+    const assistNormal = !this.demoMode && !this.attract && !this.endless && isNormalMode(this.runMode)
+    const assist = assistNormal ? appSettings.data.assist : 'off'
+    const assistLives = assist === 'cozy' ? 12 : assist === 'relaxed' ? 5 : 0
+    const assistGoldMult = assist === 'cozy' ? 1.5 : assist === 'relaxed' ? 1.2 : 1
+    const startGold = this.endless ? ENDLESS_START_GOLD : Math.round((this.level.startGold + mods.startGoldBonus) * assistGoldMult)
+    // Iron mode = one life; otherwise the level's lives + meta bonus (+ assist).
+    const startLives = this.endless ? ENDLESS_START_LIVES : startLivesForMode(this.level.startLives + mods.startLivesBonus, this.runMode) + assistLives
     // Every run's seed lives in the shareable WORD-WORD-NN code space, so the
     // "Copy seed link" on ANY run reproduces it exactly.
     const rawSeed = this.endless

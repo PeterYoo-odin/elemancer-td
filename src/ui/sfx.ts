@@ -5,6 +5,7 @@
 import { appSettings } from './settings'
 
 let ctx: AudioContext | null = null
+let master: GainNode | null = null // all SFX route through here so the volume slider is real
 
 function ensure(): AudioContext | null {
   if (typeof AudioContext === 'undefined') return null
@@ -15,8 +16,23 @@ function ensure(): AudioContext | null {
       return null
     }
   }
+  if (!master && ctx) {
+    master = ctx.createGain()
+    master.gain.value = appSettings.data.sfxVol
+    master.connect(ctx.destination)
+  }
   if (ctx.state === 'suspended') void ctx.resume()
   return ctx
+}
+
+/** The shared SFX output node (master gain → destination). Layers respect the slider. */
+export function sfxOut(ac: AudioContext): AudioNode {
+  return master ?? ac.destination
+}
+
+/** Re-apply the SFX volume from settings (call after the slider moves). */
+export function refreshSfxVolume(): void {
+  if (master) master.gain.value = appSettings.data.sfxVol
 }
 
 /** Create/resume the context. Must be called from a user gesture (tap/click). */
@@ -48,7 +64,7 @@ export function playThunderclap(): void {
 
   const out = ac.createGain()
   out.gain.value = 0.85
-  out.connect(ac.destination)
+  out.connect(sfxOut(ac))
 
   // Echo tail — two cross-feeding damped delays stand in for a reverb.
   const wet = ac.createGain()
@@ -130,7 +146,7 @@ export function playShimmer(): void {
 
   const out = ac.createGain()
   out.gain.value = 0.14
-  out.connect(ac.destination)
+  out.connect(sfxOut(ac))
 
   const n = ac.createBufferSource()
   n.buffer = noiseBuffer(ac, 1.6)
@@ -173,7 +189,7 @@ export function playMoroseHush(): void {
   const t0 = ac.currentTime + 0.02
   const out = ac.createGain()
   out.gain.value = 0.5
-  out.connect(ac.destination)
+  out.connect(sfxOut(ac))
 
   const n = ac.createBufferSource()
   n.buffer = noiseBuffer(ac, 2.0)
@@ -213,7 +229,7 @@ export function playNodeStinger(): void {
   const t0 = ac.currentTime + 0.02
   const out = ac.createGain()
   out.gain.value = 0.22
-  out.connect(ac.destination)
+  out.connect(sfxOut(ac))
   const notes = [523.25, 784] // C5 → G5
   notes.forEach((hz, i) => {
     const o = ac.createOscillator()
@@ -239,7 +255,7 @@ export function playDiscovery(): void {
   const t0 = ac.currentTime + 0.02
   const out = ac.createGain()
   out.gain.value = 0.18
-  out.connect(ac.destination)
+  out.connect(sfxOut(ac))
   const notes = [659.25, 830.6, 987.77, 1318.5] // E5 G#5 B5 E6
   notes.forEach((hz, i) => {
     const o = ac.createOscillator()
@@ -272,7 +288,7 @@ export function playUiTick(): void {
   g.gain.linearRampToValueAtTime(0.11, t0 + 0.008)
   g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.09)
   o.connect(g)
-  g.connect(ac.destination)
+  g.connect(sfxOut(ac))
   o.start(t0)
   o.stop(t0 + 0.1)
 }

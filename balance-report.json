@@ -1,0 +1,252 @@
+{
+  "generatedBy": "npm run balance",
+  "config": {
+    "runsPerCell": 5,
+    "arenas": [
+      "l1",
+      "w2_0",
+      "l4",
+      "l6"
+    ],
+    "waveCap": 90,
+    "startLives": 30,
+    "startGold": 240,
+    "totalSims": 360
+  },
+  "towerRanking": [
+    {
+      "build": "storm_overload",
+      "label": "Storm → Overload",
+      "avgWaves": 39.9,
+      "capRate": 0,
+      "avgCombo": 154.95
+    },
+    {
+      "build": "arcane_amplify",
+      "label": "Arcane → Amplify (+cannon)",
+      "avgWaves": 39.75,
+      "capRate": 0,
+      "avgCombo": 133.25
+    },
+    {
+      "build": "storm_tempest",
+      "label": "Storm → Tempest",
+      "avgWaves": 39.6,
+      "capRate": 0,
+      "avgCombo": 359.95
+    },
+    {
+      "build": "flame_phoenix",
+      "label": "Flame → Phoenix",
+      "avgWaves": 34.45,
+      "capRate": 0,
+      "avgCombo": 1389.1
+    },
+    {
+      "build": "flame_scorch",
+      "label": "Flame → Scorch",
+      "avgWaves": 33.1,
+      "capRate": 0,
+      "avgCombo": 2565.85
+    },
+    {
+      "build": "frost_glacier",
+      "label": "Frost → Glacier (+cannon)",
+      "avgWaves": 32.3,
+      "capRate": 0,
+      "avgCombo": 1504.4
+    },
+    {
+      "build": "frost_blizzard",
+      "label": "Frost → Blizzard (+cannon)",
+      "avgWaves": 32.15,
+      "capRate": 0,
+      "avgCombo": 1461.45
+    },
+    {
+      "build": "cannon_mortar",
+      "label": "Cannon → Mortar",
+      "avgWaves": 31.9,
+      "capRate": 0,
+      "avgCombo": 282.85
+    },
+    {
+      "build": "cannon_sniper",
+      "label": "Cannon → Sniper",
+      "avgWaves": 31.35,
+      "capRate": 0,
+      "avgCombo": 437.15
+    },
+    {
+      "build": "arcane_prism",
+      "label": "Arcane → Prism",
+      "avgWaves": 25.25,
+      "capRate": 0,
+      "avgCombo": 56.55
+    }
+  ],
+  "dominant": [],
+  "dead": [],
+  "degeneracyProbe": {
+    "build": "tempest_blizzard",
+    "regime": {
+      "lives": 4,
+      "gold": 150,
+      "cap": 26,
+      "noHeroes": true
+    },
+    "avgWaves": 5.95,
+    "controlAvgWaves": 2,
+    "ratioVsControl": 2.975,
+    "waveLiftVsControl": 3.95,
+    "comboCapRate": 0.25,
+    "controlComboCapRate": 0.25,
+    "snowballLeadWaves": -1.2000000000000002,
+    "flaggedDegenerate": true
+  },
+  "relicLift": [
+    {
+      "strat": "combo",
+      "avgWaves": 40,
+      "lift": 0.04999999999999716
+    },
+    {
+      "strat": "power",
+      "avgWaves": 40,
+      "lift": 0.04999999999999716
+    },
+    {
+      "strat": "neutral",
+      "avgWaves": 39.95,
+      "lift": 0
+    },
+    {
+      "strat": "economy",
+      "avgWaves": 39.9,
+      "lift": -0.05000000000000426
+    },
+    {
+      "strat": "survival",
+      "avgWaves": 39.9,
+      "lift": -0.05000000000000426
+    }
+  ],
+  "relicUsage": [
+    {
+      "id": "stormchain",
+      "title": "Forked Lightning",
+      "rarity": "rare",
+      "taken": 200
+    },
+    {
+      "id": "burn",
+      "title": "Wildfire",
+      "rarity": "common",
+      "taken": 200
+    },
+    {
+      "id": "elem_Light",
+      "title": "Light Focus",
+      "rarity": "common",
+      "taken": 203
+    },
+    {
+      "id": "elem_Fire",
+      "title": "Fire Focus",
+      "rarity": "common",
+      "taken": 217
+    },
+    {
+      "id": "splash",
+      "title": "Bigger Booms",
+      "rarity": "rare",
+      "taken": 218
+    },
+    {
+      "id": "elem_Water",
+      "title": "Water Focus",
+      "rarity": "common",
+      "taken": 222
+    },
+    {
+      "id": "elem_Storm",
+      "title": "Storm Focus",
+      "rarity": "common",
+      "taken": 228
+    },
+    {
+      "id": "frost",
+      "title": "Deep Chill",
+      "rarity": "common",
+      "taken": 237
+    },
+    {
+      "id": "combo",
+      "title": "Chain Reactor",
+      "rarity": "relic",
+      "taken": 244
+    },
+    {
+      "id": "gold",
+      "title": "Prospector",
+      "rarity": "common",
+      "taken": 246
+    },
+    {
+      "id": "cost",
+      "title": "Efficiency",
+      "rarity": "common",
+      "taken": 250
+    },
+    {
+      "id": "glass",
+      "title": "Glass Cannon",
+      "rarity": "relic",
+      "taken": 251
+    },
+    {
+      "id": "firerate",
+      "title": "Overclock",
+      "rarity": "rare",
+      "taken": 255
+    },
+    {
+      "id": "pen",
+      "title": "Armor Breaker",
+      "rarity": "rare",
+      "taken": 257
+    },
+    {
+      "id": "heal",
+      "title": "Reinforce",
+      "rarity": "common",
+      "taken": 263
+    },
+    {
+      "id": "alldmg",
+      "title": "Overpower",
+      "rarity": "common",
+      "taken": 313
+    }
+  ],
+  "suggestions": [
+    {
+      "target": "Chain Reactor relic (comboRamp)",
+      "file": "src/sim/drafts.ts",
+      "kind": "nerf",
+      "change": "combo card comboRamp multiplier",
+      "from": "1.6",
+      "to": "1.45",
+      "rationale": "On scarce early-game resources, Chain-Reactor-greedy Tempest+Blizzard survives 6.0 waves vs 2.0 for the balanced control (2.98× deeper) and saturates the 6× combo cap faster (25% of runs vs 25%). comboRamp is the escalator; a small trim slows the snowball without gutting the relic."
+    },
+    {
+      "target": "Blizzard branch (frost)",
+      "file": "src/game/towers.ts",
+      "kind": "nerf",
+      "change": "blizzard branch range",
+      "from": "4.0",
+      "to": "3.5",
+      "rationale": "Blizzard’s board-wide slow keeps the pack clustered so Tempest chains hit everything and the combo ramps. Narrowing the aura preserves its \"wide chill\" identity while cutting the free clustering that feeds the degenerate loop."
+    }
+  ]
+}
