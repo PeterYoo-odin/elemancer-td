@@ -230,7 +230,13 @@ export class RunRecorder {
 //  the resulting score + wave. Pure; identical in browser, simcheck, and server.
 // ---------------------------------------------------------------------------
 
-const REPLAY_TICK_CAP = 60 * 60 * 40 // 40 sim-minutes hard cap (anti-runaway)
+// A pure anti-abuse backstop, NOT a gameplay limit. It must sit FAR above any
+// survivable ranked run so it never truncates (and thus never false-rejects) a
+// real death — the live battle loop is uncapped and always ends in a natural
+// loss, so replay must be able to reach that same tick. Endless HP+count scale
+// unbounded, so ~90 sim-minutes is orders of magnitude past any human run yet
+// still ~10s in Node — comfortably inside the serverless timeout.
+export const REPLAY_TICK_CAP = 60 * 60 * 90
 
 function applyCmd(sim: Sim, cmd: Cmd): void {
   switch (cmd[0] as number) {

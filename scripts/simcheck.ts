@@ -23,7 +23,7 @@ import { runScriptedDemo } from '../src/game/attractScript'
 import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
 import { resolveBond, RANKED_WYRM_LEVEL, WYRM_MAX_LEVEL } from '../src/game/wyrms'
 import {
-  rankedConfig, RunRecorder, replayRun, verifyRun, SIM_VERSION, logHash,
+  rankedConfig, RunRecorder, replayRun, verifyRun, SIM_VERSION, logHash, REPLAY_TICK_CAP,
   type DeclaredHero, type RankedRunRecord,
 } from '../src/game/ranked'
 import type { TowerKind } from '../src/game/towers'
@@ -650,12 +650,14 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
 {
   const KINDS: TowerKind[] = ['cannon', 'frost', 'flame', 'storm', 'arcane']
   const HERO_IDS = ['ember', 'glacia', 'sylvan']
-  const REPLAY_CAP = 60 * 60 * 40 // matches ranked.ts REPLAY_TICK_CAP
+  // Build only through wave BUILD_UNTIL, then FREEZE the board — the endless
+  // curve (HP + count) keeps scaling past a static defence, so the run always
+  // reaches a NATURAL death well before any tick cap. That's what makes the
+  // positive test prove replay-to-DEATH (not replay-to-cap): a shared cap would
+  // false-green over the exact reject bug that matters most.
+  const BUILD_UNTIL = 10
 
-  // A deterministic bot that plays a ranked endless run to its natural DEATH
-  // (a deliberately capped, ~8-tower build always drowns), recording every
-  // successful command exactly as the live game would (stamped with sim.clock).
-  function driveRanked(seed: number): { rec: RankedRunRecord; score: number; wave: number; ops: Record<string, number> } {
+  function driveRanked(seed: number): { rec: RankedRunRecord; score: number; wave: number; state: string; ops: Record<string, number> } {
     const party: DeclaredHero[] = [{ heroId: 'ember' }, { heroId: 'glacia' }, { heroId: 'sylvan' }]
     const sim = new Sim(rankedConfig('endless', seed, party))
     const rec = new RunRecorder()
@@ -664,9 +666,10 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
     const cells = sim.buildCells()
     const towerIds: number[] = []
     let deployed = 0
-    const TOWER_CAP = 5
+    const TOWER_CAP = 3
+    const HERO_CAP = 1 // a thin, frozen board: guaranteed to be overrun by the curve
     let tick = 0
-    while (sim.state !== 'won' && sim.state !== 'lost' && tick <= REPLAY_CAP) {
+    while (sim.state !== 'won' && sim.state !== 'lost' && tick <= REPLAY_TICK_CAP) {
       if (sim.state === 'draft') {
         const idx = sim.draftsTaken % Math.max(1, sim.draftOffer.length)
         if (sim.chooseDraft(idx)) { rec.draft(idx); bump('draft') }
@@ -674,41 +677,43 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
         continue
       }
       const clock = sim.clock
+      const building = sim.waveIndex < BUILD_UNTIL // freeze the board afterwards
       // deploy the 3-hero party onto the back build cells, one per prep window
-      if (sim.state === 'prep' && deployed < 3 && tick > 30 && tick % 20 === 0) {
+      if (building && sim.state === 'prep' && deployed < HERO_CAP && tick > 30 && tick % 20 === 0) {
         const cell = cells[cells.length - 1 - deployed]
         if (sim.deployHero(HERO_IDS[deployed], cell.col, cell.row)) {
           rec.deploy(clock, HERO_IDS[deployed], cell.col, cell.row); bump('deploy'); deployed++
         }
       }
       // build out to the cap on the front cells, cycling elements
-      if (tick % 24 === 12 && towerIds.length < TOWER_CAP && towerIds.length < cells.length - 3) {
+      if (building && tick % 24 === 12 && towerIds.length < TOWER_CAP && towerIds.length < cells.length - 3) {
         const cell = cells[towerIds.length]
         const kind = KINDS[towerIds.length % KINDS.length]
         const t = sim.placeTower(kind, cell.col, cell.row)
         if (t) { rec.place(clock, kind, cell.col, cell.row); bump('place'); towerIds.push(t.id) }
       }
-      // pour every upgrade into tower #0 so it reaches a branch, then branch it
-      if (tick % 30 === 0 && towerIds.length > 0) {
+      // upgrade tower #0 toward a branch (covers upgrade + branch opcodes)
+      if (building && tick % 30 === 0 && towerIds.length > 0) {
         if (sim.upgradeTower(towerIds[0])) { rec.upgrade(clock, towerIds[0]); bump('upgrade') }
       }
-      if (tick % 90 === 40 && towerIds.length > 0) {
+      if (building && tick % 90 === 40 && towerIds.length > 0) {
         if (sim.chooseBranch(towerIds[0], (tick / 90) % 2 | 0)) { rec.branch(clock, towerIds[0], (tick / 90) % 2 | 0); bump('branch') }
       }
       // set targeting on the newest tower
-      if (tick % 55 === 5 && towerIds.length > 1) {
+      if (building && tick % 55 === 5 && towerIds.length > 1) {
         const id = towerIds[towerIds.length - 1]
         sim.setTargeting(id, 'Strong'); rec.target(clock, id, 'Strong'); bump('target')
       }
       // fuse the first two towers once they exist
-      if (tick === 260 && towerIds.length >= 2) {
+      if (building && tick === 260 && towerIds.length >= 2) {
         if (sim.fuseTowers(towerIds[0], towerIds[1])) { rec.fuse(clock, towerIds[0], towerIds[1]); bump('fuse') }
       }
-      // global spell + hero spell on cooldown
-      if (tick % 70 === 20 && sim.spellCd.meteor <= 0) {
+      // global spell + hero spell on cooldown — FROZEN after the build window too,
+      // so no active-play offense keeps the frozen board alive past the curve.
+      if (building && tick % 70 === 20 && sim.spellCd.meteor <= 0) {
         if (sim.castSpell('meteor' as SpellKey, 360, 500)) { rec.spell(clock, 'meteor', 360, 500); bump('spell') }
       }
-      if (tick % 65 === 25) {
+      if (building && tick % 65 === 25) {
         for (const h of sim.deployedHeroes()) {
           if (h.spellCd <= 0 && sim.castHeroSpell(h.id, h.x, h.y)) { rec.heroSpell(clock, h.id, h.x, h.y); bump('heroSpell'); break }
         }
@@ -720,11 +725,14 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
       sim.step()
       tick++
     }
-    return { rec: rec.record('endless', seed, 0, party, sim.score(), sim.waveIndex + 1), score: sim.score(), wave: sim.waveIndex + 1, ops }
+    return { rec: rec.record('endless', seed, 0, party, sim.score(), sim.waveIndex + 1), score: sim.score(), wave: sim.waveIndex + 1, state: sim.state, ops }
   }
 
   const seed = codeToSeed('AZURE-KOI-07') ?? 12345
   const run = driveRanked(seed)
+  // The run must end in a NATURAL DEATH before any cap — otherwise the positive
+  // replay below would only be proving replay-to-cap (a false green over the moat).
+  if (run.state !== 'lost') fail(`ranked driver did NOT die naturally (ended '${run.state}' at wave ${run.wave}) — the board isn't being overrun, so replay-to-death is unproven`)
   if (run.rec.log.c.length < 20) fail(`ranked driver recorded too few commands (${run.rec.log.c.length}) — bot may not be building`)
 
   // opcode coverage — every command KIND must round-trip through the replay
