@@ -1,0 +1,2 @@
+{ "note": "The Prism Wellspring — the player's base at the path end. wellspring.png = radiant/full-HP; wellspring-critical.png = greyed/cracked/near-dead. Crossfade by base HP.",
+  "base": { "name": "The Prism Wellspring", "full": "wellspring.png", "critical": "wellspring-critical.png" } }
