@@ -51,6 +51,22 @@ export interface EnemyDef {
   boss?: boolean // triggers extra screen juice on death / spawn
 }
 
+// LEAK DAMAGE — what the Prism Wellspring loses when THIS enemy reaches the base.
+// Deterministic and scaled by the enemy's ARCHETYPE STRENGTH (intrinsic tier via
+// def.hp + boss/elite), NOT its live wave-buffed maxHp — so it stays readable, is a
+// stable tooltip fact, and a gimmick "tanky runner" wave still only chips one pip.
+// Chip (swarm/runner/flyer/grunt = 1) → hurt (healer/bulwark = 2) → heavy (brute = 3)
+// → gut (bosses 8-9). An elite affix adds +1. Clamped to a sane [1,40] backstop.
+export function leakDamageFor(def: EnemyDef, elite = false): number {
+  let dmg: number
+  if (def.boss) dmg = 6 + Math.floor(def.hp / 450) // Keeper(900)→8, Titan(1400)→9 — near-lethal on a finale
+  else if (def.hp >= 200) dmg = 3 // Brute-class heavies
+  else if (def.hp >= 100) dmg = 2 // Bulwarks / Menders
+  else dmg = 1 // runners, sprites, flyers, grunts — the chip tier
+  if (elite) dmg += 1
+  return Math.max(1, Math.min(40, Math.round(dmg)))
+}
+
 export const ENEMIES: Record<EnemyKind, EnemyDef> = {
   runner: {
     kind: 'runner',

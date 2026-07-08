@@ -487,11 +487,16 @@ export class BattleScene extends Phaser.Scene {
     this.battleT += dt
     if (this.coachStep !== 'off' && this.coachStep !== 'done') this.runCoach()
 
-    // danger line: one in-voice rally when lives first dip below 35%
-    if (!this.lowLivesBarked && this.sim.lives > 0 && this.sim.lives < this.sim.startLives * 0.35) {
+    // danger line: one in-voice rally + a Wellspring warning when integrity first
+    // dips below 35% — the base is visibly fading and the player must be told.
+    if (!this.lowLivesBarked && this.sim.baseHp > 0 && this.sim.baseIntegrity < 0.35) {
       this.lowLivesBarked = true
       this.tryBark('lowLives')
+      this.hud.waveBanner('⚠ The Wellspring is fading!')
     }
+
+    // Drive the painted Wellspring's desaturate/crack state from base integrity.
+    this.view.setBaseIntegrity(this.sim.baseIntegrity)
 
     this.view.syncFrom(this.selectedId)
     this.view.render(dt)
@@ -598,6 +603,8 @@ export class BattleScene extends Phaser.Scene {
       target = 1 + k * 0.45
       bright = 1 + k * 0.18
     }
+    // DEFEAT: the Greying consumes the Wellspring — the whole world bleeds to grey.
+    if (this.sim.state === 'lost') { target = 0; bright = 0.82 }
     if (this.greySat < 0) this.greySat = target // no pop-in on the first frame
     this.greySat += (target - this.greySat) * Math.min(1, dt * 3)
     // SOUND THE GREYING — drive the shared audio lowpass off the SAME saturation
@@ -1344,7 +1351,7 @@ export class BattleScene extends Phaser.Scene {
         // DEATH TEACHES: diagnose the loss into one actionable lesson, and the
         // retry button replays the SAME seed — the player knows the whole plan.
         ftue.recordDefeat()
-        this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The crystal was overrun…', endless: false, lesson: this.buildDefeatLesson(), share: this.buildShare(false) })
+        this.hud.showResult({ win: false, title: 'THE COLOR IS LOST…', color: 0x8f8a99, stars: 0, coins: 0, diamonds: 0, shards: 0, unlocked: null, sub: 'The Greying consumed the Prism Wellspring.', endless: false, lesson: this.buildDefeatLesson(), share: this.buildShare(false) })
         this.tryBark('defeat') // Morose condoles — he always does
       }
     }
@@ -1544,13 +1551,19 @@ export class BattleScene extends Phaser.Scene {
         this.hitstopT = Math.max(this.hitstopT, 0.04)
         battleSfx.shieldBreak(panFor(ev.x))
         break
-      case 'leak':
-        this.hud.flash(0xff3b3b, 0.4)
-        this.view.shake(0.08)
+      case 'leak': {
+        // A breach on the Prism Wellspring: floating −N drain, edge flash + shake
+        // scaled to the bite, and a hero flinch. Bigger hits, bigger dread.
+        const heavy = ev.dmg >= 6 || ev.boss
+        this.hud.flash(0xff3b3b, heavy ? 0.6 : 0.4)
+        this.view.shake(heavy ? 0.16 : 0.08)
+        this.floatAt(ev.x, ev.y - 30, `−${ev.dmg}`, heavy ? 0xff3b6b : 0xff8a9a, heavy ? 32 : 24, 'crit')
         this.view.heroHurtAll() // the line broke — every fielded hero flinches
+        if (heavy) this.hitstopT = Math.max(this.hitstopT, 0.06)
         battleSfx.leak(ev.boss, panFor(ev.x))
         this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
+      }
       case 'towerFire':
         this.view.fxMuzzle(ev.x, ev.y, ev.tx, ev.ty, ev.color, ev.kind)
         battleSfx.shot(ev.kind, panFor(ev.x))

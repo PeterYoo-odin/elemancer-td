@@ -269,6 +269,17 @@ export class BattleView3D {
   private hoverMat!: THREE.MeshBasicMaterial
   private portalMesh!: THREE.Mesh
   private baseMesh!: THREE.Mesh
+  // THE PRISM WELLSPRING — the defended base. A procedural crystalline fount
+  // (baseMesh core + halo ring + light) that desaturates/cracks with HP, with an
+  // OPTIONAL painted billboard crossfade (radiant → critical) when the art exists.
+  private baseLight!: THREE.PointLight
+  private baseHalo!: THREE.Mesh
+  private baseHaloMat!: THREE.MeshBasicMaterial
+  private baseArt: THREE.Sprite | null = null // radiant/full-HP painting
+  private baseArtCrit: THREE.Sprite | null = null // greyed/cracked painting
+  private baseArtMat: THREE.SpriteMaterial | null = null
+  private baseArtCritMat: THREE.SpriteMaterial | null = null
+  private baseIntegrity = 1
   private buffDirty = true
 
   // shared kit materials (atlas map + role tint/emissive) — few draw-call state changes
@@ -821,16 +832,88 @@ export class BattleView3D {
     this.scene.add(portalMesh)
     this.portalMesh = portalMesh
 
+    const bx = wx(base.x)
+    const bz = wz(base.y)
+
+    // Procedural fount core — a faceted crystal that the HP-driven desaturation
+    // grips onto (the guaranteed fallback when the painted Wellspring is absent).
     const baseGeo = new THREE.OctahedronGeometry(0.5, 0)
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x2ff7c3, emissive: 0x2ff7c3, emissiveIntensity: 1.1, roughness: 0.25, metalness: 0.2, flatShading: true })
     this.disposables.push(baseGeo, baseMat)
     const baseMesh = new THREE.Mesh(baseGeo, baseMat)
-    baseMesh.position.set(wx(base.x), GROUND + 0.55, wz(base.y))
+    baseMesh.position.set(bx, GROUND + 0.55, bz)
     this.scene.add(baseMesh)
     this.baseMesh = baseMesh
     const baseLight = new THREE.PointLight(0x2ff7c3, 0.8, 8, 2)
     baseLight.position.copy(baseMesh.position)
     this.scene.add(baseLight)
+    this.baseLight = baseLight
+
+    // Radiant ground halo — a soft colour bloom on the floor that dims as HP falls.
+    const haloGeo = new THREE.RingGeometry(0.55, 1.25, 40)
+    this.baseHaloMat = new THREE.MeshBasicMaterial({ color: 0x2ff7c3, transparent: true, opacity: 0.42, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    this.disposables.push(haloGeo, this.baseHaloMat)
+    this.baseHalo = new THREE.Mesh(haloGeo, this.baseHaloMat)
+    this.baseHalo.rotation.x = -Math.PI / 2
+    this.baseHalo.position.set(bx, GROUND + 0.04, bz)
+    this.scene.add(this.baseHalo)
+
+    // OPTIONAL painted Wellspring billboards (radiant + critical), crossfaded by HP.
+    // Graceful fallback: if the art is missing the procedural fount above carries it.
+    const artBase = import.meta.env.BASE_URL + 'concepts/base/'
+    const mkArt = (file: string, initOpacity: number, primary: boolean, assign: (s: THREE.Sprite, m: THREE.SpriteMaterial) => void): void => {
+      new THREE.TextureLoader().load(
+        artBase + file,
+        (tex) => {
+          if (this.disposed) { tex.dispose(); return }
+          tex.colorSpace = THREE.SRGBColorSpace
+          tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+          this.disposables.push(tex)
+          const aspect = tex.image && tex.image.width ? tex.image.width / tex.image.height : 1
+          const h = 2.6
+          const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: initOpacity, depthWrite: false, depthTest: true })
+          this.disposables.push(mat)
+          const sprite = new THREE.Sprite(mat)
+          sprite.scale.set(h * aspect, h, 1)
+          sprite.position.set(bx, GROUND + h / 2, bz)
+          this.scene.add(sprite)
+          assign(sprite, mat)
+          // once the RADIANT painting exists, hand the core role over to it (the
+          // light + halo stay); the critical sprite only ever fades IN over it.
+          if (primary) this.baseMesh.visible = false
+          this.setBaseIntegrity(this.baseIntegrity) // re-apply current HP state to the new sprite
+        },
+        undefined,
+        () => { /* missing → procedural fount ships (graceful fallback) */ },
+      )
+    }
+    mkArt('wellspring.png', 1, true, (s, m) => { this.baseArt = s; this.baseArtMat = m })
+    mkArt('wellspring-critical.png', 0, false, (s, m) => { this.baseArtCrit = s; this.baseArtCritMat = m })
+  }
+
+  // Drive the Wellspring's health read: crossfade radiant→cracked art (or desaturate
+  // the procedural fount) so losing base HP literally looks like the world greying.
+  private static readonly BASE_FULL = new THREE.Color(0x2ff7c3)
+  private static readonly BASE_GREY = new THREE.Color(0x6b6b73)
+  setBaseIntegrity(frac: number): void {
+    const f = Math.max(0, Math.min(1, frac))
+    this.baseIntegrity = f
+    // colour bleeds from radiant teal toward ashen grey as HP drains
+    const tint = BattleView3D.BASE_FULL.clone().lerp(BattleView3D.BASE_GREY, 1 - f)
+    if (this.baseLight) { this.baseLight.color.copy(tint); this.baseLight.intensity = 0.28 + 0.62 * f }
+    if (this.baseHaloMat) { this.baseHaloMat.color.copy(tint); this.baseHaloMat.opacity = 0.1 + 0.36 * f }
+    if (this.baseArtMat && this.baseArtCritMat) {
+      // painted crossfade: radiant fades out and desaturates, cracked fades in
+      this.baseArtMat.opacity = Math.max(0.15, f)
+      this.baseArtMat.color.copy(BattleView3D.BASE_FULL.clone().lerp(BattleView3D.BASE_GREY, (1 - f) * 0.85))
+      this.baseArtCritMat.opacity = Math.min(1, (1 - f) * 1.3)
+    } else if (this.baseMesh) {
+      // procedural fount: desaturate + dim + shrink a touch as it cracks
+      const m = this.baseMesh.material as THREE.MeshStandardMaterial
+      m.color.copy(tint)
+      m.emissive.copy(tint)
+      m.emissiveIntensity = 0.18 + 0.92 * f
+    }
   }
 
   private setupHover(): void {
@@ -2682,6 +2765,24 @@ export class BattleView3D {
             )
           }
         }
+      }
+    }
+
+    // THE PRISM WELLSPRING: gentle hover + spin; at low integrity it shudders and
+    // the halo guts like a failing flame — the base visibly fighting the Greying.
+    {
+      const wob = this.baseIntegrity < 0.45 ? (1 - this.baseIntegrity / 0.45) : 0
+      const bob = Math.sin(this.clockT * 1.6) * 0.05 + (wob > 0 ? Math.sin(this.clockT * 34) * 0.03 * wob : 0)
+      if (this.baseMesh && this.baseMesh.visible) {
+        this.baseMesh.rotation.y += dt * 0.6
+        this.baseMesh.position.y = GROUND + 0.55 + bob
+        this.baseMesh.scale.setScalar(0.72 + 0.28 * this.baseIntegrity)
+      }
+      if (this.baseArt) this.baseArt.position.y = GROUND + this.baseArt.scale.y / 2 + bob
+      if (this.baseArtCrit) this.baseArtCrit.position.y = GROUND + this.baseArtCrit.scale.y / 2 + bob
+      if (this.baseHalo) {
+        this.baseHalo.scale.setScalar(1 + Math.sin(this.clockT * 2) * 0.05)
+        if (wob > 0) this.baseHaloMat.opacity *= 0.7 + Math.random() * 0.3
       }
     }
 

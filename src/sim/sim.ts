@@ -6,7 +6,7 @@
 //  touching a line of this file.
 // ============================================================================
 
-import { ENEMIES, type EnemyDef, type EnemyKind } from '../game/enemies'
+import { ENEMIES, leakDamageFor, type EnemyDef, type EnemyKind } from '../game/enemies'
 import { TOWERS, type TowerBranch, type TowerDef, type TowerKind, type TowerLevel } from '../game/towers'
 import { type LevelDef, type Wave } from '../game/levels'
 import { pathCellsFor, terrainDmgMul, terrainRngMul, terrainNoBuild, type TerrainKind } from '../game/paths'
@@ -143,6 +143,7 @@ export interface SimEnemy {
   dmgTakenMult: number // <1 = tanky affix; 1 = normal
   bounty: number // gold multiplier on kill (affix); 1 = normal
   regen: number // self-heal fraction of maxHp per second (Revenant affix)
+  leakDmg: number // Wellspring HP this enemy drains if it reaches the base (strength-scaled)
   // transient view hints
   hitFlash: number
 }
@@ -256,7 +257,7 @@ export type SimEvent =
   | { t: 'damage'; x: number; y: number; amount: number; eff: Effectiveness; combo: number }
   | { t: 'death'; x: number; y: number; kind: EnemyKind; color: number; boss: boolean }
   | { t: 'shieldBreak'; x: number; y: number; radius: number }
-  | { t: 'leak'; x: number; y: number; kind: EnemyKind; boss: boolean }
+  | { t: 'leak'; x: number; y: number; kind: EnemyKind; boss: boolean; dmg: number }
   | { t: 'towerFire'; x: number; y: number; tx: number; ty: number; color: number; kind: TowerKind }
   | { t: 'hit'; x: number; y: number; color: number }
   | { t: 'chain'; points: Array<[number, number]>; color: number; count: number; supercharged: boolean }
@@ -928,6 +929,7 @@ export class Sim {
       e.regen = affix.regen
       e.speedMult *= affix.speed
     }
+    e.leakDmg = leakDamageFor(def, e.elite) // strength-scaled Wellspring drain (post-elite so affixes count)
     e.hitFlash = 0
     if (keeper) {
       // first cast lands early so the twist is legible from the start
@@ -946,7 +948,7 @@ export class Sim {
       poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0,
       auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0,
       keeperId: '', keeperEcho: false, phase: 1, castAt: 0, castWarned: false, speedMult: 1,
-      elite: false, affix: '', affixColor: 0, dmgTakenMult: 1, bounty: 1, regen: 0, hitFlash: 0,
+      elite: false, affix: '', affixColor: 0, dmgTakenMult: 1, bounty: 1, regen: 0, leakDmg: 1, hitFlash: 0,
     }
     this.enemies.push(e)
     e.id = this.nextId++
@@ -1218,7 +1220,7 @@ export class Sim {
     keeperId: string; name: string; ability: KeeperAbility; abilityName: string; twist: string
     hp: number; maxHp: number; shield: number; shieldMax: number
     phase: number; phases: number; color: number; accent: number; echo: boolean
-    castIn: number; castEvery: number; telegraphing: boolean
+    castIn: number; castEvery: number; telegraphing: boolean; leakDmg: number
   } | null {
     let best: SimEnemy | null = null
     for (const e of this.enemies) {
@@ -1248,6 +1250,7 @@ export class Sim {
       castIn: Math.max(0, best.castAt - this.clock),
       castEvery: Math.max(KEEPER_MIN_CAST_GAP, k.castEvery * (best.keeperEcho ? ECHO_CAST_MULT : PHASE_CAST_MULT[best.phase - 1])),
       telegraphing: best.castWarned,
+      leakDmg: best.leakDmg,
     }
   }
 
@@ -1269,8 +1272,12 @@ export class Sim {
     }
     e.active = false
     const base = this.waypointFor('base')
-    this.loseLife(e.def.boss ? 5 : 1)
-    this.emit({ t: 'leak', x: base.x, y: base.y, kind: e.def.kind, boss: !!e.def.boss })
+    // Strength-scaled LEAK DAMAGE to the Prism Wellspring: a stable property of the
+    // enemy's ARCHETYPE (not its wave-buffed HP) so it stays readable and tooltip-able,
+    // and so a gimmick "tanky runner" wave still only chips. Chip → gut, by tier.
+    const dmg = e.leakDmg
+    this.loseLife(dmg)
+    this.emit({ t: 'leak', x: base.x, y: base.y, kind: e.def.kind, boss: !!e.def.boss, dmg })
   }
 
   // ---- towers -------------------------------------------------------------
@@ -2818,12 +2825,16 @@ export class Sim {
 
   // Dominant incoming armor + affinity for the pre-wave telegraph. When a
   // Corrupted Keeper walks in this wave, the telegraph says WHO by name.
-  waveTelegraph(): { armor: string; element?: Element; boss: boolean; keeperName?: string } {
+  waveTelegraph(): { armor: string; element?: Element; boss: boolean; keeperName?: string; leaks: { name: string; dmg: number }[]; worstLeak: number } {
     const wave = this.currentWave()
     const counts = new Map<string, number>()
     let element: Element | undefined
     let boss = false
     let keeperName: string | undefined
+    // Per-archetype LEAK preview so the Wellspring stakes are never a mystery: one
+    // row per distinct enemy in the wave, worst-first. Uses the SAME pure formula
+    // the sim applies on a real breach (intrinsic tier), so the number is honest.
+    const leakBy = new Map<string, { name: string; dmg: number }>()
     for (const entry of wave.entries) {
       const keeper = entry.kind === 'keeper' && entry.keeperId ? KEEPER_BY_ID[entry.keeperId] : undefined
       const def = keeper ? keeper.enemy : ENEMIES[entry.kind]
@@ -2831,12 +2842,23 @@ export class Sim {
       if (def.affinity) element = def.affinity
       if (def.boss) boss = true
       if (keeper && !keeperName) keeperName = entry.echo ? 'ECHOES OF THE FIVE' : keeper.name
+      const name = keeper ? keeper.name : def.name
+      if (!leakBy.has(name)) leakBy.set(name, { name, dmg: leakDamageFor(def) })
     }
     let armor = 'Unarmored'
     let max = -1
     for (const [k, v] of counts) if (v > max) { max = v; armor = k }
-    return { armor, element, boss, keeperName }
+    const leaks = [...leakBy.values()].sort((a, b) => b.dmg - a.dmg)
+    const worstLeak = leaks.reduce((m, l) => Math.max(m, l.dmg), 0)
+    return { armor, element, boss, keeperName, leaks, worstLeak }
   }
+
+  // ---- the Prism Wellspring (the base you defend) --------------------------
+  // `lives` IS the Wellspring's HP pool (per-level `startLives`); these read-only
+  // views give the HUD/renderer clear base-HP semantics without a parallel field.
+  get baseHp(): number { return Math.max(0, this.lives) }
+  get baseMaxHp(): number { return this.startLives }
+  get baseIntegrity(): number { return this.startLives > 0 ? clamp(this.lives / this.startLives, 0, 1) : 0 }
 
   liveEnemyCount(): number {
     let n = 0

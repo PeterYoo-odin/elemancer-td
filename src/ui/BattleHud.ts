@@ -100,8 +100,18 @@ const CSS = `
 .eld-stat .val { font-weight:800; font-size:22px; line-height:1; letter-spacing:.5px; font-variant-numeric: tabular-nums; }
 .eld-gold .ico { background: radial-gradient(circle at 35% 30%, #fff2b0, var(--gold)); color:#7a5600; }
 .eld-gold .val { color:#ffe27a; }
-.eld-life .ico { background: radial-gradient(circle at 35% 30%, #ffc3cf, var(--life)); color:#7a1024; }
-.eld-life .val { color:#ffd0da; }
+.eld-life .ico { background: radial-gradient(circle at 35% 30%, #cdefff, #37c9c1); color:#04323a; }
+.eld-life .val { color:#d6f6ff; font-size:18px; }
+/* THE PRISM WELLSPRING HP BAR — fill scales with base integrity; hue warms as it fails */
+.eld-hpbar { position:relative; width:104px; height:13px; border-radius:8px; overflow:hidden; flex:0 0 auto;
+  background: rgba(8,12,18,.72); border:1px solid rgba(255,255,255,.10); box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
+.eld-hpbar .fill { position:absolute; inset:0; transform-origin:left center; transform:scaleX(1);
+  background: linear-gradient(90deg,#2fe0c8,#6fe8ff); box-shadow:0 0 10px #2fe0c8aa;
+  transition: transform .35s cubic-bezier(.3,1,.4,1), background .5s ease, box-shadow .5s ease; }
+.eld-life.warn .eld-hpbar .fill { background: linear-gradient(90deg,#ffcf4a,#ff9b3c); box-shadow:0 0 10px #ffb347aa; }
+.eld-life.crit .eld-hpbar .fill { background: linear-gradient(90deg,#ff5b7a,#ff3b6b); box-shadow:0 0 13px #ff3b6bcc;
+  animation: hpcritpulse .9s ease-in-out infinite; }
+@keyframes hpcritpulse { 0%,100%{opacity:1} 50%{opacity:.5} }
 .eld-wave { margin-left:auto; }
 .eld-wave .val { color:#a8e9ff; font-size:18px; }
 .eld-levelname { position:absolute; top: calc(env(safe-area-inset-top,0px) + 62px); left:14px; font-size:12px; font-weight:700; color:#c9b6ff; opacity:.85; letter-spacing:1px; }
@@ -435,6 +445,7 @@ export class BattleHud {
   // top
   private goldVal: HTMLElement
   private livesVal: HTMLElement
+  private livesFill!: HTMLElement
   private waveVal: HTMLElement
   private comboEl: HTMLElement
   private telegraphEl: HTMLElement
@@ -505,8 +516,12 @@ export class BattleHud {
     const top = el('div', 'eld-top')
     const gold = el('div', 'eld-stat eld-gold pe')
     gold.append(this.iconDiv('$'), (this.goldVal = el('span', 'val', '0')))
+    // THE PRISM WELLSPRING — the base you defend, shown as a real HP bar (not hearts)
     const life = el('div', 'eld-stat eld-life pe')
-    life.append(this.iconDiv('♥'), (this.livesVal = el('span', 'val', '0')))
+    const hpbar = el('div', 'eld-hpbar')
+    this.livesFill = el('div', 'fill')
+    hpbar.append(this.livesFill)
+    life.append(this.iconDiv('◈'), hpbar, (this.livesVal = el('span', 'val', '0')))
     const wave = el('div', 'eld-stat eld-wave pe')
     wave.append((this.waveVal = el('span', 'val', 'WAVE 1')))
     this.comboEl = el('div', 'eld-combo') // combo chip: lives in the bar, in flow
@@ -522,11 +537,11 @@ export class BattleHud {
       foot: 'Fast kill streaks raise a combo multiplier that pays bonus gold.',
     }))
     attachTip(life, () => ({
-      tag: 'RESOURCE',
-      title: 'Lives',
-      accent: '#ff8fa5',
-      body: 'Every enemy that slips through steals a life. Lose them all and the level falls to the Greying.',
-      rows: this.simRef ? [{ k: 'Remaining', v: String(this.simRef.lives) }] : undefined,
+      tag: 'THE BASE',
+      title: 'The Prism Wellspring',
+      accent: '#6fe8ff',
+      body: 'The fount of colour you defend. Every enemy that reaches it drains Wellspring HP — weak runners chip, brutes bite, bosses gut it. At 0 the Greying takes the Wellspring and the level is lost.',
+      rows: this.simRef ? [{ k: 'Integrity', v: `${this.simRef.baseHp} / ${this.simRef.baseMaxHp}` }] : undefined,
     }))
     attachTip(wave, () => {
       const sim = this.simRef
@@ -741,10 +756,15 @@ export class BattleHud {
     this.displayGold += (sim.gold - this.displayGold) * 0.25
     if (Math.abs(this.displayGold - sim.gold) < 0.6) this.displayGold = sim.gold
     this.goldVal.textContent = String(Math.round(this.displayGold))
-    // lives: shake + flash red when the base takes a hit
+    // Wellspring HP: shake + flash when the base takes a hit; the fill bar tracks
+    // integrity and the whole chip warms warn→crit as the colour bleeds out.
     if (this.lastLives >= 0 && sim.lives < this.lastLives) this.popClass(this.lifeStat, 'hurt', 450)
     this.lastLives = sim.lives
-    this.livesVal.textContent = String(sim.lives)
+    this.livesVal.textContent = String(sim.baseHp)
+    const frac = sim.baseIntegrity
+    this.livesFill.style.transform = `scaleX(${frac.toFixed(3)})`
+    this.lifeStat.classList.toggle('warn', frac > 0.25 && frac <= 0.5)
+    this.lifeStat.classList.toggle('crit', frac > 0 && frac <= 0.25)
     this.waveVal.textContent = ctx.endless
       ? `WAVE ${sim.waveIndex + 1} ∞`
       : `WAVE ${Math.min(sim.waveIndex + 1, ctx.totalWaves)}/${ctx.totalWaves}`
@@ -865,8 +885,9 @@ export class BattleHud {
       rows: [
         { k: 'Phase', v: `${bs.phase} / ${bs.phases}`, c: '#ffe14a' },
         { k: 'Next cast', v: `${Math.ceil(bs.castIn)}s · ${bs.abilityName}`, c: '#ff8fa5' },
+        { k: 'Wellspring leak', v: `−${bs.leakDmg} HP`, c: '#ff6b8a' },
       ],
-      foot: 'Keepers are not slain — break the grey and they come home in colour.',
+      foot: 'Keepers are not slain — break the grey and they come home in colour. Let one reach the Wellspring and it guts the base.',
     }
   }
 
@@ -1138,18 +1159,23 @@ export class BattleHud {
       const m = GRID[dt]?.[armor] ?? 1
       return { k: dt, v: `×${m}`, c: m >= 1.25 ? '#8dff4a' : m <= 0.75 ? '#ff8a8a' : '#d8d0ff' }
     })
+    // WELLSPRING STAKES — how much base HP each of these foes drains if it breaks through.
+    for (const l of tg.leaks) {
+      rows.push({ k: `${l.name} leak`, v: `−${l.dmg} HP`, c: l.dmg >= 6 ? '#ff6b8a' : l.dmg >= 3 ? '#ffb14a' : '#9fe6ff' })
+    }
     let foot: string | undefined
     if (tg.element) {
       const counters = (Object.keys(WHEEL) as Element[]).filter((e) => WHEEL[e].strong.includes(tg.element!))
       foot = `${tg.element} foes take 1.5× from ${counters.join(' & ')} attacks — and 0.75× from what they resist.`
     }
+    const leakFoot = `Each breach drains the Wellspring by its leak value${tg.worstLeak >= 6 ? ' — this wave can gut it.' : '.'}`
     return {
       tag: tg.boss ? 'INCOMING · BOSS WAVE' : 'INCOMING WAVE',
       title: `${tg.armor} armor${tg.element ? ' · ' + tg.element : ''}`,
       accent: tg.boss ? '#ff8fa5' : '#a8e9ff',
-      body: 'Damage-type multipliers against this wave. Build toward the green.',
+      body: 'Damage-type multipliers against this wave, then the Wellspring HP each foe drains on a breach. Build toward the green.',
       rows,
-      foot,
+      foot: foot ? `${foot} ${leakFoot}` : leakFoot,
     }
   }
 

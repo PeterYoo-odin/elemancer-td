@@ -27,7 +27,9 @@ import type { SpellKey } from './spells'
 //  longer reproduces (an old log can't be re-run by new sim code). This keeps
 //  the board honest across balance patches instead of silently mis-verifying.
 // ---------------------------------------------------------------------------
-export const SIM_VERSION = 1
+// v2: the Prism Wellspring — leak damage is now strength-scaled per archetype
+// (was flat 1 / boss 5), so run outcomes shift; bump to invalidate old replays.
+export const SIM_VERSION = 2
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift
