@@ -1557,6 +1557,7 @@ export class BattleScene extends Phaser.Scene {
         const heavy = ev.dmg >= 6 || ev.boss
         this.hud.flash(0xff3b3b, heavy ? 0.6 : 0.4)
         this.view.shake(heavy ? 0.16 : 0.08)
+        this.view.enemyStrike(ev.x, ev.y, ev.kind, ev.boss) // wind-up → lunge → strike the base
         this.floatAt(ev.x, ev.y - 30, `−${ev.dmg}`, heavy ? 0xff3b6b : 0xff8a9a, heavy ? 32 : 24, 'crit')
         this.view.heroHurtAll() // the line broke — every fielded hero flinches
         if (heavy) this.hitstopT = Math.max(this.hitstopT, 0.06)

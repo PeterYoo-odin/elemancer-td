@@ -69,9 +69,11 @@ interface EnemySlot {
   prevY: number
   yaw: number // smoothed facing
   walkT: number // walk-bob phase, advances with movement speed
+  phase: number // per-member desync (swarm skitter / body sway) so clusters crawl
   animSpeed: number // 1 normal · <1 slowed · 0 stunned/frozen
   burning: boolean
   emberAcc: number // throttles burning-ember emission
+  streakAcc: number // throttles the runner's speed-streak wisps
   isAir: boolean
   // PRIMED aura pip — a small orbiting crystal in the painted element's colour,
   // so "one more different-element hit detonates" is readable at a glance.
@@ -177,6 +179,12 @@ interface HeroSlot {
   castUntil: number // clockT until which the CAST pose (spell/signature) plays
   hurtUntil: number // clockT until which the HURT recoil plays
   awakenUntil: number // clockT until which the level-3 AWAKENING flourish plays
+  // BASIC ATTACK: a directional thrust/lunge toward the target on each auto-attack,
+  // fired off the sim's fireFlash rising edge (view-only), then a recoil/settle.
+  atkUntil: number // clockT until which the basic-attack lunge plays
+  atkDx: number // world-space lunge direction toward the target (X)
+  atkDz: number // world-space lunge direction toward the target (Z)
+  prevFire: number // last-seen h.fireFlash, to detect a fresh shot
 }
 
 // painted cutout textures, keyed by heroId — shared across battles, never disposed
@@ -190,6 +198,49 @@ const HERO_ART_H = 1.55 // world-units tall — reads over towers without loomin
 const CAST_DUR = 0.5
 const HURT_DUR = 0.45
 const AWAKEN_DUR = 1.1
+const HERO_ATK_DUR = 0.3 // basic-attack thrust window (short — snaps out and settles)
+const _sigCol = new THREE.Color() // scratch: hero signature-colour cast flash (no per-frame alloc)
+
+// -------------------------------------------------------------------------
+// PER-ARCHETYPE LOCOMOTION — the fix for the "escalator" (sprites that slide
+// with no internal motion). Each painted billboard runs a procedural walk cycle
+// combining: a foot-plant vertical BOB, a step SQUASH-&-STRETCH (stomp on
+// plant), a rhythmic forward LEAN, a slow body SWAY, and per-type extras
+// (flyer WING-FLAP, swarm skitter JITTER). All VIEW-ONLY, driven off the fixed
+// sim clock; reduce-motion collapses every profile to a minimal bob. The cycle
+// RATE scales with the unit's move state via animSpeed (slow→drag, frozen→halt),
+// so status stays readable. `cyc` is baked per archetype so faster kinds stride
+// faster than heavy ones — a runner bounces, a brute trudges.
+// (Clean seam for a later pass: swap the sq/bob/lean drive for AI-posed frames.)
+interface LocoProfile {
+  cyc: number // stride phase advance (rad/s at animSpeed 1) — sets tempo
+  bob: number // vertical foot-plant hop amplitude (world units)
+  sq: number // squash-&-stretch amplitude (stomp depth on plant)
+  lean: number // rhythmic forward/back rock (radians of sprite tilt)
+  sway: number // slow weight-shift body sway (radians)
+  wing: number // flyer wing-flap horizontal scale pulse (0 = grounded)
+  jitter: number // swarm skitter horizontal displacement (world units)
+}
+const LOCO: Record<EnemyKind, LocoProfile> = {
+  // fast lean + bouncy stride — a sprinter with real air time
+  runner: { cyc: 22, bob: 0.13, sq: 0.15, lean: 0.11, sway: 0.03, wing: 0, jitter: 0 },
+  // steady infantry trudge
+  grunt: { cyc: 13, bob: 0.08, sq: 0.09, lean: 0.055, sway: 0.035, wing: 0, jitter: 0 },
+  // heavy slow trudge + deep stomp squash
+  brute: { cyc: 7.5, bob: 0.06, sq: 0.18, lean: 0.04, sway: 0.055, wing: 0, jitter: 0 },
+  // NO ground contact: hover sine + wing-flap oscillation
+  flyer: { cyc: 13, bob: 0.11, sq: 0.05, lean: 0.03, sway: 0.035, wing: 0.11, jitter: 0 },
+  // braced shuffle — short choppy steps, minimal sway
+  shielded: { cyc: 10, bob: 0.05, sq: 0.07, lean: 0.03, sway: 0.02, wing: 0, jitter: 0 },
+  // smooth float + robe sway
+  healer: { cyc: 10.5, bob: 0.085, sq: 0.05, lean: 0.02, sway: 0.07, wing: 0, jitter: 0 },
+  // rapid skitter with per-member phase so the cluster crawls (not marches)
+  swarm: { cyc: 30, bob: 0.10, sq: 0.13, lean: 0.06, sway: 0.045, wing: 0, jitter: 0.05 },
+  // set-piece finale: ponderous, ground-shaking stomp
+  boss: { cyc: 6, bob: 0.05, sq: 0.15, lean: 0.03, sway: 0.045, wing: 0, jitter: 0 },
+  // Corrupted Keeper — a slow, imperious advance
+  keeper: { cyc: 7, bob: 0.06, sq: 0.14, lean: 0.035, sway: 0.05, wing: 0, jitter: 0 },
+}
 
 interface Transient {
   obj: THREE.Object3D
@@ -197,7 +248,7 @@ interface Transient {
   geo?: THREE.BufferGeometry
   t: number
   life: number
-  kind: 'ring' | 'flash' | 'beam' | 'spark' | 'pop' | 'crack'
+  kind: 'ring' | 'flash' | 'beam' | 'spark' | 'pop' | 'crack' | 'strike'
   vx?: number
   vy?: number
   vz?: number
@@ -1342,7 +1393,7 @@ export class BattleView3D {
     this.scene.add(group)
     const slot: EnemySlot = {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
-      prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, isAir: !!def.isAir,
+      prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, phase: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, streakAcc: 0, isAir: !!def.isAir,
       auraPip: null, auraPipMat: null, crown, crownMat,
       art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false, prevShield: e.shieldMax,
     }
@@ -1655,6 +1706,8 @@ export class BattleView3D {
         s.prevX = e.x
         s.prevY = e.y
         s.yaw = 0
+        s.walkT = Math.random() * Math.PI * 2 // fresh gait phase (pool reuse)
+        s.phase = Math.random() * Math.PI * 2
         s.burning = false
         s.emberAcc = 0
         s.prevShield = e.shieldMax // fresh spawn: arm the Titan shield-break beat
@@ -1937,6 +1990,7 @@ export class BattleView3D {
       wyrm: null, wyrmMat: null, wyrmPhase: (h.id * 1.7) % (Math.PI * 2),
       phase: (h.id * 2.399963) % (Math.PI * 2), artBaseW: 0.9,
       castUntil: 0, hurtUntil: 0, awakenUntil: 0,
+      atkUntil: 0, atkDx: 0, atkDz: 0, prevFire: 0,
     }
 
     // bonded Chromatic Wyrm: a painted billboard that circles above the hero.
@@ -2002,12 +2056,23 @@ export class BattleView3D {
       s.orbMat.emissiveIntensity = 0.2
       s.glow.intensity = 0.08
       if (s.artMat) s.artMat.color.setHex(0x777486) // painted token drains to grey
+      s.prevFire = h.fireFlash // keep the edge-detector in sync so un-greying can't false-fire
       return
     }
     if (s.artMat) s.artMat.color.setHex(s.artTint)
     s.bodyMat.color.setHex(s.color)
     s.bodyMat.emissive.setHex(s.color)
     const flashing = h.fireFlash > 0
+    // BASIC-ATTACK LUNGE: the sim bumps fireFlash to 0.12 the instant a hero swings.
+    // Catch that rising edge → thrust toward the target (world dir from aimAngle:
+    // worldX∝simX, worldZ∝simY, so dir = (cos,sin) of aimAngle). Cast/signature use
+    // their own pose (castUntil), so don't lunge while a cast pose is playing.
+    if (h.fireFlash > s.prevFire + 1e-4 && s.castUntil <= this.clockT) {
+      s.atkUntil = this.clockT + HERO_ATK_DUR
+      s.atkDx = Math.cos(h.aimAngle)
+      s.atkDz = Math.sin(h.aimAngle)
+    }
+    s.prevFire = h.fireFlash
     s.bodyMat.emissiveIntensity = flashing ? 1.2 : 0.5
     s.glow.intensity = 0.9 + (flashing ? 1.6 : 0)
     // temporary Holy-Nova buff → brighten the crystal
@@ -2047,8 +2112,10 @@ export class BattleView3D {
     const cast = env(s.castUntil, CAST_DUR)
     const hurt = env(s.hurtUntil, HURT_DUR)
     const awaken = env(s.awakenUntil, AWAKEN_DUR)
+    const atk = env(s.atkUntil, HERO_ATK_DUR)
 
     let dy = 0, sx = 1, sy = 1, tilt = 0, glow = buffed ? 0.15 : 0
+    let lx = 0, lz = 0 // world-space lunge offset toward the target (basic attack)
 
     if (this.motionOk) {
       // idle: a slow breath (vertical squash+lift) plus an even slower weight shift
@@ -2058,13 +2125,27 @@ export class BattleView3D {
       sy += breath * 0.02
       sx -= breath * 0.012
       tilt += shift * 0.05
-      // CAST: an anticipatory dip then a forward lunge + stretch (sin arc peaks mid)
+      // BASIC ATTACK: a directional THRUST toward the target — snaps out fast, eases
+      // back. Suppressed while a CAST pose plays so the two never blur together.
+      if (atk > 0 && cast <= 0) {
+        const u = 1 - atk // 0→1 through the window
+        const push = u < 0.35 ? u / 0.35 : 1 - (u - 0.35) / 0.65 // fast out · slow settle
+        const amp = usingArt ? 0.22 : 0.18
+        lx = s.atkDx * push * amp
+        lz = s.atkDz * push * amp
+        dy -= push * 0.03 // slight forward dip into the swing
+        tilt += push * 0.06 * (s.atkDx >= 0 ? 1 : -1)
+      }
+      // CAST: a distinct pose — anticipatory PULL-BACK/crouch, then a proud SCALE-UP
+      // bloom (kept apart from the flat basic-attack thrust above).
       if (cast > 0) {
-        const pop = Math.sin(cast * Math.PI)
-        dy += pop * 0.16
-        sy += pop * 0.10
-        sx += pop * 0.05
-        tilt += (1 - cast) * 0.18 * (s.phase > Math.PI ? -1 : 1)
+        const u = 1 - cast
+        const anticip = Math.max(0, 1 - u * 4) // strong in the first quarter
+        const bloom = Math.sin(Math.min(1, u * 1.15) * Math.PI) // swell peaks late
+        dy += -anticip * 0.05 + bloom * 0.15
+        sy += -anticip * 0.05 + bloom * 0.14
+        sx += anticip * 0.06 - bloom * 0.02
+        tilt += anticip * 0.10 * (s.phase > Math.PI ? -1 : 1)
       }
       // HURT: a sharp recoil + high-frequency shudder that settles
       if (hurt > 0) {
@@ -2086,6 +2167,8 @@ export class BattleView3D {
     const flash = hurt
 
     body.position.y = baseY + dy
+    body.position.x = lx
+    body.position.z = lz
     body.scale.set(baseW * sx, baseH * sy, 1)
     if (usingArt && s.artMat) {
       s.artMat.rotation = tilt
@@ -2093,8 +2176,15 @@ export class BattleView3D {
       const g2 = Math.max(0, 1 - flash * 0.5)
       const b2 = Math.max(0, 1 - flash * 0.6)
       s.artMat.color.setRGB((1 + glow), g2 * (1 + glow * 0.7), b2 * (1 + glow * 0.7))
-      // fold in the equipped dye by multiplying — keeps skins tinted while lit
-      if (s.artTint !== 0xffffff && glow < 0.01 && flash < 0.01) s.artMat.color.setHex(s.artTint)
+      // CAST: bloom the flash toward the hero's SIGNATURE colour — a coloured flash,
+      // not a white one, so a signature reads distinctly (survives reduce-motion).
+      if (cast > 0.01) {
+        _sigCol.setHex(s.color)
+        s.artMat.color.lerp(_sigCol, Math.min(0.55, cast * 0.55))
+        s.artMat.color.addScalar(cast * 0.3) // keep it bright — it's a flash
+      }
+      // fold in the equipped dye by multiplying — keeps skins tinted while idle
+      if (s.artTint !== 0xffffff && glow < 0.01 && flash < 0.01 && cast < 0.01) s.artMat.color.setHex(s.artTint)
     } else {
       s.figure.rotation.z = tilt
     }
@@ -2232,6 +2322,43 @@ export class BattleView3D {
 
   fxHit(simX: number, simY: number, color: number): void {
     this.emitParticles(wx(simX), 0.7, wz(simY), color, 6, 2.2)
+  }
+
+  // ENEMY ATTACK ON THE BASE — an enemy vanishes the instant it reaches the
+  // Wellspring (it leaks and is gone), so the "strike" is a view-only ghost: a
+  // painted double of the breaching kind winds up just outside the base, LUNGES
+  // in to strike, then recoils and fades. Frame-locked with the leak SFX/shake
+  // (both fire on the same 'leak' event). No more sprites that just touch the end.
+  // View-only; reduce-motion skips the lunge (the shake/flash carry the beat).
+  enemyStrike(baseSimX: number, baseSimY: number, kind: EnemyKind, boss: boolean): void {
+    if (!this.motionOk) return
+    const art = enemyArtReady(kind)
+    if (!art) return
+    // approach direction: portal→base (cheap, path-agnostic). `dir` points OUT of
+    // the base toward where the enemy came from, so the ghost stages there.
+    const portal = this.sim.waypointFor('portal')
+    let dx = baseSimX - portal.x
+    let dz = baseSimY - portal.y
+    const len = Math.hypot(dx, dz) || 1
+    // world dir out of the base toward the approach (negate: from base back to portal)
+    dx = -dx / len
+    dz = -dz / len
+    const reach = boss ? 1.1 : 0.75
+    const h = boss ? 1.5 : 0.95
+    const gm = new THREE.SpriteMaterial({ map: art.tex, transparent: true, opacity: 0.98, depthWrite: false, toneMapped: false })
+    const ghost = new THREE.Sprite(gm)
+    ghost.userData.w0 = h * art.aspect
+    ghost.userData.h0 = h
+    ghost.userData.bx = wx(baseSimX)
+    ghost.userData.bz = wz(baseSimY)
+    ghost.userData.by = GROUND + h * 0.5
+    ghost.userData.dx = dx
+    ghost.userData.dz = dz
+    ghost.userData.reach = reach
+    ghost.scale.set(h * art.aspect, h, 1)
+    ghost.position.set(wx(baseSimX) + dx * reach, GROUND + h * 0.5, wz(baseSimY) + dz * reach)
+    this.scene.add(ghost)
+    this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.5 : 0.4, kind: 'strike', fade: false })
   }
 
   fxDeath(simX: number, simY: number, color: number, boss: boolean, kind?: EnemyKind): void {
@@ -2549,6 +2676,27 @@ export class BattleView3D {
           tr.obj.rotation.y += dt * 3
         }
         tr.obj.position.y += (tr.vy ?? 1.8) * (1 - k) * dt
+      } else if (tr.kind === 'strike') {
+        // wind-up (draw back) → snappy LUNGE past the base core → recoil out + fade.
+        // L = signed distance from the base along the approach dir (+ = outside).
+        const ud = tr.obj.userData
+        const reach = ud.reach as number
+        let L: number
+        let op: number
+        if (k < 0.25) {
+          L = reach * (1 + 0.35 * (k / 0.25)) // anticipation: pull back
+          op = 0.98
+        } else if (k < 0.5) {
+          const u = (k - 0.25) / 0.25
+          L = reach * 1.35 - reach * 1.5 * (u * u) // strike: accelerate in, punch past
+          op = 0.98
+        } else {
+          const u = (k - 0.5) / 0.5
+          L = -reach * 0.15 + reach * 0.7 * u // recoil out
+          op = 0.98 * (1 - u)
+        }
+        tr.obj.position.set((ud.bx as number) + (ud.dx as number) * L, ud.by as number, (ud.bz as number) + (ud.dz as number) * L)
+        ;(tr.mat as THREE.SpriteMaterial).opacity = op
       }
       if (tr.fade) {
         const m = Array.isArray(tr.mat) ? tr.mat[0] : tr.mat
@@ -2615,13 +2763,43 @@ export class BattleView3D {
         s.group.scale.setScalar(sc)
         if (p >= 1) s.spawnT = 0
       }
-      // procedural walk: bob hops + counter-phased squash/stretch; freezes when
-      // stunned/frozen (animSpeed 0) and drags when slowed — status you can SEE.
-      s.walkT += dt * 10 * s.animSpeed
-      const hop = Math.abs(Math.sin(s.walkT))
-      const stretch = 1 + Math.sin(s.walkT * 2) * 0.06 * s.animSpeed
-      let sqX = 1 / Math.sqrt(stretch)
-      let sqY = stretch
+      // PER-ARCHETYPE procedural walk cycle — the escalator fix. A foot-plant BOB,
+      // a step SQUASH-&-STRETCH (stomp on plant), a rhythmic forward LEAN + slow
+      // body SWAY, plus per-type extras (flyer wing-flap, swarm skitter jitter).
+      // Tempo (loco.cyc) is baked per kind; animSpeed drags it (slow) or halts it
+      // mid-step (frozen) so status still reads. Reduce-motion → a minimal bob only.
+      const loco = LOCO[s.kind]
+      s.walkT += dt * loco.cyc * s.animSpeed
+      const stride = Math.sin(s.walkT) // −1..1 gait phase (one full stride / 2π)
+      const hop = Math.abs(stride) // 0 at foot-plant · 1 at mid-step (2 plants/stride)
+      const plantC = hop - 0.5 // <0 near the plant (stomp) · >0 mid-air (stretch)
+      const moving = this.motionOk ? s.animSpeed : 0
+      // squash & stretch: wide + short on the plant (stomp), tall + narrow mid-step
+      const sqAmt = loco.sq * moving
+      let sqX = 1 - sqAmt * plantC
+      let sqY = 1 + sqAmt * plantC * 2
+      let leanRot = 0 // sprite tilt: forward rock + slow sway (billboard, screen-space)
+      let jitterX = 0 // swarm skitter side-step
+      let bob: number
+      if (s.isAir) {
+        // flyer: NO ground contact — a smooth hover sine + a fast wing-flap that
+        // pulses the silhouette wide/narrow. Wholly reduce-motion gated.
+        bob = this.motionOk ? loco.bob * Math.sin(this.clockT * 2.6 + s.phase) : 0
+        if (this.motionOk) {
+          const flap = loco.wing * Math.sin(this.clockT * 9 + s.phase)
+          sqX += flap
+          sqY -= flap * 0.4
+          leanRot = loco.lean * Math.sin(this.clockT * 2.2 + s.phase)
+        }
+      } else {
+        // grounded: hop between plants; drag on slow, halt on frozen. A trace of
+        // bob survives reduce-motion so the unit still breathes (task: "minimal bob").
+        bob = this.motionOk ? loco.bob * hop * s.animSpeed : loco.bob * 0.16 * hop
+        if (this.motionOk) {
+          leanRot = loco.lean * stride * s.animSpeed + loco.sway * Math.sin(s.walkT * 0.5 + s.phase) * s.animSpeed
+          jitterX = loco.jitter * Math.sin(s.walkT * 1.7 + s.phase) * s.animSpeed
+        }
+      }
       let hitK = 0
       if (s.hitT > 0) {
         s.hitT -= dt
@@ -2630,20 +2808,20 @@ export class BattleView3D {
         sqY *= 1 - hitK * 0.22
       }
       if (s.art) {
-        // painted billboard: same walk squash/stretch + hit punch, applied to the
-        // sprite's base dims. Facing is camera-locked (that's the billboard read).
+        // painted billboard: the full gait applied to the sprite's base dims. Facing
+        // is camera-locked (that's the billboard read); lean is a screen-space tilt.
         const w = s.art.userData.w as number
         const h = s.art.userData.h as number
         s.art.scale.set(w * sqX, h * sqY, 1)
         const y0 = s.art.userData.y0 as number
-        // subtle idle bob (walk hop for ground, gentle float for flyers); frozen
-        // static under reduce-motion so status still reads without motion.
-        const bob = this.motionOk ? (s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.06 : hop * 0.06 * s.animSpeed) : 0
         s.art.position.y = y0 + bob
+        s.art.position.x = jitterX
+        if (s.artMat) s.artMat.rotation = leanRot
         s.body.position.z = 0
-        // accent glow: gentle breathing pulse, flares white on a hit
+        // accent glow: gentle breathing pulse, flares white on a hit — tracks the token
         if (s.accentGlow && s.accentGlowMat) {
           s.accentGlow.position.y = s.art.position.y
+          s.accentGlow.position.x = jitterX
           // keeper telegraph → the accent glow flares as a readable "attack incoming"
           // tell; pulses when motion is on, else a static-but-brighter hold
           const tell = s.castWarned ? (this.motionOk ? 0.35 + 0.35 * Math.abs(Math.sin(this.clockT * 12)) : 0.5) : 0
@@ -2656,8 +2834,10 @@ export class BattleView3D {
         }
       } else {
         s.body.position.z = hitK > 0 ? -hitK * 0.09 : 0 // knockback nudge, opposite travel
+        s.body.position.x = jitterX
         s.body.scale.set(sqX, sqY, sqX)
-        s.body.position.y = s.isAir ? Math.sin(this.clockT * 3 + s.walkT) * 0.08 : hop * 0.07 * s.animSpeed
+        s.body.position.y = bob
+        s.body.rotation.z = leanRot
         if (s.isAir) s.body.rotation.y += dt * 1.4
       }
       // burning → embers (throttled per enemy so swarms stay cheap)
@@ -2666,6 +2846,16 @@ export class BattleView3D {
         if (s.emberAcc > 0.13) {
           s.emberAcc = 0
           this.emitParticles(s.group.position.x, s.group.position.y + 0.25, s.group.position.z, 0xff8a3c, 1, 1.1)
+        }
+      }
+      // runner speed-STREAK: a wisp trailing off the sprinter's heels while it's at
+      // full tilt — reinforces the "moving fast", not "sliding" read. Throttled;
+      // motion-gated; dies when the runner is slowed/frozen (animSpeed drops).
+      if (s.kind === 'runner' && this.motionOk && s.animSpeed > 0.6) {
+        s.streakAcc += dt
+        if (s.streakAcc > 0.055) {
+          s.streakAcc = 0
+          this.emitParticles(s.group.position.x, s.group.position.y + 0.12, s.group.position.z, s.accent, 1, 0.8)
         }
       }
       // billboard the hp bar toward camera in WORLD space (group may be yawed)
@@ -2792,8 +2982,9 @@ export class BattleView3D {
       s.orb.position.y = y0 + Math.sin(this.clockT * 2.6) * 0.06
       s.orb.rotation.y += dt * 2.2
       s.orb.rotation.x += dt * 1.1
-      s.figure.position.y = Math.abs(Math.sin(this.clockT * 2 + s.group.position.x)) * 0.05
-      if (s.art) s.art.position.y = (s.art.userData.y0 as number) + Math.abs(Math.sin(this.clockT * 2 + s.group.position.x)) * 0.05
+      // NB: the hero body's idle bob + attack/cast/hurt pose (position.y & lunge x/z)
+      // are owned by animateHeroPresence() in the sync pass — don't overwrite Y here,
+      // or the pose dip/rise gets clobbered every frame.
       s.ring.rotation.z += dt * 0.7
       s.ringMat.opacity = 0.72 + Math.sin(this.clockT * 3 + s.group.position.z) * 0.22
       s.glow.intensity = Math.max(s.glow.intensity, 0.9 + Math.sin(this.clockT * 2.4) * 0.18)
