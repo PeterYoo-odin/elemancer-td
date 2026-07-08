@@ -15,6 +15,8 @@ import { glyphIcon } from './icons'
 
 const CSS = `
 .haw { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center;
+  overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   background: radial-gradient(120% 90% at 50% 42%, rgba(12,7,26,.72), rgba(5,3,12,.95));
   backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; color: #efe9ff;
@@ -23,7 +25,8 @@ const CSS = `
 .haw.haw-out { animation: hawOut .4s ease both; }
 @keyframes hawIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes hawOut { from { opacity: 1; } to { opacity: 0; } }
-.haw-card { position: relative; width: min(440px, 92vw); text-align: center; padding: 8px; }
+.haw-card { position: relative; width: min(440px, 92vw); max-height: calc(100vh - 24px); overflow-y: auto;
+  text-align: center; padding: 8px; }
 .haw-bloom { position: absolute; left: 50%; top: 46%; width: 340px; height: 340px; margin: -170px 0 0 -170px;
   border-radius: 50%; pointer-events: none; opacity: .0;
   background: radial-gradient(circle, var(--hc,#b06bff) 0%, transparent 62%);

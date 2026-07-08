@@ -23,7 +23,8 @@ export function showReferralPanel(onClose?: () => void): void {
   ov.setAttribute('role', 'dialog')
   ov.setAttribute('aria-label', 'Invite friends')
   ov.style.cssText =
-    'position:fixed;inset:0;z-index:6100;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;' +
+    'position:fixed;inset:0;z-index:6100;display:flex;align-items:center;justify-content:center;overflow-y:auto;box-sizing:border-box;' +
+    'padding:max(18px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right)) max(18px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left));' +
     'background:rgba(8,5,18,.82);backdrop-filter:blur(5px);opacity:0;transition:opacity .4s ease;' +
     'font-family:"Baloo 2","Nunito",system-ui,sans-serif;color:#fff;'
 

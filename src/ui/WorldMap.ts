@@ -227,9 +227,9 @@ const CSS = `
   color: #efe9ff; font: inherit; font-size: 13px; font-weight: 800; letter-spacing: .1em; cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,.4); transition: transform .12s ease, border-color .2s ease; }
 .ewm-back:active { transform: scale(.94); }
-.ewm-title { flex: 1 1 auto; text-align: center; font-weight: 800; font-size: clamp(11px, 3.2vw, 14px);
+.ewm-title { flex: 1 1 auto; min-width: 0; text-align: center; font-weight: 800; font-size: clamp(11px, 3.2vw, 14px);
   letter-spacing: .26em; margin-right: -.26em; color: #cfc2f0; text-shadow: 0 2px 8px rgba(0,0,0,.8);
-  white-space: nowrap; overflow: hidden; }
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ewm-starchip { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px;
   border: 1px solid rgba(255,213,74,.35); background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
   font-size: 13px; font-weight: 800; color: #ffe08a; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
@@ -250,7 +250,7 @@ const CSS = `
   animation: ewmFade .3s ease both; cursor: pointer; }
 @keyframes ewmFade { from { opacity: 0; } to { opacity: 1; } }
 .ewm-banner.hide { opacity: 0; transition: opacity .28s ease; pointer-events: none; }
-.ewm-bcard { width: min(420px, 94vw); border-radius: 22px; overflow: hidden; text-align: center;
+.ewm-bcard { width: min(420px, 94vw); max-height: 90vh; overflow: hidden auto; -webkit-overflow-scrolling: touch; border-radius: 22px; text-align: center;
   background: linear-gradient(180deg, #1d1338 0%, #130c28 100%);
   border: 1px solid color-mix(in srgb, var(--a) 55%, rgba(255,255,255,.1));
   box-shadow: 0 30px 80px rgba(0,0,0,.7), 0 0 40px color-mix(in srgb, var(--a) 22%, transparent);
@@ -295,7 +295,7 @@ const CSS = `
   padding: 26px; background: rgba(4,2,12,.72); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
   animation: ewmFade .25s ease both; cursor: pointer; }
 .ewm-pre.hide { opacity: 0; transition: opacity .22s ease; pointer-events: none; }
-.ewm-pcard { position: relative; width: min(400px, 94vw); border-radius: 22px; text-align: center; padding: 22px 22px 20px;
+.ewm-pcard { position: relative; width: min(400px, 94vw); max-height: 90vh; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 22px; text-align: center; padding: 22px 22px 20px;
   background: linear-gradient(180deg, #1d1338 0%, #130c28 100%);
   border: 1px solid color-mix(in srgb, var(--a) 55%, rgba(255,255,255,.1));
   box-shadow: 0 30px 80px rgba(0,0,0,.7), 0 0 40px color-mix(in srgb, var(--a) 22%, transparent);

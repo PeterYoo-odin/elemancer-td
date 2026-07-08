@@ -108,8 +108,10 @@ const CSS = `
 .eld-gold .val { color:#ffe27a; }
 .eld-life .ico { background: radial-gradient(circle at 35% 30%, #cdefff, #37c9c1); color:#04323a; }
 .eld-life .val { color:#d6f6ff; font-size:18px; }
-/* THE PRISM WELLSPRING HP BAR — fill scales with base integrity; hue warms as it fails */
-.eld-hpbar { position:relative; width:104px; height:13px; border-radius:8px; overflow:hidden; flex:0 0 auto;
+/* THE PRISM WELLSPRING HP BAR — fill scales with base integrity; hue warms as it fails.
+   width clamps with the viewport so the gold+life+wave chips never overflow a 320px
+   phone (iPhone SE): caps at 104px on roomy screens, shrinks to 60px when narrow. */
+.eld-hpbar { position:relative; width:clamp(60px, 20vw, 104px); height:13px; border-radius:8px; overflow:hidden; flex:0 0 auto;
   background: rgba(8,12,18,.72); border:1px solid rgba(255,255,255,.10); box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
 .eld-hpbar .fill { position:absolute; inset:0; transform-origin:left center; transform:scaleX(1);
   background: linear-gradient(90deg,#2fe0c8,#6fe8ff); box-shadow:0 0 10px #2fe0c8aa;
@@ -120,6 +122,15 @@ const CSS = `
 @keyframes hpcritpulse { 0%,100%{opacity:1} 50%{opacity:.5} }
 .eld-wave { margin-left:auto; }
 .eld-wave .val { color:#a8e9ff; font-size:18px; }
+/* Narrow phones (iPhone SE / small Android): compress the stat chips so the
+   gold + life-bar + wave row fits on one line instead of clipping the wave chip. */
+@media (max-width: 400px) {
+  .eld-top { gap:6px; padding-left:8px; padding-right:8px; }
+  .eld-stat { padding:6px 10px; gap:6px; }
+  .eld-stat .val { font-size:18px; }
+  .eld-life .val { font-size:15px; }
+  .eld-wave .val { font-size:15px; }
+}
 .eld-levelname { position:absolute; top: calc(env(safe-area-inset-top,0px) + 62px); left:14px; font-size:12px; font-weight:700; color:#c9b6ff; opacity:.85; letter-spacing:1px; }
 
 /* combo readout lives IN the top bar (a stat chip) so it can never overlap
@@ -215,8 +226,13 @@ const CSS = `
 
 /* ---- overlays (draft / result / pause): the MODAL layer. Dim backdrop,
    centered content, sits above every panel and blocks board input. ---- */
+/* justify-content uses the "safe" keyword — with overflow-y:auto (added below),
+   plain center would push tall content (victory: title + stars + rewards + share
+   card + buttons) above scroll-origin on short landscape, clipping the top
+   unreachably. safe falls back to flex-start when overflowing so it stays scrollable. */
 .eld-ov { position:absolute; inset:0; z-index:40; background:rgba(10,6,22,.72); backdrop-filter:blur(3px);
-  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; text-align:center; }
+  display:flex; flex-direction:column; align-items:center; justify-content:safe center; gap:16px;
+  padding: calc(env(safe-area-inset-top,0px) + 24px) 24px calc(env(safe-area-inset-bottom,0px) + 24px); text-align:center; }
 .eld-ov h1 { font-size:44px; font-weight:900; margin:0; text-shadow:0 4px 0 rgba(0,0,0,.5); }
 .eld-ov .sub { font-size:18px; color:#d8d0ff; margin:-6px 0 2px; }
 .eld-cards { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; max-width:640px; }

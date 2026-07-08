@@ -93,8 +93,18 @@ const CSS = `
 @keyframes odspPulse { 0%, 100% { opacity: .35; } 50% { opacity: .95; } }
 
 .odsp-credit {
-  position: absolute; bottom: clamp(22px, 4vh, 40px); left: 0; right: 0; text-align: center;
+  position: absolute; bottom: calc(clamp(22px, 4vh, 40px) + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center;
   font-size: 11px; letter-spacing: .22em; margin-right: -.22em; color: #55555f;
+}
+/* short landscape: shrink the centred stack + lift the tap/credit lines so the
+   wordmark and "TAP TO ENTER" gate line never overlap (~440px tall) */
+@media (orientation: landscape) and (max-height: 500px) {
+  .odsp-center { gap: clamp(8px, 2vh, 14px); }
+  .odsp-emblem { width: clamp(80px, 16vh, 120px); }
+  .odsp-odin { font-size: clamp(36px, 9vh, 60px); }
+  .odsp-plat { font-size: clamp(13px, 3vh, 18px); }
+  .odsp-tap { bottom: clamp(14px, 5vh, 30px); }
+  .odsp-credit { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .odsp.odsp-shake .odsp-center { animation: none; }

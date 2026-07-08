@@ -50,7 +50,8 @@ const CSS = `
 .ewk-back { width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16); flex: 0 0 auto;
   background: rgba(255,255,255,.06); color: #e6ddff; font: inherit; font-size: 21px; cursor: pointer; }
 .ewk-back:active { transform: scale(.92); }
-.ewk-title { font-size: 21px; font-weight: 900; letter-spacing: .16em; color: #fff; margin-right: auto; }
+.ewk-title { font-size: 21px; font-weight: 900; letter-spacing: .16em; color: #fff;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ewk-chip { display: flex; align-items: center; gap: 5px; padding: 6px 11px 6px 9px; border-radius: 999px; flex: 0 0 auto;
   background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.13); font-weight: 800; font-size: 13.5px; }
 .ewk-chip.c1 { color: #ffe08a; } .ewk-chip.c2 { color: #c9f2ff; }

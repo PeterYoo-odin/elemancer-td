@@ -33,7 +33,8 @@ export function showWelcomeReward(onClose?: () => void): void {
   ov.setAttribute('role', 'dialog')
   ov.setAttribute('aria-label', 'Welcome bundle')
   ov.style.cssText =
-    'position:fixed;inset:0;z-index:6200;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;' +
+    'position:fixed;inset:0;z-index:6200;display:flex;align-items:center;justify-content:center;overflow-y:auto;box-sizing:border-box;' +
+    'padding:max(20px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));' +
     'background:radial-gradient(120% 90% at 50% 0%,rgba(60,30,90,.72),rgba(8,5,18,.92));backdrop-filter:blur(6px);' +
     'font-family:"Baloo 2","Nunito",system-ui,sans-serif;color:#fff;text-align:center;opacity:0;transition:opacity .5s ease;'
 
@@ -43,9 +44,9 @@ export function showWelcomeReward(onClose?: () => void): void {
 
   const panel = document.createElement('div')
   panel.style.cssText =
-    'position:relative;width:min(94vw,440px);box-sizing:border-box;padding:26px 22px 22px;border-radius:22px;' +
+    'position:relative;width:min(94vw,440px);max-height:calc(100vh - 40px);overflow-y:auto;box-sizing:border-box;padding:26px 22px 22px;border-radius:22px;' +
     'background:linear-gradient(180deg,#1c1136,#130b26);border:1px solid rgba(190,160,255,.4);' +
-    'box-shadow:0 20px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:14px;align-items:center;' +
+    'box-shadow:0 20px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:14px;align-items:center;flex:0 0 auto;' +
     'transform:scale(.9);transition:transform .5s cubic-bezier(.2,.9,.25,1);'
   ov.appendChild(panel)
 

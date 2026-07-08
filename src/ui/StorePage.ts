@@ -66,7 +66,8 @@ const CSS = `
 .est-head { display: flex; align-items: center; gap: 9px; padding: 12px 14px 8px; max-width: 620px; width: 100%; margin: 0 auto; }
 .est-back { width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16); flex: 0 0 auto;
   background: rgba(255,255,255,.06); color: #e6ddff; font-size: 21px; cursor: pointer; }
-.est-title { font-size: 21px; font-weight: 900; letter-spacing: .18em; color: #fff; margin-right: auto; }
+.est-title { font-size: 21px; font-weight: 900; letter-spacing: .18em; color: #fff;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .est-chip { display: flex; align-items: center; gap: 5px; padding: 6px 11px 6px 8px; border-radius: 999px; flex: 0 0 auto;
   background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.13); font-weight: 800; font-size: 13.5px; }
 .est-chip.c1 { color: #ffe08a; } .est-chip.c2 { color: #c9f2ff; } .est-chip.c3 { color: #e2c9ff; }

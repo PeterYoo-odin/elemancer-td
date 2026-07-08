@@ -26,6 +26,8 @@ const TIER_CLASS: Record<BondTier, string> = { perfect: 'perfect', good: 'good',
 
 const CSS = `
 .ebd { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   background: rgba(5,3,14,.8); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
   font-family: 'Baloo 2','Nunito',system-ui,'Segoe UI',Arial,sans-serif; color: #efe9ff;
   animation: ebdIn .25s ease both; -webkit-tap-highlight-color: transparent; }

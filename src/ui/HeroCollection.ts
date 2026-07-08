@@ -48,13 +48,14 @@ const CSS = `
   background:radial-gradient(120% 90% at 50% -10%, #2a1a5c 0%, #170e33 55%, #0e0822 100%); }
 .hc-scroll { position:absolute; inset:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding: calc(env(safe-area-inset-top,0px) + 8px) 12px calc(env(safe-area-inset-bottom,0px) + 24px); }
 
-/* header */
-.hc-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
-.hc-back { pointer-events:auto; padding:9px 16px; border:0; border-radius:14px; font:inherit; font-weight:900; font-size:16px; color:#fff; cursor:pointer;
+/* header — wraps on 320px so BONDS + wallet never clip off-screen (root is
+   overflow:hidden, so an un-wrapped row would push controls out of reach). */
+.hc-head { display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; margin-bottom:8px; }
+.hc-back { pointer-events:auto; padding:9px 16px; border:0; border-radius:14px; font:inherit; font-weight:900; font-size:16px; color:#fff; cursor:pointer; flex:0 0 auto;
   background:linear-gradient(180deg,#7b52d8,#4a2f9a); box-shadow:0 5px 14px rgba(0,0,0,.4); }
 .hc-back:active { transform:scale(.94); }
-.hc-title { font-size:26px; font-weight:900; letter-spacing:.5px; text-shadow:0 3px 0 rgba(0,0,0,.4); color:#ffd54a; -webkit-text-stroke:1px #7b2ff7; }
-.hc-wallet { margin-left:auto; display:flex; gap:8px; }
+.hc-title { min-width:0; font-size:clamp(20px,6.4vw,26px); font-weight:900; letter-spacing:.5px; text-shadow:0 3px 0 rgba(0,0,0,.4); color:#ffd54a; -webkit-text-stroke:1px #7b2ff7; }
+.hc-wallet { margin-left:auto; display:flex; gap:8px; flex:0 0 auto; }
 .hc-cur { display:flex; align-items:center; gap:5px; background:linear-gradient(180deg,#2f2258,#241a44); border:1px solid rgba(255,255,255,.14);
   border-radius:13px; padding:6px 11px; font-weight:900; font-size:15px; box-shadow:0 3px 10px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
 .hc-cur .ci { font-size:15px; }

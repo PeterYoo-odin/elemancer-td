@@ -296,9 +296,10 @@ function segRow(label: string, group: string, opts: Array<{ v: string; label: st
 
 const CSS = `
 .settings-overlay { position: fixed; inset: 0; z-index: 6000; display: flex; align-items: center; justify-content: center;
-  background: rgba(6,4,16,.72); backdrop-filter: blur(4px); opacity: 1; transition: opacity .2s ease; padding: 12px; }
+  background: rgba(6,4,16,.72); backdrop-filter: blur(4px); opacity: 1; transition: opacity .2s ease;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
 .settings-overlay.hide { opacity: 0; }
-.settings-card { width: min(520px, 96vw); max-height: 92vh; display: flex; flex-direction: column;
+.settings-card { width: min(520px, 96vw); max-height: calc(100vh - 24px); display: flex; flex-direction: column;
   background: linear-gradient(180deg, #241a44, #1a1436); border: 1px solid rgba(255,255,255,.14);
   border-radius: 18px; box-shadow: 0 24px 60px rgba(0,0,0,.55); color: #fff; overflow: hidden;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
