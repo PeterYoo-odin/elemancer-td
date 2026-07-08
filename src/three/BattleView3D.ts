@@ -23,6 +23,7 @@ import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import type { RealmBackdrop } from '../game/realmBackdrops'
 import { RealmAtmosphere } from './RealmAtmosphere'
+import { BoardLife } from './BoardLife'
 import { TERRAIN_META } from '../game/paths'
 import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
@@ -315,6 +316,14 @@ export class BattleView3D {
   private hitPoint = new THREE.Vector3()
 
   private boardMeshes: THREE.InstancedMesh[] = [] // grass + road instanced tiles
+  // Grey→colour reveal: as the realm is cleared (sim.colorProgress 0..1) the muted
+  // field regains its palette saturation — the board itself proves the thesis.
+  private groundInst?: THREE.InstancedMesh // === boardMeshes[0] (grass/build tiles)
+  private groundFull: THREE.Color[] = [] // per-instance target (full-saturation) colour
+  private groundGrey: THREE.Color[] = [] // per-instance desaturated floor colour
+  private groundHold: boolean[] = [] // terrain-hazard tiles: never mute (gameplay read)
+  private groundRevealQ = -1 // last quantised reveal level (throttles the re-tint)
+  private boardLife?: BoardLife // on-board weather + prism-road shimmer
   private detailGroup = new THREE.Group()
   private buildHighlight = new THREE.Group()
   private hoverMesh!: THREE.Mesh
@@ -473,6 +482,7 @@ export class BattleView3D {
     this.setupBackdrop()
     this.setupBoard()
     this.setupDetails()
+    this.setupBoardLife()
     this.setupBuildHighlight()
     this.setupParticles()
     this.setupMotes()
@@ -738,6 +748,9 @@ export class BattleView3D {
       const grassA = new THREE.Color(this.palette.grassA).lerp(white, 0.24)
       const grassB = new THREE.Color(this.palette.grassB).lerp(white, 0.24)
       const buildC = new THREE.Color(this.palette.build).lerp(white, 0.34)
+      this.groundFull = []
+      this.groundGrey = []
+      this.groundHold = []
       nonPath.forEach(([c, r, kind], i) => {
         dummy.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2), 0, wz(MAP_Y + r * TILE_PX + TILE_PX / 2))
         dummy.rotation.set(0, 0, 0)
@@ -748,22 +761,83 @@ export class BattleView3D {
         // (lava/high-ground/fog/…) so the tower-stat effect is visible on the board.
         const terr = this.sim.terrainAt(c, r)
         const base = kind === 'build' ? buildC : (c + r) % 2 === 0 ? grassA : grassB
-        if (kind === 'build' && terr !== '' && TERRAIN_META[terr]) {
-          inst.setColorAt(i, base.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55))
-        } else {
-          inst.setColorAt(i, base)
-        }
+        const isTerr = kind === 'build' && terr !== '' && !!TERRAIN_META[terr]
+        const full = isTerr ? base.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55) : base.clone()
+        // desaturated floor: pull toward the tile's own luminance-grey (keeps it a
+        // MUTED field, never a dead one — legibility contract, per the reduce-motion pass)
+        const lum = full.r * 0.3 + full.g * 0.59 + full.b * 0.11
+        const grey = full.clone().lerp(new THREE.Color(lum, lum, lum), 0.55)
+        this.groundFull.push(full)
+        this.groundGrey.push(grey)
+        this.groundHold.push(isTerr) // hazard tiles hold full colour — never muted
+        inst.setColorAt(i, full) // reveal pass tints below (muted at start when motionOk)
       })
       inst.instanceMatrix.needsUpdate = true
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true
       inst.frustumCulled = false
+      this.groundInst = inst
       this.boardMeshes.push(inst)
       this.scene.add(inst)
       this.disposables.push(groundGeo)
+      // Paint the initial reveal state: muted when animation is on (it climbs back to
+      // full as the realm clears); snap to full colour under reduce-motion (static).
+      this.groundRevealQ = -1
+      this.applyGroundReveal(this.motionOk ? this.sim.colorProgress() : 1)
     }
 
     this.setupRoad()
     this.setupEndpoints()
+  }
+
+  // Re-tint the grass/build field toward its palette as the realm is cleared.
+  // reveal 0 → muted field (desaturated floor); reveal 1 → full palette colour.
+  // Hazard tiles are pinned to full colour so the terrain read never fades. Cheap:
+  // only touched when the quantised reveal changes (a handful of times per battle).
+  private applyGroundReveal(reveal: number): void {
+    const inst = this.groundInst
+    if (!inst || !inst.instanceColor) return
+    // subtle: even at reveal 0 the field keeps 60% of its colour (mute = 0.4 max)
+    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.4
+    const tmp = new THREE.Color()
+    for (let i = 0; i < this.groundFull.length; i++) {
+      if (this.groundHold[i] || mute <= 0) tmp.copy(this.groundFull[i])
+      else tmp.copy(this.groundFull[i]).lerp(this.groundGrey[i], mute)
+      inst.setColorAt(i, tmp)
+    }
+    inst.instanceColor.needsUpdate = true
+  }
+
+  // Per-frame: drive the reveal off battle progress, throttled to ~2% steps so the
+  // full-board re-tint only fires when the clear fraction actually advances.
+  private updateGroundReveal(): void {
+    if (!this.groundInst || !this.motionOk) return // static (already full) when reduced
+    const prog = this.sim.colorProgress()
+    const q = Math.round(prog * 50)
+    if (q === this.groundRevealQ) return
+    this.groundRevealQ = q
+    this.applyGroundReveal(q / 50)
+  }
+
+  // On-board diorama layers (per-realm weather drifting across the plane + a
+  // prism-road shimmer flowing along the lane). Isolated + fail-soft: a throw
+  // here must never sink the board, so we swallow and continue on the bare tiles.
+  private setupBoardLife(): void {
+    try {
+      const path = this.pathCells.map(([c, r]) =>
+        new THREE.Vector3(wx(MAP_X + c * TILE_PX + TILE_PX / 2), 0, wz(MAP_Y + r * TILE_PX + TILE_PX / 2)))
+      // board world extent (with a small margin so weather crosses the whole plane)
+      const x0 = wx(MAP_X + TILE_PX / 2), x1 = wx(MAP_X + (COLS - 1) * TILE_PX + TILE_PX / 2)
+      const z0 = wz(MAP_Y + TILE_PX / 2), z1 = wz(MAP_Y + (ROWS - 1) * TILE_PX + TILE_PX / 2)
+      const bounds = {
+        minX: Math.min(x0, x1) - 0.6, maxX: Math.max(x0, x1) + 0.6,
+        minZ: Math.min(z0, z1) - 0.6, maxZ: Math.max(z0, z1) + 0.6,
+        y: GROUND,
+      }
+      this.boardLife = new BoardLife(this.scene, this.motionOk, this.backdrop?.key ?? 'emberwaste', path, bounds)
+    } catch (e) {
+      console.warn('BoardLife init failed — board renders without weather/shimmer', e)
+      this.boardLife = undefined
+    }
   }
 
   // Classify each ordered path cell → tile type + Y-rotation, then batch by type.
@@ -845,17 +919,32 @@ export class BattleView3D {
     }
   }
 
-  // Scatter trees / rocks / crystals on non-play (blocked) cells for life.
+  // Scatter per-realm props on non-play (blocked) cells so the board reads as a
+  // populated diorama, not a bare lane. Kept OFF gameplay tiles (build/path) and
+  // low/non-occluding. The mix + crystal glow are biased by realm (ruins & embers in
+  // Emberwaste, ice shards in Frostreach, foliage in Verdantwilds, …).
   private setupDetails(): void {
+    // per-realm prop weighting: [foliage<, rocks/ruins<] thresholds + crystal glow hue
+    const REALM_PROPS: Record<string, { tree: number; rocks: number; glow: number }> = {
+      emberwaste:     { tree: 0.10, rocks: 0.74, glow: 0xff7a3c }, // scorched ruins + ember shards
+      frostreach:     { tree: 0.12, rocks: 0.52, glow: 0x9fe8ff }, // ice shards + frosted rock
+      stormpeaks:     { tree: 0.16, rocks: 0.66, glow: 0xb69cff }, // storm-charged crags
+      verdantwilds:   { tree: 0.58, rocks: 0.84, glow: 0x8fe07a }, // dense foliage
+      radiantsanctum: { tree: 0.24, rocks: 0.56, glow: 0xffe6a0 }, // gilded ruins + light crystal
+      umbralvoid:     { tree: 0.10, rocks: 0.52, glow: 0xc07adf }, // void shards
+    }
+    const rp = REALM_PROPS[this.backdrop?.key ?? ''] ?? { tree: 0.34, rocks: 0.68, glow: 0x4ad9ff }
+    // Crystals carry the realm's signature glow (ice/ember/void) — cheap, shared mat.
+    this.detailCrystalMat.emissive.setHex(rp.glow)
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         if (this.sim.grid[r][c] !== 'blocked') continue
         const h = hash2(c * 3 + 1, r * 5 + 2)
-        if (h > 0.5) continue // only decorate ~half the blocked cells
+        if (h > 0.62) continue // populate ~62% of blocked cells (denser diorama)
         const pick = hash2(c * 7 + 3, r * 2 + 9)
         let name: string, mat: THREE.Material, blob: number, scale: number
-        if (pick < 0.34) { name = h < 0.25 ? 'detail-tree-large' : 'detail-tree'; mat = this.atlasBaseMat; blob = 0.28; scale = 0.9 + h }
-        else if (pick < 0.68) { name = h < 0.25 ? 'detail-rocks-large' : 'detail-rocks'; mat = this.atlasBaseMat; blob = 0.32; scale = 0.85 + h * 0.5 }
+        if (pick < rp.tree) { name = h < 0.25 ? 'detail-tree-large' : 'detail-tree'; mat = this.atlasBaseMat; blob = 0.28; scale = 0.9 + h }
+        else if (pick < rp.rocks) { name = h < 0.25 ? 'detail-rocks-large' : 'detail-rocks'; mat = this.atlasBaseMat; blob = 0.32; scale = 0.85 + h * 0.5 }
         else { name = h < 0.2 ? 'detail-crystal-large' : 'detail-crystal'; mat = this.detailCrystalMat; blob = 0.22; scale = 0.9 + h }
         const g = new THREE.Group()
         const obj = models.clone(name)
@@ -3064,6 +3153,16 @@ export class BattleView3D {
     this.updateParticles(dt)
     this.updateMotes()
     this.updateBackdrop(dt)
+    this.updateGroundReveal() // grey→colour as the realm is cleared (thesis on the board)
+    if (this.boardLife) {
+      try {
+        this.boardLife.update(dt, this.clockT)
+      } catch (e) {
+        console.warn('BoardLife update failed — dropping on-board layers', e)
+        this.boardLife.dispose()
+        this.boardLife = undefined
+      }
+    }
     this.updateTransients(dt)
 
     // bloom surge decay (0.45 = the calibrated base set in the constructor)
@@ -3111,6 +3210,9 @@ export class BattleView3D {
 
     // painted-backdrop atmosphere (its own geoms/mats/textures + camera-child frame)
     this.atmosphere?.dispose()
+    // on-board weather + prism-road shimmer
+    this.boardLife?.dispose()
+    this.boardLife = undefined
 
     // transients
     for (const tr of this.transients) {
