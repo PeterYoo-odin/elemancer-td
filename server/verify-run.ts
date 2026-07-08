@@ -23,8 +23,16 @@ export default async function handler(req: any, res: any): Promise<void> {
   const handle = typeof body?.handle === 'string' ? body.handle.slice(0, 24) : undefined
   if (!rec || !deviceHash) { res.status(400).json({ ok: false, reason: 'missing' }); return }
 
-  // 1) RE-RUN. This is the whole product: no trust, only replay.
-  const v = verifyRun(rec)
+  // 1) RE-RUN. This is the whole product: no trust, only replay. Guarded so a
+  //    malformed record can NEVER take the function down (opaque 500) — a bad
+  //    log becomes a clean JSON rejection, not FUNCTION_INVOCATION_FAILED.
+  let v: ReturnType<typeof verifyRun>
+  try {
+    v = verifyRun(rec)
+  } catch (e: any) {
+    res.status(400).json({ ok: false, reason: 'unparseable', error: String(e?.message || e).slice(0, 200) })
+    return
+  }
   if (!v.ok) { res.status(200).json({ ok: false, reason: v.reason, score: v.score, wave: v.wave }); return }
 
   try {
