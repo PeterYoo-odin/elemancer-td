@@ -387,6 +387,25 @@ const CSS = `
 }
 .eld-hud.reduced .eld-spell.ping { animation:none; }
 
+/* AFFORDABLE tell for the selected-tower panel: the moment your gold meets an
+   upgrade / branch / fusion cost the control flares once, then settles into a
+   gentle pulsing glow — the exact counterpart to the spell "ready" pulse, so
+   "you can act NOW" reads the same everywhere. Re-evaluated every frame, never
+   stale. */
+.eld-upg .up.can, .eld-upg .br.can { animation: eldaffordpulse 1.5s ease-in-out infinite; }
+@keyframes eldaffordpulse {
+  0%,100% { box-shadow:0 0 0 1px rgba(255,255,255,.3), 0 0 5px rgba(120,255,170,.4); }
+  50%     { box-shadow:0 0 0 1px rgba(255,255,255,.45), 0 0 17px 2px rgba(120,255,170,.78); }
+}
+.eld-upg .up.affordflash, .eld-upg .br.affordflash { animation: eldaffordflash .58s ease-out; }
+@keyframes eldaffordflash {
+  0%   { box-shadow:0 0 0 2px #baffcf, 0 0 26px 8px rgba(120,255,170,.95); filter:brightness(1.7) saturate(1.15); }
+  45%  { filter:brightness(1.3) saturate(1.08); }
+  100% { box-shadow:0 0 0 1px rgba(255,255,255,.3); filter:none; }
+}
+.eld-hud.reduced .eld-upg .up.can, .eld-hud.reduced .eld-upg .br.can,
+.eld-hud.reduced .eld-upg .up.affordflash, .eld-hud.reduced .eld-upg .br.affordflash { animation:none; }
+
 /* wave-clear toast: shares the reserved top-center band with the notify toast
    (the banner queue guarantees only ONE shows at a time). Brief (~1s), never
    parked over the board. */
@@ -596,6 +615,10 @@ export class BattleHud {
   // panels
   private upgradeEl: HTMLElement | null = null
   private overlayEl: HTMLElement | null = null
+  // affordability-gated controls in the OPEN selected-tower panel (upgrade tier,
+  // branch picks, fusion). Re-evaluated every frame off live gold so the button
+  // flips to enabled+glow the instant gold >= cost — with zero re-selection.
+  private upgAfford: { el: HTMLElement; cost: number; afford: boolean }[] = []
 
   // chat/log feed (barks + event lines) + dock-height tracking for the
   // edge-anchored panels that must clear the action bar exactly
@@ -973,6 +996,7 @@ export class BattleHud {
       }
     }
 
+    this.refreshUpgradeAfford(sim)
     this.updateHeroBar(sim, ctx)
     this.updateSynergy(sim)
     this.updateBossBar(sim)
@@ -1415,6 +1439,7 @@ export class BattleHud {
       const cost = sim.upgradeCostFor(t) ?? 0
       const afford = sim.gold >= cost
       const up = el('button', 'up pe' + (afford ? '' : ' no'), `UPGRADE  $${cost}`)
+      this.registerAfford(up, cost, afford)
       up.onclick = () => this.cb.onUpgrade(t.id)
       attachTip(up, () => {
         const tt = this.simRef?.towerById(id)
@@ -1438,6 +1463,7 @@ export class BattleHud {
         const cost = sim.branchCostFor(t, idx) ?? 0
         const afford = sim.gold >= cost
         const btn = el('button', 'br pe' + (afford ? '' : ' no'))
+        this.registerAfford(btn, cost, afford)
         btn.style.background = `linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
         btn.append(el('span', undefined, b.name), el('span', 'bb', b.blurb), el('span', 'bc', `$${cost}`))
         btn.onclick = () => this.cb.onBranch(t.id, idx)
@@ -1471,6 +1497,7 @@ export class BattleHud {
         for (const o of opts.slice(0, 2)) {
           const afford = sim.gold >= o.cost
           const btn = el('button', 'br pe' + (afford ? '' : ' no'))
+          this.registerAfford(btn, o.cost, afford)
           btn.style.background = `linear-gradient(180deg, ${hex(o.color)}, ${hex(o.color2)}66), linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
           btn.append(
             iconEl('span', '', `${iconMarkup('atom', { size: 13, color: '#fff' })} FUSE → ${escHud(o.name)}`),
@@ -1610,6 +1637,7 @@ export class BattleHud {
     if (this.upgradeEl) dismissTip() // the tooltip's anchor is about to vanish
     this.upgradeEl?.remove()
     this.upgradeEl = null
+    this.upgAfford = []
   }
 
   // ------------------------------------------------------------- draft
@@ -1793,6 +1821,31 @@ export class BattleHud {
 
   // ------------------------------------------------------------- floating fx
   // restartable one-shot CSS animation (reflow flush re-arms the keyframes)
+  // Register an affordability-gated control from the open tower panel so the
+  // per-frame refresh can flip its enabled/glow state live. `afford` is its
+  // state at build time (so we don't flash a control that was already affordable
+  // when the panel opened).
+  private registerAfford(btn: HTMLElement, cost: number, afford: boolean): void {
+    if (afford) btn.classList.add('can')
+    this.upgAfford.push({ el: btn, cost, afford })
+  }
+
+  // Re-evaluate the open selected-tower panel's affordability against live gold.
+  // Called every frame from update(): the instant gold crosses a control's cost
+  // it enables + flares + glows; the instant it drops below it dims back to the
+  // red-cost state. No stale state that only refreshes on tap/re-select.
+  private refreshUpgradeAfford(sim: Sim): void {
+    if (!this.upgradeEl || this.upgAfford.length === 0) return
+    for (const c of this.upgAfford) {
+      const afford = sim.gold >= c.cost
+      if (afford === c.afford) continue
+      c.afford = afford
+      c.el.classList.toggle('no', !afford)
+      c.el.classList.toggle('can', afford)
+      if (afford) this.popClass(c.el, 'affordflash', 600)
+    }
+  }
+
   private popClass(target: HTMLElement, cls: string, ms: number): void {
     target.classList.remove(cls)
     void target.offsetWidth
