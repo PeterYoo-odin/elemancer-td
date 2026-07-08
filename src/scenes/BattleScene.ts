@@ -1696,7 +1696,7 @@ export class BattleScene extends Phaser.Scene {
         // FRAME-LOCK: the distinct reaction SFX, the flash, the shake and the
         // music-duck all fire off THIS one event so the hit lands as a single
         // A/V punch (banners below are deferred cosmetics, not the hit).
-        this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
+        this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2, ev.key)
         this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)
         this.view.shake(0.05)
         if (!this.attract) haptic(HAPTIC.reaction) // sharp single bump on detonation

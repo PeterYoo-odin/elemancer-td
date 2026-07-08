@@ -202,6 +202,17 @@ const HURT_DUR = 0.45
 const AWAKEN_DUR = 1.1
 const HERO_ATK_DUR = 0.3 // basic-attack thrust window (short — snaps out and settles)
 const _sigCol = new THREE.Color() // scratch: hero signature-colour cast flash (no per-frame alloc)
+const _orbCol = new THREE.Color() // scratch: tower core idle colour-breath (no per-frame alloc)
+const _reactA = new THREE.Color() // scratch: reaction particle-ramp blend
+const _reactB = new THREE.Color()
+
+// Tower element-core (orb) idle glow: base emissive + how hard the idle breath
+// swells it. Kept modest so the bloom pass never blows the towers out (legibility).
+const ORB_EMISSIVE_BASE = 1.85
+const ORB_EMISSIVE_SWELL = 0.4
+const WHITE_COL = new THREE.Color(0xffffff)
+// per-kind phase offset so the five element cores breathe out of sync
+const KIND_PHASE: Record<TowerKind, number> = { cannon: 0, frost: 1.3, flame: 2.6, storm: 3.9, arcane: 5.2 }
 
 // -------------------------------------------------------------------------
 // PER-ARCHETYPE LOCOMOTION — the fix for the "escalator" (sprites that slide
@@ -250,12 +261,13 @@ interface Transient {
   geo?: THREE.BufferGeometry
   t: number
   life: number
-  kind: 'ring' | 'flash' | 'beam' | 'spark' | 'pop' | 'crack' | 'strike'
+  kind: 'ring' | 'flash' | 'beam' | 'spark' | 'pop' | 'crack' | 'strike' | 'decal'
   vx?: number
   vy?: number
   vz?: number
   baseScale?: number
   fade?: boolean
+  op0?: number // peak opacity (ground decals hold this, then fade)
 }
 
 const MAX_PARTICLES = 900
@@ -349,6 +361,7 @@ export class BattleView3D {
   // (iron/obsidian). The 'core' role uses orbMats — the palette-driven emissive.
   private towerMats = new Map<TowerKind, { body: THREE.MeshStandardMaterial; trim: THREE.MeshStandardMaterial; dark: THREE.MeshStandardMaterial }>()
   private orbMats = new Map<TowerKind, THREE.MeshStandardMaterial>()
+  private orbBaseCol = new Map<TowerKind, THREE.Color>() // element hue for the idle core breath
   private detailCrystalMat!: THREE.MeshStandardMaterial
   private blobTex!: THREE.CanvasTexture
   private blobMat!: THREE.MeshBasicMaterial
@@ -666,18 +679,26 @@ export class BattleView3D {
     // Per-element PBR-ish tower themes. Bodies/trims are hand-picked so each
     // element reads at a glance; the CORE (orbMats) carries the palette colour —
     // towers are pockets of restored colour, so the glow is what pops.
-    const THEME: Record<TowerKind, { body: number; bodyRough: number; bodyMetal: number; trim: number; trimRough: number; trimMetal: number; trimGlow: number; dark: number }> = {
-      cannon: { body: 0x8a96b4, bodyRough: 0.62, bodyMetal: 0.28, trim: 0xb9c7dd, trimRough: 0.34, trimMetal: 0.85, trimGlow: 0, dark: 0x3a4258 },
-      frost: { body: 0xe4f2fb, bodyRough: 0.42, bodyMetal: 0.05, trim: 0x9fdcf5, trimRough: 0.25, trimMetal: 0.1, trimGlow: 0.28, dark: 0x7d97ac },
-      flame: { body: 0x54424a, bodyRough: 0.6, bodyMetal: 0.15, trim: 0xc9884a, trimRough: 0.38, trimMetal: 0.8, trimGlow: 0.06, dark: 0x271c20 },
-      storm: { body: 0x6b6377, bodyRough: 0.55, bodyMetal: 0.35, trim: 0xd9b25e, trimRough: 0.3, trimMetal: 0.9, trimGlow: 0.05, dark: 0x393344 },
-      arcane: { body: 0xd7cdec, bodyRough: 0.5, bodyMetal: 0.08, trim: 0xe2c477, trimRough: 0.32, trimMetal: 0.85, trimGlow: 0.08, dark: 0x5b4c7f },
+    // bodyGlow: a low element-keyed emissive rim so each tower reads as a POCKET
+    // of restored colour against the grey board (kept ≤0.14 so bloom never washes
+    // it out). storm↔arcane are pulled apart in VALUE (dark slate vs pale lilac)
+    // AND warmed trims, so the two spire silhouettes never read the same.
+    const THEME: Record<TowerKind, { body: number; bodyRough: number; bodyMetal: number; trim: number; trimRough: number; trimMetal: number; trimGlow: number; dark: number; bodyGlow: number }> = {
+      cannon: { body: 0x8a96b4, bodyRough: 0.62, bodyMetal: 0.28, trim: 0xc2d0e6, trimRough: 0.32, trimMetal: 0.88, trimGlow: 0.05, dark: 0x3a4258, bodyGlow: 0.04 },
+      frost: { body: 0xe8f5fd, bodyRough: 0.4, bodyMetal: 0.05, trim: 0xa8e4fb, trimRough: 0.22, trimMetal: 0.12, trimGlow: 0.34, dark: 0x7d97ac, bodyGlow: 0.11 },
+      flame: { body: 0x5a4650, bodyRough: 0.58, bodyMetal: 0.15, trim: 0xd6924e, trimRough: 0.36, trimMetal: 0.82, trimGlow: 0.16, dark: 0x271c20, bodyGlow: 0.13 },
+      storm: { body: 0x4f495c, bodyRough: 0.52, bodyMetal: 0.4, trim: 0xe6bd5c, trimRough: 0.28, trimMetal: 0.92, trimGlow: 0.16, dark: 0x2b2636, bodyGlow: 0.11 },
+      arcane: { body: 0xe3daf6, bodyRough: 0.48, bodyMetal: 0.07, trim: 0xecd08a, trimRough: 0.3, trimMetal: 0.85, trimGlow: 0.18, dark: 0x5b4c7f, bodyGlow: 0.14 },
     }
     for (const kind of Object.keys(TOWERS) as TowerKind[]) {
       // equipped store skin = palette swap; falls back to the stock element color
       const col = towerPalette(kind).color
       const th = THEME[kind]
-      const body = new THREE.MeshStandardMaterial({ color: th.body, roughness: th.bodyRough, metalness: th.bodyMetal })
+      // body carries a faint element-coloured self-glow (the "colour the world lost")
+      const body = new THREE.MeshStandardMaterial({
+        color: th.body, roughness: th.bodyRough, metalness: th.bodyMetal,
+        emissive: col, emissiveIntensity: th.bodyGlow,
+      })
       const trim = new THREE.MeshStandardMaterial({
         color: th.trim, roughness: th.trimRough, metalness: th.trimMetal,
         emissive: th.trimGlow > 0 ? th.trim : 0x000000, emissiveIntensity: th.trimGlow,
@@ -686,9 +707,10 @@ export class BattleView3D {
       this.towerMats.set(kind, { body, trim, dark })
       this.disposables.push(body, trim, dark)
       const orb = new THREE.MeshStandardMaterial({
-        color: col, emissive: col, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.1, flatShading: true,
+        color: col, emissive: col, emissiveIntensity: ORB_EMISSIVE_BASE, roughness: 0.3, metalness: 0.1, flatShading: true, toneMapped: false,
       })
       this.orbMats.set(kind, orb)
+      this.orbBaseCol.set(kind, new THREE.Color(col))
       this.disposables.push(orb)
     }
 
@@ -1572,9 +1594,13 @@ export class BattleView3D {
       // colour so roles read at a glance. Skipped for swarm — dense clusters, and
       // the painted silhouette already carries the yellow read.
       if (e.kind !== 'swarm') {
-        const gmat = new THREE.SpriteMaterial({ map: this.enemyGlowTexture(), color: art.accent, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+        // saturated signature BACKLIGHT: the greyling body stays ashen (artMat is
+        // white), but this additive halo behind it burns in the archetype's colour
+        // so it reads ALIVE + menacing against the desaturated ground. Pulsed per
+        // frame (threat-keyed) in updateEnemySlot; frozen mid-value on reduce-motion.
+        const gmat = new THREE.SpriteMaterial({ map: this.enemyGlowTexture(), color: art.accent, transparent: true, opacity: 0.52, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
         const glow = new THREE.Sprite(gmat)
-        const gs = Math.max(w, artH) * 1.5
+        const gs = Math.max(w, artH) * (def.boss ? 1.7 : 1.55)
         glow.scale.set(gs, gs, 1)
         glow.position.y = posY
         glow.renderOrder = -1 // draw behind the billboard so it blooms around the edges
@@ -1942,6 +1968,22 @@ export class BattleView3D {
       s.crown.rotation.z = clock * 0.9
       const pulse = e.castWarned ? 0.55 + 0.45 * Math.sin(clock * 14) : 0.85
       s.crownMat.opacity = pulse
+    }
+
+    // signature BACKLIGHT breath: the halo swells with threat — a fast, hard pulse
+    // when a caster is winding up, a quicker beat when primed (a reaction is one hit
+    // away), a slow menace otherwise. Body stays grey; only this glow is chromatic.
+    if (s.accentGlowMat) {
+      const base = s.boss ? 0.62 : 0.5
+      if (this.motionOk) {
+        const spd = e.castWarned ? 9 : primed ? 5 : 2.3
+        const amp = e.castWarned ? 0.3 : primed ? 0.2 : 0.13
+        let op = base + Math.sin(clock * spd + s.phase) * amp
+        if (e.hitFlash > 0) op += 0.35 // struck → a bright flare of its own colour
+        s.accentGlowMat.opacity = Math.min(1, op)
+      } else {
+        s.accentGlowMat.opacity = base
+      }
     }
 
     // HP bar (centred plane; scales symmetrically — clean at this size)
@@ -2702,20 +2744,74 @@ export class BattleView3D {
   }
 
   // ELEMENTAL REACTION detonation: two-tone burst + shock ring + flash + camera bite.
-  fxReaction(simX: number, simY: number, radiusPx: number, color: number, color2: number): void {
+  // The `key` (optional) picks a lingering ground-decal flavour; the reaction's own
+  // two colours drive a richer 4-stop particle ramp so each of the nine reads chromatic.
+  fxReaction(simX: number, simY: number, radiusPx: number, color: number, color2: number, key?: string): void {
     const r = Math.max(60, radiusPx || 70)
     this.pushRing(simX, simY, r + 30, color, 0.95)
     this.spellFlash(simX, simY, r, color2, 1.6)
+    this.spellFlash(simX, simY, r * 0.62, color, 1.05) // inner element-keyed bloom core
     const x = wx(simX)
     const z = wz(simY)
-    this.emitParticles(x, 0.8, z, color, 22, 4.2)
-    this.emitParticles(x, 0.8, z, color2, 14, 3.4)
-    this.emitParticles(x, 0.9, z, 0xffffff, 8, 2.6)
+    // 4-stop ramp: primary → blended mid → secondary → white spark core
+    _reactA.setHex(color); _reactB.setHex(color2)
+    const mid = _reactA.lerp(_reactB, 0.5).getHex() // _reactA now holds the blend
+    this.emitParticles(x, 0.8, z, color, 20, 4.4)
+    this.emitParticles(x, 0.86, z, mid, 12, 3.7)
+    this.emitParticles(x, 0.8, z, color2, 14, 3.3)
+    this.emitParticles(x, 0.92, z, 0xffffff, 8, 2.6)
+    // lingering colored ground decal — the "colour + action" beat, and safe against
+    // the recessive-land discipline because it always fades back out.
+    this.fxGroundDecal(simX, simY, r, color, color2, key)
     this.shake(0.085)
     this.pushIn(0.35)
     // big reaction burst → briefly fade the backdrop's OWN ambient particles so the
     // gameplay FX own the frame (dynamic particle budget, not a fixed one)
     this.atmoReactFade = 1
+  }
+
+  // Colored ground decal left by a reaction (scorch / frost / spark / bloom). Reuses
+  // the shared soft-radial texture + the shared blob geometry (NO per-decal geometry
+  // alloc); routed through the transients pool so it auto-disposes. Under reduce-motion
+  // it still fires (it's a fade, not camera violence — matches spellFlash/pushRing).
+  private static readonly DECAL_FLAVOR: Record<string, 'scorch' | 'frost' | 'spark' | 'bloom'> = {
+    thermal: 'scorch', flashover: 'scorch', wildfire: 'scorch',
+    shatter: 'frost',
+    overgrow: 'bloom', blight: 'bloom',
+    eclipse: 'spark', conduct: 'spark', amplify: 'spark',
+  }
+  private fxGroundDecal(simX: number, simY: number, radiusPx: number, color: number, color2: number, key?: string): void {
+    const flavor = (key && BattleView3D.DECAL_FLAVOR[key]) || 'spark'
+    // scorch/bloom linger + spread; frost holds crisp; spark snaps quick & bright
+    const life = flavor === 'scorch' ? 1.5 : flavor === 'bloom' ? 1.35 : flavor === 'frost' ? 1.2 : 0.85
+    const peak = flavor === 'spark' ? 0.6 : flavor === 'frost' ? 0.55 : 0.5
+    const spread = flavor === 'bloom' || flavor === 'scorch' ? 1.35 : 1.15
+    const mat = new THREE.MeshBasicMaterial({
+      map: this.enemyGlowTexture(), color, transparent: true, opacity: peak,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    })
+    const mesh = new THREE.Mesh(this.blobGeo, mat)
+    mesh.rotation.x = -Math.PI / 2
+    mesh.position.set(wx(simX), GROUND + 0.02, wz(simY))
+    const rr = Math.max(0.5, wr(radiusPx) * spread)
+    mesh.scale.setScalar(rr)
+    mesh.renderOrder = -1 // sit under the units/particles so it reads as ground
+    this.scene.add(mesh)
+    this.transients.push({ obj: mesh, mat, t: 0, life, kind: 'decal', baseScale: rr, op0: peak })
+    // frost/bloom get a smaller two-tone inner heart in the secondary colour
+    if ((flavor === 'frost' || flavor === 'bloom') && color2 !== color) {
+      const mat2 = new THREE.MeshBasicMaterial({
+        map: this.enemyGlowTexture(), color: color2, transparent: true, opacity: peak,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      })
+      const m2 = new THREE.Mesh(this.blobGeo, mat2)
+      m2.rotation.x = -Math.PI / 2
+      m2.position.set(wx(simX), GROUND + 0.025, wz(simY))
+      m2.scale.setScalar(rr * 0.55)
+      m2.renderOrder = -1
+      this.scene.add(m2)
+      this.transients.push({ obj: m2, mat: mat2, t: 0, life: life * 0.85, kind: 'decal', baseScale: rr * 0.55, op0: peak })
+    }
   }
 
   fxSpell(key: string, simX: number, simY: number, radiusPx: number, color: number): void {
@@ -2845,6 +2941,14 @@ export class BattleView3D {
         }
         tr.obj.position.set((ud.bx as number) + (ud.dx as number) * L, ud.by as number, (ud.bz as number) + (ud.dz as number) * L)
         ;(tr.mat as THREE.SpriteMaterial).opacity = op
+      } else if (tr.kind === 'decal') {
+        // colored ground scorch/frost/spark/bloom: a quick grow-in, HOLD near full,
+        // then a soft fade to zero. It always vanishes — the land is never repainted.
+        const grow = Math.min(1, k / 0.12)
+        tr.obj.scale.setScalar((tr.baseScale ?? 1) * (0.8 + 0.2 * grow))
+        const hold = 0.4
+        const env = k < hold ? 1 : 1 - (k - hold) / (1 - hold)
+        ;(tr.mat as THREE.Material & { opacity: number }).opacity = (tr.op0 ?? 0.5) * env
       }
       if (tr.fade) {
         const m = Array.isArray(tr.mat) ? tr.mat[0] : tr.mat
@@ -3022,6 +3126,21 @@ export class BattleView3D {
 
     // hover pulse
     if (this.hoverMesh.visible) this.hoverMesh.scale.setScalar(1 + Math.sin(this.clockT * 6) * 0.06)
+
+    // element-core idle BREATH: the shared per-kind orb material slow-pulses its
+    // emissive (a living hue swell toward white at the peak) so every tower core
+    // reads as alive against the grey board. One write per kind (not per tower);
+    // frozen at the mid value under reduce-motion so the glow still reads.
+    for (const [kind, om] of this.orbMats) {
+      if (this.motionOk) {
+        const b = 0.5 + 0.5 * Math.sin(this.clockT * 1.7 + KIND_PHASE[kind])
+        om.emissiveIntensity = ORB_EMISSIVE_BASE + b * ORB_EMISSIVE_SWELL
+        const base = this.orbBaseCol.get(kind)
+        if (base) om.emissive.copy(_orbCol.copy(base).lerp(WHITE_COL, b * 0.14))
+      } else {
+        om.emissiveIntensity = ORB_EMISSIVE_BASE + ORB_EMISSIVE_SWELL * 0.5
+      }
+    }
 
     // towers: drop-in, eased aiming, fire recoil, idle sway, upgrade pulse, orbs
     for (const [, s] of this.towerViews) {
