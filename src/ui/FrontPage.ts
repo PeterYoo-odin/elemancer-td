@@ -51,7 +51,13 @@ function svg(path: string): string {
 const CSS = `
 .efp, .efp * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
 .efp {
-  position: fixed; inset: 0; z-index: 15; overflow: hidden; color: #efe9ff;
+  position: fixed; inset: 0; z-index: 15; color: #efe9ff;
+  /* Scrollable column: when the wallet + hero + full menu + footer exceed the
+     viewport (short phones, landscape), the page scrolls instead of crushing
+     the hero — which used to shrink to ~0 and bleed its logo over the neighbours.
+     Backgrounds below stay pinned with position:fixed (safe ONLY while .efp has
+     no transform/filter/will-change/contain — the leave anim is opacity-only). */
+  overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
   font-family: 'Baloo 2', 'Nunito', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
   display: flex; flex-direction: column; align-items: center;
   padding: calc(14px + env(safe-area-inset-top)) 20px calc(14px + env(safe-area-inset-bottom));
@@ -63,14 +69,15 @@ const CSS = `
   transition: opacity .28s ease;
 }
 .efp.efp-leave { opacity: 0; pointer-events: none; }
-/* painted key art behind everything (fades in once decoded + de-marked) */
-.efp-keyart { position: absolute; inset: 0; pointer-events: none; background-size: cover;
+/* painted key art behind everything (fades in once decoded + de-marked).
+   position:fixed so the background stays put while the menu scrolls over it. */
+.efp-keyart { position: fixed; inset: 0; pointer-events: none; background-size: cover;
   background-position: 50% 22%; opacity: 0; transition: opacity .9s ease; }
 .efp-keyart.on { opacity: .58; }
 .efp-keyart::after { content: ''; position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(12,8,26,.66) 0%, rgba(12,8,26,.22) 24%, rgba(12,8,26,.30) 52%, rgba(9,6,20,.86) 80%, rgba(7,5,16,.97) 100%); }
-.efp-motes { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.efp-vig { position: absolute; inset: 0; pointer-events: none;
+.efp-motes { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.efp-vig { position: fixed; inset: 0; pointer-events: none;
   background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0,0,0,.42) 100%); }
 .efp-top, .efp-hero, .efp-menu, .efp-foot { position: relative; }
 
@@ -112,7 +119,9 @@ const CSS = `
 .efp-gear:active { transform: scale(.92); }
 
 /* ---- hero block ---- */
-.efp-hero { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; }
+/* flex-grow to centre the wordmark when there's spare height, but NEVER shrink
+   below its own content (flex-shrink:0) — that collapse was the overlap bug. */
+.efp-hero { flex: 1 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 8px 0; text-align: center; }
 .efp-logo-wrap { position: relative; padding: 6px 10px; }
 .efp-logo, .efp-logo-sheen {
   font-family: 'Cinzel', 'Georgia', 'Times New Roman', serif; font-weight: 900;
@@ -204,15 +213,19 @@ const CSS = `
 .efp-btn.efp-primary .efp-chev { color: rgba(70,45,0,.55); }
 
 /* ---- footer ---- */
-.efp-foot { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 4px; }
-.efp-best { font-size: 12px; font-weight: 700; letter-spacing: .08em; color: #ffb27a; }
+/* flex-shrink:0 keeps the credit line from being squeezed away; margin-top:auto
+   pins it to the bottom of the column when the page is taller than its content. */
+.efp-foot { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 8px; }
+.efp-best { font-size: 12px; font-weight: 700; letter-spacing: .08em; color: #ffb27a; font-variant-numeric: tabular-nums; }
 .efp-credit { display: flex; align-items: center; gap: 7px; font-size: 10.5px; letter-spacing: .18em; color: #6a5f92; }
 .efp-credit img { height: 15px; width: auto; opacity: .85; }
 
 /* ---- modals (settings / rewards) ---- */
-.efp-overlay { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+/* position:fixed (not absolute) so the modal covers the viewport even when the
+   menu underneath has been scrolled down. */
+.efp-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
   background: rgba(4,2,12,.68); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
-  animation: efpFade .22s ease both; padding: 24px; }
+  animation: efpFade .22s ease both; padding: 24px; overflow-y: auto; }
 @keyframes efpFade { from { opacity: 0; } to { opacity: 1; } }
 .efp-card { width: min(400px, 92vw); border-radius: 20px; padding: 22px 22px 18px;
   background: linear-gradient(180deg, #201640 0%, #170f30 100%);
@@ -245,11 +258,29 @@ const CSS = `
 .efp-lic { margin-top: 14px; text-align: center; font-size: 10px; letter-spacing: .06em; line-height: 1.6; color: #8b7fb5; }
 .efp-lic a { color: #b3a5e0; }
 
-@media (max-height: 640px) {
-  .efp-hero { gap: 8px; }
+/* Short viewports (small phones, split-screen): compress so the common cases
+   still fit on one screen; taller stacks fall back to scrolling. */
+@media (max-height: 720px) {
+  .efp-hero { gap: 9px; padding: 4px 0; }
+  .efp-logo, .efp-logo-sheen { font-size: clamp(34px, 9vw, 64px); }
   .efp-menu { gap: 8px; }
   .efp-btn { padding: 9px 14px; }
   .efp-btn.efp-primary { padding: 11px 14px; }
+  .efp-ic { width: 38px; height: 38px; }
+}
+@media (max-height: 560px) {
+  .efp-hero { gap: 6px; padding: 2px 0; }
+  .efp-orbs, .efp-tag { display: none; }
+  .efp-btn { padding: 8px 13px; }
+  .efp-btn .efp-bsub { display: none; }
+  .efp-btn.efp-primary .efp-bsub { display: block; }
+}
+/* Landscape phones: very short + wide — the full stack cannot fit, so cap the
+   wordmark, drop ornamental rules, and lean on scroll for the long menu. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .efp-hero { gap: 6px; padding: 2px 0; }
+  .efp-logo, .efp-logo-sheen { font-size: clamp(30px, 6vw, 52px); }
+  .efp-orbs, .efp-tag { display: none; }
 }
 `
 
