@@ -24,8 +24,9 @@ import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL, 
 import { KEEPER_BY_ID } from '../game/keepers'
 import { realmForLevel, REALMS } from '../game/levels'
 import { realmBackdrop } from '../game/realmBackdrops'
-import { playMoroseHush } from '../ui/sfx'
-import { battleSfx } from '../ui/battleSfx'
+import { playMoroseHush, setSpectralOpenness, spectralDip, duckPunch, stepDuck, resetAudioScene } from '../ui/sfx'
+import { battleSfx, panFor } from '../ui/battleSfx'
+import { heroVo } from '../ui/vo'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
 import { recordDailyResult } from '../game/daily'
 import { weeklyPlan, planHeadline, recordWeeklyBest, type WeeklyPlan } from '../game/events'
@@ -170,6 +171,8 @@ export class BattleScene extends Phaser.Scene {
 
   create(): void {
     music.setTrack('battle')
+    // per-realm musical colour for the adaptive tension bed
+    music.setRealm(this.endless ? undefined : realmForLevel(this.levelId).id)
     // ---- run config ----
     const baseLevel = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
     // Heroic scales the waves (deterministic, harder); other modes leave waves intact.
@@ -412,6 +415,7 @@ export class BattleScene extends Phaser.Scene {
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
     this.updateGreying(dt)
+    this.updateAudioBed(dt)
     this.battleT += dt
     if (this.coachStep !== 'off' && this.coachStep !== 'done') this.runCoach()
 
@@ -528,10 +532,48 @@ export class BattleScene extends Phaser.Scene {
     }
     if (this.greySat < 0) this.greySat = target // no pop-in on the first frame
     this.greySat += (target - this.greySat) * Math.min(1, dt * 3)
+    // SOUND THE GREYING — drive the shared audio lowpass off the SAME saturation
+    // the canvas filter uses, frame-locked. Grey = muffled, colour = open, the
+    // victory bloom (greySat→~1.45) sweeps the whole mix wide open.
+    setSpectralOpenness(this.greySat)
     const sat = Math.round(this.greySat * 200) / 200 // quantise → no per-frame string churn
     const br = Math.round(bright * 200) / 200
     const filter = sat >= 0.995 && br >= 0.995 && br <= 1.005 ? '' : `saturate(${sat}) brightness(${br})`
     if (this.view.canvas.style.filter !== filter) this.view.canvas.style.filter = filter
+  }
+
+  // ADAPTIVE MUSIC + SIDECHAIN, stepped once per frame off the same clock as the
+  // greying (frame-lock). Intensity rises with active combat / wave depth / boss
+  // presence; the tension bed layers up and the music bed ducks under the SFX RMS.
+  private bossOnField = false
+  private updateAudioBed(dt: number): void {
+    const s = this.sim
+    let boss = false
+    let live = 0
+    for (const e of s.enemies) {
+      if (!e.active) continue
+      live++
+      if (e.def.boss) boss = true
+    }
+    if (boss !== this.bossOnField) {
+      this.bossOnField = boss
+      music.setBoss(boss)
+    }
+    // 0 = calm prep, ramps through the wave, peaks with a boss + a swarm.
+    let intensity = 0
+    if (s.state === 'active') {
+      const wave = Math.min(1, (s.waveIndex + 1) / Math.max(1, this.level.waves.length))
+      const swarm = Math.min(1, live / 14)
+      intensity = 0.35 + 0.35 * wave + 0.3 * swarm
+      if (boss) intensity = Math.max(intensity, 0.9)
+    } else if (s.state === 'won' || s.state === 'lost') {
+      intensity = 0
+    } else {
+      intensity = 0.15 // prep/draft — a low simmer
+    }
+    music.setIntensity(intensity)
+    music.stepBed(dt)
+    stepDuck(dt)
   }
 
   // ======================================================================
@@ -1284,8 +1326,8 @@ export class BattleScene extends Phaser.Scene {
       }
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
-        battleSfx.kill(this.sim.comboCount, ev.boss)
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); this.tryBark('kill') }
+        battleSfx.kill(this.sim.comboCount, ev.boss, panFor(ev.x))
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); duckPunch(0.6); this.tryBark('kill') }
         // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
         if (ev.kind !== 'keeper' && unlockEnemyCodex(ev.kind)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         break
@@ -1294,26 +1336,30 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxAoe(ev.x, ev.y, ev.radius + 20, 0x9fdcff, 0.9)
         this.view.shake(0.05)
         this.hitstopT = Math.max(this.hitstopT, 0.04)
-        battleSfx.shieldBreak()
+        battleSfx.shieldBreak(panFor(ev.x))
         break
       case 'leak':
         this.hud.flash(0xff3b3b, 0.4)
         this.view.shake(0.08)
-        battleSfx.leak(ev.boss)
+        battleSfx.leak(ev.boss, panFor(ev.x))
         this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
       case 'towerFire':
         this.view.fxMuzzle(ev.x, ev.y, ev.tx, ev.ty, ev.color, ev.kind)
-        battleSfx.shot(ev.kind)
+        battleSfx.shot(ev.kind, panFor(ev.x))
         break
       case 'hit':
         this.view.fxHit(ev.x, ev.y, ev.color)
-        battleSfx.hit()
+        battleSfx.hit(panFor(ev.x))
         break
       case 'chain':
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
         // (renamed from SHATTER — that name now belongs to the Water+Storm reaction)
-        if (ev.supercharged) { this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12); battleSfx.reaction() }
+        if (ev.supercharged) {
+          this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12); duckPunch(0.4)
+          const tip = ev.points[ev.points.length - 1]
+          battleSfx.reaction(undefined, tip ? panFor(tip[0]) : 0)
+        }
         if (ev.count > 1) {
           const last = ev.points[ev.points.length - 1]
           this.floatAt(last[0], last[1], `CHAIN ×${ev.count}`, 0xffe14a, 20)
@@ -1349,7 +1395,7 @@ export class BattleScene extends Phaser.Scene {
         break
       case 'spell':
         this.view.fxSpell(ev.key, ev.x, ev.y, ev.radius, ev.color)
-        battleSfx.spell(ev.key === 'meteor')
+        battleSfx.spell(ev.key === 'meteor', panFor(ev.x))
         if (ev.key === 'meteor') this.hud.flash(0xffb15c, 0.35)
         else if (ev.key === 'freeze') { this.hud.flash(0x9fdcff, 0.4); if (ev.count > 0) this.hud.banner(`FROZEN ×${ev.count}!`, ev.color) }
         else this.floatAt(ev.x, ev.y, `+${ev.count} GOLD!`, 0xffd54a, 30)
@@ -1358,16 +1404,19 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxHeroDeploy(ev.x, ev.y, ev.color, ev.radius)
         this.hud.flash(ev.color, 0.25)
         battleSfx.heroDeploy()
+        heroVo(undefined, 'deploy', panFor(ev.x))
         break
       case 'heroFire':
         this.view.fxHeroFire(ev.x, ev.y, ev.tx, ev.ty, ev.color)
-        battleSfx.shot('hero')
+        battleSfx.shot('hero', panFor(ev.x))
         break
       case 'heroSpell':
         this.view.fxHeroSpell(ev.effect, ev.x, ev.y, ev.radius, ev.color)
         this.hud.flash(ev.color, 0.4)
         this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
-        battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute')
+        battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute', panFor(ev.x))
+        // the hero's SIGNATURE — a stylized vocal punch on the bus (not the chat feed)
+        heroVo(undefined, 'signature', panFor(ev.x))
         break
       case 'wyrmBreath':
         // a bonded Wyrm exhales — a coloured elemental burst around its hero.
@@ -1375,15 +1424,22 @@ export class BattleScene extends Phaser.Scene {
           this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color)
           this.hud.flash(ev.color, 0.3)
           this.hud.banner(`★ ${ev.name.toUpperCase()}!`, ev.color)
-          battleSfx.reaction()
+          duckPunch(0.5)
+          battleSfx.reaction(undefined, panFor(ev.x))
+          heroVo(ev.element, 'awaken', panFor(ev.x)) // the Wyrm awakens — a vocal swell
         } else {
           this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, 0.5)
         }
         break
       case 'reaction':
+        // FRAME-LOCK: the distinct reaction SFX, the flash, the shake and the
+        // music-duck all fire off THIS one event so the hit lands as a single
+        // A/V punch (banners below are deferred cosmetics, not the hit).
         this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
         this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)
-        battleSfx.reaction()
+        this.view.shake(0.05)
+        duckPunch(0.45)
+        battleSfx.reaction(ev.key, panFor(ev.x))
         // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
         if (this.demoMode && ev.key === 'shatter' && !this.shatterBloomDone) {
           this.shatterBloomDone = true
@@ -1431,12 +1487,15 @@ export class BattleScene extends Phaser.Scene {
         if (ev.kind === 'warn') {
           this.hud.moroseVeil(ev.duration + 0.6)
           playMoroseHush()
+          spectralDip(0.5) // the light drains — the mix muffles, then recovers
         } else if (ev.kind === 'greyTower') {
           this.hud.moroseVeil(ev.duration * 0.6)
+          spectralDip(0.4) // a greyed tower's voice goes muffled
           this.tryBark('moroseGrey')
           if (unlockCodex('field-intrusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         } else {
           playMoroseHush()
+          spectralDip(0.5)
           this.tryBark('moroseSteal')
           if (unlockCodex('field-morose-steal')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         }
@@ -1479,6 +1538,7 @@ export class BattleScene extends Phaser.Scene {
       this.view.fxKeeperTelegraph(ev.x, ev.y, ev.radius, ev.accent)
     } else if (ev.kind === 'cast') {
       this.view.fxKeeperCast(ev.x, ev.y, ev.radius, ev.color, ev.accent)
+      battleSfx.bossHit(panFor(ev.x)) // the boss strikes — a meaty low thud
     } else if (ev.kind === 'phase') {
       this.view.fxKeeperPhase(ev.x, ev.y, ev.color, ev.accent)
       if (ev.phase === 2) this.hud.chatBark(k.id, k.barks.phase2)
@@ -1491,7 +1551,8 @@ export class BattleScene extends Phaser.Scene {
       this.hud.banner(`✦ ${k.trueName.toUpperCase()} — REDEEMED`, k.enemy.accent)
       if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.3)
       this.view.fxKeeperRedeem(ev.x, ev.y, ev.color, ev.accent)
-      battleSfx.reaction()
+      duckPunch(0.6)
+      battleSfx.reaction(undefined, panFor(ev.x))
       if (unlockCodexBatch(CODEX_ON_KEEPER_REDEEM[k.id]) > 0) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       // Morose's thread stinger, a beat later — his reaction degrades across the six
       this.keeperTimers.push(window.setTimeout(() => { if (!this.resultShown) this.hud.chatBark('morose', k.barks.morose) }, 2600))
@@ -1502,6 +1563,11 @@ export class BattleScene extends Phaser.Scene {
   //  TEARDOWN (critical: dispose GL context every time we leave/restart)
   // ======================================================================
   private teardown(): void {
+    // leaving battle: colour + volume back to neutral so map/menu music is full
+    // spectrum and un-ducked (the greying is a battlefield state, not a global one).
+    music.setBoss(false)
+    music.setIntensity(0)
+    resetAudioScene()
     this.camCtl?.dispose()
     this.camCtl = null
     window.removeEventListener('resize', this.onResize)

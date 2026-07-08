@@ -2,3 +2,9 @@ Music by Kevin MacLeod (incompetech.com)
 Licensed under Creative Commons: By Attribution 4.0 (CC BY 4.0) — https://creativecommons.org/licenses/by/4.0/
 Tracks: "Sneaky Adventure", "Heroic Age"
 REQUIRED: credit Kevin MacLeod / incompetech.com in the game's credits/settings screen.
+
+All other audio is synthesized in-engine (WebAudio), zero payload:
+ · the adaptive per-realm combat TENSION BED + heartbeat (music.ts)
+ · every SFX and elemental-reaction voice (battleSfx.ts, sfx.ts)
+ · the stylized hero VOICE stingers (vo.ts)
+No third-party assets beyond the two CC BY tracks above.

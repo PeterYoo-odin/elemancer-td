@@ -4,17 +4,20 @@
 // delegation. Every change persists via appSettings.set() and, for accessibility,
 // re-applies to <html> live via applyAccessibility().
 
-import { appSettings, DEFAULT_KEYBINDS, type ColorblindMode, type AssistMode, type BindableAction } from './settings'
+import { appSettings, DEFAULT_KEYBINDS, type ColorblindMode, type AssistMode, type AudioSensitivity, type BindableAction } from './settings'
 import { applyAccessibility, ELEMENT_GLYPH, ALL_ELEMENTS } from './a11y'
 import { elementIcon } from './icons'
 import { music } from './music'
-import { playUiTick, refreshSfxVolume } from './sfx'
+import { playUiTick, refreshSfxVolume, refreshMasterVolume, refreshVoVolume } from './sfx'
+import { heroVo } from './vo'
 import { analytics } from '../game/analytics'
 
 export interface SettingsPanelOpts {
   onReplayIntro?: () => void
   onClose?: () => void
 }
+
+const AUDIO_SENS_LABELS: Record<AudioSensitivity, string> = { full: 'Full', reduced: 'Reduced' }
 
 const CB_LABELS: Record<ColorblindMode, string> = {
   off: 'Off', deuter: 'Deuter', protan: 'Protan', trit: 'Tritan',
@@ -82,10 +85,16 @@ export class SettingsPanel {
     const s = appSettings.data
     return `
       ${section('Audio', `
+        ${sliderRow('Master volume', 'masterVol', Math.round(s.masterVol * 100))}
         ${toggleRow('Sound effects', 'sound', s.sound)}
         ${sliderRow('SFX volume', 'sfxVol', Math.round(s.sfxVol * 100))}
         ${toggleRow('Music', 'music', s.music)}
         ${sliderRow('Music volume', 'musicVol', Math.round(s.musicVol * 100))}
+        ${toggleRow('Hero voices', 'vo', s.vo)}
+        ${sliderRow('Voice volume', 'voVol', Math.round(s.voVol * 100))}
+        ${segRow('Audio sensitivity', 'audioSens', (['full', 'reduced'] as AudioSensitivity[]).map((m) => ({ v: m, label: AUDIO_SENS_LABELS[m], on: s.audioSensitivity === m })))}
+        <div class="settings-sub">Reduced softens harsh transients and combat ducking — the reduce-motion setting for ears.</div>
+        <div class="settings-note">Music: “Sneaky Adventure” &amp; “Heroic Age” — Kevin MacLeod (incompetech.com), CC BY 4.0. Adaptive bed &amp; hero voices synthesized in-engine.</div>
       `)}
       ${section('Accessibility — colour vision', `
         <div class="settings-note">Element identity uses a distinct <b>shape</b> plus colour, so it never depends on colour alone.</div>
@@ -171,8 +180,10 @@ export class SettingsPanel {
     const slider = el.dataset.slider
     if (!slider) return
     const v = Number(el.value)
-    if (slider === 'sfxVol') { appSettings.set({ sfxVol: v / 100 }); refreshSfxVolume() }
+    if (slider === 'masterVol') { appSettings.set({ masterVol: v / 100 }); refreshMasterVolume() }
+    else if (slider === 'sfxVol') { appSettings.set({ sfxVol: v / 100 }); refreshSfxVolume() }
     else if (slider === 'musicVol') { appSettings.set({ musicVol: v / 100 }); music.refresh(80) }
+    else if (slider === 'voVol') { appSettings.set({ voVol: v / 100 }); refreshVoVolume() }
     else if (slider === 'textScale') { appSettings.set({ textScale: v / 100 }); applyAccessibility() }
   }
 
@@ -185,11 +196,12 @@ export class SettingsPanel {
       this.refreshSnapshot()
       return
     }
-    if (key === 'sound' || key === 'music' || key === 'reduceMotion' || key === 'elementGlyphs' || key === 'highContrast') {
+    if (key === 'sound' || key === 'music' || key === 'vo' || key === 'reduceMotion' || key === 'elementGlyphs' || key === 'highContrast') {
       const next = !appSettings.data[key]
       appSettings.set({ [key]: next })
       el.classList.toggle('on', next)
       if (key === 'music') music.refresh(300)
+      if (key === 'vo' && next) heroVo(undefined, 'deploy') // preview the voice on enable
       if (key === 'reduceMotion' || key === 'highContrast' || key === 'elementGlyphs') applyAccessibility()
       if (key === 'elementGlyphs') this.refreshPalette()
     }
@@ -207,6 +219,8 @@ export class SettingsPanel {
     } else if (group === 'assist') {
       appSettings.set({ assist: val as AssistMode })
       const d = this.root.querySelector('[data-assistdesc]'); if (d) d.textContent = ASSIST_DESC[val as AssistMode]
+    } else if (group === 'audioSens') {
+      appSettings.set({ audioSensitivity: val as AudioSensitivity })
     }
   }
 
