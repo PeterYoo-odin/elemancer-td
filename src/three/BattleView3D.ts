@@ -766,7 +766,7 @@ export class BattleView3D {
         // desaturated floor: pull toward the tile's own luminance-grey (keeps it a
         // MUTED field, never a dead one — legibility contract, per the reduce-motion pass)
         const lum = full.r * 0.3 + full.g * 0.59 + full.b * 0.11
-        const grey = full.clone().lerp(new THREE.Color(lum, lum, lum), 0.55)
+        const grey = full.clone().lerp(new THREE.Color(lum, lum, lum), 0.72)
         this.groundFull.push(full)
         this.groundGrey.push(grey)
         this.groundHold.push(isTerr) // hazard tiles hold full colour — never muted
@@ -796,8 +796,9 @@ export class BattleView3D {
   private applyGroundReveal(reveal: number): void {
     const inst = this.groundInst
     if (!inst || !inst.instanceColor) return
-    // subtle: even at reveal 0 the field keeps 60% of its colour (mute = 0.4 max)
-    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.4
+    // at reveal 0 the field is clearly WASHED OUT (~40% toward its own grey) yet
+    // still ~60% colour — muted enough to read the thesis, legible enough to play
+    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.55
     const tmp = new THREE.Color()
     for (let i = 0; i < this.groundFull.length; i++) {
       if (this.groundHold[i] || mute <= 0) tmp.copy(this.groundFull[i])

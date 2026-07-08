@@ -68,7 +68,7 @@ export class BoardLife {
   // prism-road
   private ribbonMat?: THREE.MeshBasicMaterial
   private ribbonTex?: THREE.CanvasTexture
-  private ribbonBaseOpacity = 0.22
+  private ribbonBaseOpacity = 0.32
 
   constructor(
     scene: THREE.Scene,
