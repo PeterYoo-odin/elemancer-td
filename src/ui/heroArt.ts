@@ -12,9 +12,9 @@
 
 const BASE = import.meta.env.BASE_URL + 'concepts/'
 
-// hero id (the save/sim key) → painted portrait file. pyra (Bramble & Bloom)
-// has no painted art yet — it lands with the next batch; callers fall back to
-// the element-gradient + glyph placeholder.
+// hero id (the save/sim key) → painted portrait file. All 8 heroes are painted;
+// if a file is ever missing the loaders reject and every caller falls back to
+// the element-gradient + glyph placeholder on its own.
 const HERO_ART: Record<string, string> = {
   ember: 'hero-01-ashka-fire.jpg',
   glacia: 'hero-02-lumi-frost.jpg',
@@ -23,6 +23,7 @@ const HERO_ART: Record<string, string> = {
   aurelia: 'hero-05-seraphine-light.jpg',
   vex: 'hero-06-nyx-dark.jpg',
   volt: 'hero-07-fizz-arcane.jpg',
+  pyra: 'hero-08-bramble-fire.jpg',
 }
 
 export const KEYART_URL = BASE + '00-keyart-v2.jpg'

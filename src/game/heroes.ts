@@ -6,8 +6,9 @@
 // Phaser, no sim state — so the sim and the collection UI both read from it.
 //
 // Stats here are LEVEL 1 baselines; heroStat()/heroSpell() scale them by level.
-// Art is a placeholder (element-tinted gradient + glyph + rarity frame); the
-// painted portraits swap in later without touching a number.
+// Art is the painted portrait (public/concepts/*, wired via heroArt.ts) with an
+// element-tinted gradient + glyph + rarity frame as the graceful fallback; both
+// paths swap purely on the art layer without touching a number.
 
 import type { DamageType, Element } from '../sim/combat'
 import { ELEMENT_COLOR } from '../sim/combat'

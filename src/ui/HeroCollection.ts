@@ -1,9 +1,9 @@
 // HeroCollection — the CARD collection screen (Rush Royale / Realm Defense style).
 // A rich HTML/CSS DOM overlay mounted by HeroesScene: a grid of rarity-framed,
 // element-coloured hero cards showing level, star pips, stats, the signature spell,
-// a Level-Up button and an add-to-party toggle. Art is a placeholder (element
-// gradient + glyph + rarity frame) so the structure already reads like the
-// reference games; painted portraits swap into .hc-portrait later untouched.
+// a Level-Up button and an add-to-party toggle. Art is the painted portrait in
+// .hc-portrait (heroArt.ts), with an element gradient + glyph + rarity frame as
+// the graceful fallback so the structure still reads like the reference games.
 //
 // It owns NO progression logic: it reads + mutates through `economy` (the single
 // currency/save authority) and re-renders. Disposed fully by the scene on exit.
