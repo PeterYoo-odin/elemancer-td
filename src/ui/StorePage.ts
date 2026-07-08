@@ -79,10 +79,13 @@ const CSS = `
 .est-ribbon b { color: #7dffb0; }
 
 /* tabs */
-.est-tabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 0 14px 10px; max-width: 620px; width: 100%; margin: 0 auto; }
+/* All six labels must FIT the 620px container on desktop (natural width was ~665px,
+   so the last tab — "FAIR LEDGER" — clipped). Tighter spacing/padding/gap brings the
+   strip under 620px; overflow-x:auto stays as the fallback for very narrow phones. */
+.est-tabs { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; padding: 0 14px 10px; max-width: 620px; width: 100%; margin: 0 auto; }
 .est-tabs::-webkit-scrollbar { display: none; }
-.est-tab { flex: 0 0 auto; padding: 8px 13px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.05); color: #b6a9dd; font: inherit; font-size: 12px; font-weight: 800; letter-spacing: .1em; cursor: pointer;
+.est-tab { flex: 0 0 auto; padding: 7px 11px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); white-space: nowrap;
+  background: rgba(255,255,255,.05); color: #b6a9dd; font: inherit; font-size: 11.5px; font-weight: 800; letter-spacing: .03em; cursor: pointer;
   transition: background .18s ease, color .18s ease, border-color .18s ease; }
 .est-tab.on { background: color-mix(in srgb, var(--acc) 26%, transparent); color: #fff; border-color: color-mix(in srgb, var(--acc) 65%, transparent); }
 

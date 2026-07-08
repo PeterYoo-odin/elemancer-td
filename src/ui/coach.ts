@@ -27,6 +27,19 @@ const CSS = `
   transition: opacity .25s ease; will-change: transform; }
 .chr-coach-ringbox.show { opacity: 1; animation: chrCoachRing 1.2s ease-in-out infinite; }
 @keyframes chrCoachRing { 0%,100% { opacity: .95; transform: scale(1); } 50% { opacity: .55; transform: scale(1.05); } }
+/* SKIP: the one interactive control in the coach layer — pointer-events re-enabled
+   only here so an experienced/returning player can drop the tutorial and just play.
+   Sits opposite the level-name row (top-right), clear of the board, dock and banners. */
+.chr-coach-skip { position: absolute; top: calc(env(safe-area-inset-top,0px) + 58px); right: 12px;
+  pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 13px; border-radius: 999px; font: inherit; font-size: 12.5px; font-weight: 800; letter-spacing: .4px;
+  color: #d8ccff; background: linear-gradient(180deg, rgba(40,26,78,.92), rgba(24,15,50,.92));
+  border: 1px solid rgba(196,166,255,.42); box-shadow: 0 4px 14px rgba(0,0,0,.45);
+  opacity: 0; transform: translateY(-6px); transition: opacity .3s ease, transform .3s ease; }
+.chr-coach-skip.show { opacity: .92; transform: translateY(0); }
+.chr-coach-skip:active { transform: scale(.95); }
+.chr-coach-skip .cv { font-size: 15px; line-height: 1; opacity: .85; }
+@media (hover:hover) { .chr-coach-skip:hover { opacity: 1; filter: brightness(1.12); } }
 @media (prefers-reduced-motion: reduce) {
   .chr-coach-hand.show, .chr-coach-ringbox.show { animation: none; }
 }
@@ -46,9 +59,11 @@ export class Coach {
   private sub: HTMLDivElement
   private hand: HTMLDivElement
   private ringBox: HTMLDivElement
+  private skipBtn: HTMLButtonElement
   private hideT = 0
 
-  constructor() {
+  /** onSkip: if provided, a "Skip tutorial" chip is shown — the escape hatch. */
+  constructor(onSkip?: () => void) {
     this.style = document.createElement('style')
     this.style.textContent = CSS
     document.head.appendChild(this.style)
@@ -66,7 +81,18 @@ export class Coach {
     this.hand.innerHTML = iconMarkup('hand', { size: 30, color: '#ffe08a' })
     this.ringBox = document.createElement('div')
     this.ringBox.className = 'chr-coach-ringbox'
-    this.root.append(this.ringBox, this.pill, this.hand)
+    this.skipBtn = document.createElement('button')
+    this.skipBtn.className = 'chr-coach-skip'
+    this.skipBtn.innerHTML = 'Skip tutorial<span class="cv">›</span>'
+    this.skipBtn.setAttribute('aria-label', 'Skip the tutorial and play freely')
+    if (onSkip) {
+      this.skipBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onSkip() })
+      // reveal on the next frame so it eases in with the first coach step
+      requestAnimationFrame(() => this.skipBtn.classList.add('show'))
+    } else {
+      this.skipBtn.style.display = 'none'
+    }
+    this.root.append(this.ringBox, this.pill, this.hand, this.skipBtn)
     document.body.appendChild(this.root)
   }
 
@@ -99,6 +125,13 @@ export class Coach {
 
   hidePointer(): void {
     this.hand.classList.remove('show')
+  }
+
+  /** Retire the skip chip (tutorial graduated normally, or the battle has ended)
+   *  so it never floats over a result screen or lingers into free play. */
+  hideSkip(): void {
+    this.skipBtn.classList.remove('show')
+    this.skipBtn.style.pointerEvents = 'none'
   }
 
   /** Spotlight-ring a HUD element. A floating overlay box (never touches the

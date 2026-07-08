@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import { TOWERS, TOWER_ORDER, type TowerKind } from '../game/towers'
-import { LEVELS, levelById, pathCellsFor, starsForClear, DEMO_LEVEL, type LevelDef } from '../game/levels'
+import { LEVELS, levelById, pathCellsFor, starsForClear, isLevelUnlocked, DEMO_LEVEL, type LevelDef } from '../game/levels'
 import { SPELLS, type SpellKey } from '../game/spells'
 import { economy } from '../game/economy'
 import { NEUTRAL } from '../game/workshop'
@@ -434,7 +434,7 @@ export class BattleScene extends Phaser.Scene {
       // The live coach runs until the L1 curriculum completes — but never for a
       // save that already has stars (veterans replaying L1 are left alone).
       if (this.levelId === 'l1' && !ftue.isDone('l1-core') && economy.totalStars() === 0) {
-        this.coach = new Coach()
+        this.coach = new Coach(() => this.skipTutorial())
         this.coachStep = 'pickTower'
       } else {
         const lesson = LEVEL_LESSONS[this.levelId]
@@ -705,7 +705,8 @@ export class BattleScene extends Phaser.Scene {
     const c = this.coach
     if (!c) { this.coachStep = 'off'; return }
     const s = this.sim
-    if (s.state === 'won' || s.state === 'lost' || s.state === 'draft' || this.paused) { c.clear(); return }
+    if (s.state === 'won' || s.state === 'lost') { c.hideSkip(); c.clear(); return }
+    if (s.state === 'draft' || this.paused) { c.clear(); return }
     switch (this.coachStep) {
       case 'pickTower': {
         if (this.towersBuilt > 0) { this.coachStep = 'start'; break } // they figured it out
@@ -816,9 +817,21 @@ export class BattleScene extends Phaser.Scene {
   private finishCoach(): void {
     ftue.markDone('l1-hero')
     ftue.markDone('l1-core')
+    this.coach?.hideSkip()
     this.coach?.clear()
     this.coach?.say('You know everything that matters', 'The rest is paint. Bring the colour home.', 5000)
     this.coachStep = 'done'
+  }
+
+  // SKIP TUTORIAL — the escape hatch. Marks the whole L1 curriculum done (so it
+  // never re-teaches, this session or later), tears the coach layer down, and
+  // hands the board straight back to the player. A returning/expert can just play.
+  private skipTutorial(): void {
+    for (const s of ['l1-place', 'l1-start', 'l1-combo', 'l1-upgrade', 'l1-hero', 'l1-core']) ftue.markDone(s)
+    this.coachStep = 'off'
+    this.coach?.dispose()
+    this.coach = null
+    this.hud.banner('Tutorial skipped — the canvas is yours', 0xc9b6ff)
   }
 
   // The teach cell: a free build tile touching the MOST path tiles (a bend sees
@@ -1489,10 +1502,22 @@ export class BattleScene extends Phaser.Scene {
         unlocked = TOWERS[this.level.unlockTower].name
       }
       this.hud.flash(0x2ff7c3, 0.4)
+      // NEXT LEVEL: offer a direct hop to the next campaign level when one exists
+      // and is unlocked (any ≥1★ clear unlocks it — and stars were just banked
+      // above). Never for the demo (guest funnel) or endless modes.
+      let onNext: (() => void) | undefined
+      if (!this.demoMode && !this.endless) {
+        // canonical id (this.level is the mode-transformed def — heroic could re-id it)
+        const idx = LEVELS.findIndex((l) => l.id === this.levelId)
+        const next = idx >= 0 ? LEVELS[idx + 1] : undefined
+        if (next && isLevelUnlocked(next.index, economy.data.stars)) {
+          onNext = () => this.scene.restart({ levelId: next.id, difficulty: this.runMode.difficulty, challenge: this.runMode.challenge })
+        }
+      }
       this.hud.showResult({
         win: true, title: this.demoMode ? 'THE VALE BLOOMS!' : 'VICTORY!', color: 0x2ff7c3, stars,
         coins: result.coins, diamonds: result.diamonds, shards, unlocked, endless: this.endless,
-        share: this.buildShare(true),
+        share: this.buildShare(true), onNext,
         // demo: guest progress carries straight into the full game
         continueLabel: this.demoMode ? 'CONTINUE INTO THE FULL GAME →' : undefined,
         onContinue: this.demoMode ? () => this.scene.start('Map') : undefined,

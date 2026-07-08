@@ -1692,6 +1692,8 @@ export class BattleHud {
     lesson?: string // death-teaches: one actionable line, defeat screens only
     continueLabel?: string // demo: "CONTINUE INTO THE FULL GAME"
     onContinue?: () => void
+    onNext?: () => void // campaign win: hop straight to the next (unlocked) level
+    nextLabel?: string
   }): void {
     this.clearOverlay()
     this.startBtn.classList.add('hidden')
@@ -1761,7 +1763,14 @@ export class BattleHud {
     }
     if (!opts.win) ov.append(el('div', 'eld-retrynote', 'Retry replays the SAME waves — same seed, no surprises.'))
     const row = el('div', 'eld-btnrow')
-    const replay = el('button', 'eld-btn purple', opts.win ? 'REPLAY' : '↻ RETRY')
+    // NEXT LEVEL is the primary CTA on a campaign win — lead with it, keep the
+    // ride going. REPLAY + WORLD MAP become the secondary options beside it.
+    if (opts.onNext) {
+      const next = el('button', 'eld-btn green', opts.nextLabel ?? 'NEXT LEVEL →')
+      next.onclick = () => opts.onNext?.()
+      row.append(next)
+    }
+    const replay = el('button', opts.onNext ? 'eld-btn purple slim' : 'eld-btn purple', opts.win ? '↻ REPLAY' : '↻ RETRY')
     replay.onclick = () => this.cb.onReplay()
     row.append(replay)
     if (opts.onContinue) {
@@ -1769,7 +1778,8 @@ export class BattleHud {
       cont.onclick = () => opts.onContinue?.()
       row.append(cont)
     } else {
-      const back = el('button', 'eld-btn green', opts.endless ? 'MENU' : 'WORLD MAP')
+      // downgrade WORLD MAP to a secondary look when NEXT LEVEL owns the primary slot
+      const back = el('button', opts.onNext ? 'eld-btn blue slim' : 'eld-btn green', opts.endless ? 'MENU' : 'WORLD MAP')
       back.onclick = () => this.cb.onBack()
       row.append(back)
     }

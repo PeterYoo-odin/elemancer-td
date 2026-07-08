@@ -101,7 +101,11 @@ class Music {
     if (!a) {
       a = new Audio(SRC[track])
       a.loop = true
-      a.preload = 'auto'
+      // preload='none' until a track is actually wanted: the menu must NOT eager-
+      // fetch the 3.9 MB battle theme (that download, cancelled when we prime+pause
+      // it for Safari, is the ERR_ABORTED noise). apply() bumps the wanted track to
+      // 'auto' so it still buffers ahead for a seamless loop.
+      a.preload = 'none'
       a.crossOrigin = 'anonymous'
       a.volume = 0
       this.els.set(track, a)
@@ -136,8 +140,9 @@ class Music {
       void a
         .play()
         .then(() => {
+          // pause WITHOUT seeking: a currentTime reset mid-fetch is what cancels the
+          // in-flight request (ERR_ABORTED). The element is at ~0 already; leave it.
           a.pause()
-          a.currentTime = 0
           a.muted = false
         })
         .catch(() => {
@@ -159,6 +164,7 @@ class Music {
     const want = this.want
     if (want && appSettings.data.music) {
       const a = this.el(want)
+      if (a.preload !== 'auto') a.preload = 'auto' // buffer the wanted theme ahead for a seamless loop
       if (a.paused) void a.play().catch(() => {})
     }
     window.clearInterval(this.fadeTimer)
