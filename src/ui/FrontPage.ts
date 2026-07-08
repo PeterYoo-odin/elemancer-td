@@ -16,6 +16,7 @@ import { economy } from '../game/economy'
 import { showReferralPanel } from './ReferralPanel'
 import { showWelcomeReward, welcomeUnclaimed } from './WelcomeReward'
 import { showInstallCard, canInstall } from './pwa'
+import { iconMarkup, currencyIcon } from './icons'
 
 export interface FrontPageHandlers {
   onPlay(): void
@@ -51,7 +52,7 @@ const CSS = `
 .efp, .efp * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
 .efp {
   position: fixed; inset: 0; z-index: 15; overflow: hidden; color: #efe9ff;
-  font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+  font-family: 'Baloo 2', 'Nunito', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
   display: flex; flex-direction: column; align-items: center;
   padding: calc(14px + env(safe-area-inset-top)) 20px calc(14px + env(safe-area-inset-bottom));
   background:
@@ -85,8 +86,8 @@ const CSS = `
   display: flex; align-items: center; gap: 7px; padding: 7px 14px 7px 9px; border-radius: 999px;
   background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
   border: 1px solid rgba(255,255,255,.12); box-shadow: 0 4px 14px rgba(0,0,0,.35);
-  font-weight: 700; font-size: 15px; letter-spacing: .02em;
-}
+  font-weight: 700; font-size: 15px; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.efp-chip svg { width: 16px; height: 16px; }
 .efp-chip .efp-coin { width: 17px; height: 17px; border-radius: 50%;
   background: radial-gradient(circle at 34% 30%, #fff3bd, #ffd54a 55%, #c98f12); box-shadow: 0 0 8px rgba(255,213,74,.5); }
 .efp-chip .efp-dia { width: 15px; height: 15px; transform: rotate(45deg); border-radius: 3px;
@@ -115,7 +116,7 @@ const CSS = `
 .efp-logo-wrap { position: relative; padding: 6px 10px; }
 .efp-logo, .efp-logo-sheen {
   font-family: 'Cinzel', 'Georgia', 'Times New Roman', serif; font-weight: 900;
-  font-size: clamp(40px, 11vw, 82px); line-height: 1.04; letter-spacing: .05em; white-space: nowrap;
+  font-size: clamp(40px, 11vw, 82px); line-height: 1.04; letter-spacing: .09em; white-space: nowrap;
 }
 .efp-logo {
   color: transparent;
@@ -165,6 +166,15 @@ const CSS = `
 .efp-btn:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.28);
   box-shadow: 0 10px 26px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.1); }
 .efp-btn:active { transform: scale(.975); transition-duration: .06s; }
+/* faint paper-tooth grain so the flat glass panels stop reading as pure vector */
+.efp-btn::before, .efp-card::before, .efp-chip::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 160px 160px; opacity: .035; mix-blend-mode: soft-light; z-index: 0;
+}
+.efp-btn > *, .efp-card > *, .efp-chip > * { position: relative; z-index: 1; }
+.efp-chip { position: relative; }
+.efp-card { position: relative; }
 .efp-ic {
   flex: 0 0 auto; width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
   color: var(--a); background: color-mix(in srgb, var(--a) 16%, transparent);
@@ -364,9 +374,9 @@ export class FrontPage {
       <div class="efp-top efp-in" style="animation-delay:.05s">
         <div class="efp-chip c-coin"><span class="efp-coin"></span><span data-coin>0</span></div>
         <div class="efp-chip c-dia"><span class="efp-dia"></span><span data-dia>0</span></div>
-        <div class="efp-chip c-prism" data-prismchip hidden>✦ <span data-prism>0</span></div>
-        <button class="efp-gear" data-act="install" data-install aria-label="Install app" title="Install Chromancer" hidden>⬇</button>
-        <button class="efp-gear" data-act="invite" aria-label="Invite friends" title="Invite friends — you both win">📣</button>
+        <div class="efp-chip c-prism" data-prismchip hidden>${iconMarkup('star', { size: 15 })} <span data-prism>0</span></div>
+        <button class="efp-gear" data-act="install" data-install aria-label="Install app" title="Install Chromancer" hidden>${iconMarkup('download', { size: 22 })}</button>
+        <button class="efp-gear" data-act="invite" aria-label="Invite friends" title="Invite friends — you both win">${iconMarkup('megaphone', { size: 22 })}</button>
         <button class="efp-gear" data-act="settings" aria-label="Settings">${svg(ICONS.gear)}</button>
       </div>
 
@@ -390,8 +400,8 @@ export class FrontPage {
 
       <div class="efp-menu">
         <button class="efp-btn efp-primary efp-in efp-welcome" style="animation-delay:.34s; --a:#ffd873" data-act="welcome" data-welcome hidden>
-          <span class="efp-ic">🎁</span>
-          <span class="efp-btxt"><span class="efp-blabel">CLAIM WELCOME BUNDLE</span><span class="efp-bsub">2000💎 + starter skin + a free spin</span></span>
+          <span class="efp-ic">${iconMarkup('gift', { size: 22 })}</span>
+          <span class="efp-btxt"><span class="efp-blabel">CLAIM WELCOME BUNDLE</span><span class="efp-bsub">2000${currencyIcon('diamond', { size: 12 })} + starter skin + a free spin</span></span>
           <span class="efp-chev">&#8250;</span>
         </button>
         <button class="efp-btn efp-primary efp-in" style="animation-delay:.36s" data-act="play">
@@ -427,7 +437,7 @@ export class FrontPage {
         <button class="efp-btn efp-in" style="animation-delay:.645s; --a:#8dff4a" data-act="ranked">
           <span class="efp-ic">${svg(ICONS.shield)}</span>
           <span class="efp-btxt"><span class="efp-blabel">RANKED</span><span class="efp-bsub">Provably fair &middot; a board money can't climb</span></span>
-          <span class="efp-pill">🔒 FAIR</span>
+          <span class="efp-pill">${iconMarkup('lock', { size: 11 })} FAIR</span>
         </button>
         <button class="efp-btn efp-in" style="animation-delay:.66s; --a:#ffd54a" data-act="daily">
           <span class="efp-ic">${svg(ICONS.calendar)}</span>

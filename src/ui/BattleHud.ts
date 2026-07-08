@@ -18,6 +18,7 @@ import { glyphIcon, iconMarkup, currencyIcon } from './icons'
 import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 import { playUiTick } from './sfx'
+import { appSettings } from './settings'
 import { battleSfx } from './battleSfx'
 import { ChatFeed } from './ChatFeed'
 
@@ -57,6 +58,11 @@ export interface HudContext {
 function hex(c: number): string {
   return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
 }
+
+// Center-banner priority tiers. Boss beats wave / notifications so a boss moment is
+// never overwritten by an incidental banner during the same wave. Reaction callouts
+// live on their OWN channel (see reactionCallout) and are not part of this ordering.
+export const BANNER_PRIORITY = { wave: 1, notify: 1, boss: 2 } as const
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag)
@@ -334,6 +340,15 @@ const CSS = `
 .eld-spell.ping::before, .eld-hero.ping .hport::before { content:''; position:absolute; inset:-3px; border-radius:50%;
   border:3px solid currentColor; animation: eldping .5s ease-out forwards; pointer-events:none; }
 @keyframes eldping { 0%{ opacity:1; transform:scale(1);} 100%{ opacity:0; transform:scale(1.7);} }
+/* READY FLASH: the button itself flares bright the instant a spell comes off cooldown —
+   an at-a-glance "you can cast NOW" read to match the red-cost unaffordable tell. */
+.eld-spell.ping { animation: eldreadyflash .55s ease-out; }
+@keyframes eldreadyflash {
+  0%   { box-shadow:0 0 0 2px currentColor, 0 0 24px 7px currentColor; filter:brightness(1.75) saturate(1.2); }
+  45%  { filter:brightness(1.3) saturate(1.1); }
+  100% { box-shadow:0 4px 12px rgba(0,0,0,.4); filter:none; }
+}
+.eld-hud.reduced .eld-spell.ping { animation:none; }
 
 /* wave banner: bigger, sweeping, letter-spaced */
 .eld-wavebanner { position:absolute; left:50%; top:30%; transform:translateX(-50%); font-size:54px; font-weight:900;
@@ -511,6 +526,9 @@ export class BattleHud {
     document.head.appendChild(this.styleEl)
 
     this.root = el('div', 'eld-hud')
+    // Honour reduce-motion (OS pref OR the in-app toggle) so CSS can soften the
+    // flashier flourishes (ready-flash, etc). Set once at build like FrontPage does.
+    if (appSettings.reducedMotion()) this.root.classList.add('reduced')
 
     // top bar
     const top = el('div', 'eld-top')
@@ -1574,7 +1592,16 @@ export class BattleHud {
     window.setTimeout(() => target.classList.remove(cls), ms)
   }
 
+  // Live count of on-screen floaters so a big AoE can't spawn hundreds of DOM
+  // nodes at once (perf) — new ones past the cap are simply dropped.
+  private floatCount = 0
   floatText(x: number, y: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm'): void {
+    const reduced = appSettings.reducedMotion()
+    // reduce-motion: keep only the meaningful hits (crit / combo). Plain damage
+    // numbers arc and fly the most, so they're the ones we suppress — "fewer/none".
+    if (reduced && style === 'norm') return
+    if (this.floatCount >= (reduced ? 8 : 26)) return
+    this.floatCount++
     const d = el('div', 'eld-float' + (style === 'crit' ? ' crit' : ''), msg)
     d.style.left = `${x}px`
     d.style.top = `${y}px`
@@ -1585,7 +1612,7 @@ export class BattleHud {
     const dur = style === 'norm' ? 0.9 : 1
     d.style.animation = `${anim} ${dur}s ease-out forwards`
     this.fxLayer.append(d)
-    window.setTimeout(() => d.remove(), dur * 1000 + 60)
+    window.setTimeout(() => { d.remove(); this.floatCount-- }, dur * 1000 + 60)
   }
 
   // coins burst from a kill and arc into the gold counter, popping it on arrival
@@ -1617,11 +1644,9 @@ export class BattleHud {
     }
   }
 
-  waveBanner(msg: string): void {
-    const d = el('div', 'eld-wavebanner', msg)
-    this.fxLayer.append(d)
-    window.setTimeout(() => d.remove(), 1750)
-    this.chat.add(null, msg, 'event') // the feed keeps the history
+  waveBanner(msg: string, priority: number = BANNER_PRIORITY.wave): void {
+    this.chat.add(null, msg, 'event') // record FIRST — the queue may defer/drop the visual
+    this.enqueueBanner({ cls: 'eld-wavebanner', msg, priority, dur: 1750 })
   }
 
   // ------------------------------------------------------------- chat feed
@@ -1635,17 +1660,68 @@ export class BattleHud {
     this.chat.add(null, text, 'event')
   }
 
-  // ELEMENTAL REACTION slam. Single element reused so back-to-back reactions
-  // replace (restart) the callout instead of stacking a wall of text.
-  private reactEl: HTMLElement | null = null
+  // ELEMENTAL REACTION slam — its own channel, independent of the center-banner
+  // queue (reactions are frequent + fast). Up to TWO can coexist, the second nudged
+  // up ~8% so a boss-wave combo can slam two reactions ~0.4s apart without one
+  // erasing the other; a third rolls the oldest off.
+  private reactEls: HTMLElement[] = []
   reactionCallout(name: string, color: number): void {
-    this.reactEl?.remove()
+    if (this.reactEls.length >= 2) this.reactEls.shift()?.remove()
     const d = el('div', 'eld-react', name)
     d.style.color = hex(color)
+    if (this.reactEls.length === 1) d.style.top = '19%' // second slot sits above the first
     d.append(el('span', 'rx-sub', 'ELEMENTAL REACTION'))
     this.fxLayer.append(d)
-    this.reactEl = d
-    window.setTimeout(() => { if (this.reactEl === d) this.reactEl = null; d.remove() }, 1050)
+    this.reactEls.push(d)
+    window.setTimeout(() => {
+      const i = this.reactEls.indexOf(d)
+      if (i >= 0) this.reactEls.splice(i, 1)
+      d.remove()
+    }, 1050)
+  }
+
+  // -------- center-banner queue (wave banners + generic notifications) --------
+  // One banner shows at a time in the shared ~30-34% band. A strictly-higher
+  // priority banner (boss) preempts a lower one; equal/lower ones queue (highest
+  // priority first) behind it. The queue is capped so a burst can't pile up or
+  // strand a banner on screen.
+  private activeBanner: { el: HTMLElement; priority: number; timer: number } | null = null
+  private bannerQueue: { cls: string; msg: string; color?: number; priority: number; dur: number }[] = []
+
+  private showCenterBanner(item: { cls: string; msg: string; color?: number; priority: number; dur: number }): void {
+    const d = el('div', item.cls, item.msg)
+    if (item.color !== undefined) d.style.color = hex(item.color)
+    this.fxLayer.append(d)
+    const timer = window.setTimeout(() => {
+      d.remove()
+      this.activeBanner = null
+      this.nextBanner()
+    }, item.dur)
+    this.activeBanner = { el: d, priority: item.priority, timer }
+  }
+
+  private nextBanner(): void {
+    if (this.activeBanner || this.bannerQueue.length === 0) return
+    let bi = 0 // highest priority first; FIFO within a tier (queue order preserved)
+    for (let i = 1; i < this.bannerQueue.length; i++) if (this.bannerQueue[i].priority > this.bannerQueue[bi].priority) bi = i
+    this.showCenterBanner(this.bannerQueue.splice(bi, 1)[0])
+  }
+
+  private enqueueBanner(item: { cls: string; msg: string; color?: number; priority: number; dur: number }): void {
+    if (!this.activeBanner) { this.showCenterBanner(item); return }
+    if (item.priority > this.activeBanner.priority) {
+      window.clearTimeout(this.activeBanner.timer) // preempt: a boss beat wins the band now
+      this.activeBanner.el.remove()
+      this.activeBanner = null
+      this.showCenterBanner(item)
+      return
+    }
+    this.bannerQueue.push(item)
+    if (this.bannerQueue.length > 3) {
+      let wi = 0 // overflow: drop the lowest-priority (oldest at that tier) so nothing strands
+      for (let i = 1; i < this.bannerQueue.length; i++) if (this.bannerQueue[i].priority < this.bannerQueue[wi].priority) wi = i
+      this.bannerQueue.splice(wi, 1)
+    }
   }
 
   // Morose intrusion: a grey vignette breathes in and back out (telegraph + landing)
@@ -1671,12 +1747,9 @@ export class BattleHud {
     window.setTimeout(() => d.remove(), dur + 60)
   }
 
-  banner(msg: string, color: number): void {
-    const d = el('div', 'eld-banner', msg)
-    d.style.color = hex(color)
-    this.fxLayer.append(d)
-    window.setTimeout(() => d.remove(), 1650)
-    this.chat.add(null, msg, 'event') // the pop is brief; the feed remembers
+  banner(msg: string, color: number, priority: number = BANNER_PRIORITY.notify): void {
+    this.chat.add(null, msg, 'event') // record FIRST — the pop may be queued/dropped, the feed remembers
+    this.enqueueBanner({ cls: 'eld-banner', msg, color, priority, dur: 1650 })
   }
 
   dispose(): void {

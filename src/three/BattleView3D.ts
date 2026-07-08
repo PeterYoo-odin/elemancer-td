@@ -482,7 +482,10 @@ export class BattleView3D {
     this.composer = new EffectComposer(this.renderer)
     this.renderPass = new RenderPass(this.scene, this.camera)
     this.composer.addPass(this.renderPass)
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.62, 0.55, 0.72)
+    // Base bloom kept deliberately low (0.45) so the ambient hum doesn't wash the
+    // frame out; the bloomAmp surges (pushIn / bloomPulse) do the heavy lifting so
+    // big moments visibly OUT-glow the baseline instead of merely matching it.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.45, 0.55, 0.72)
     this.composer.addPass(this.bloom)
     this.outputPass = new OutputPass()
     this.composer.addPass(this.outputPass)
@@ -3063,10 +3066,10 @@ export class BattleView3D {
     this.updateBackdrop(dt)
     this.updateTransients(dt)
 
-    // bloom surge decay (0.62 = the calibrated base set in the constructor)
+    // bloom surge decay (0.45 = the calibrated base set in the constructor)
     if (this.bloomAmp > 0) {
       this.bloomAmp = Math.max(0, this.bloomAmp - dt * 0.55)
-      this.bloom.strength = 0.62 + this.bloomAmp
+      this.bloom.strength = 0.45 + this.bloomAmp
     }
 
     this.composer.render()

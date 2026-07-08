@@ -14,7 +14,7 @@ import { NORMAL_MODE, levelForMode, startLivesForMode, towerCapForMode, partyAll
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { CameraControls } from '../three/cameraControls'
-import { BattleHud, type HudContext } from '../ui/BattleHud'
+import { BattleHud, BANNER_PRIORITY, type HudContext } from '../ui/BattleHud'
 import type { ShareCardOpts } from '../ui/ShareCard'
 import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
@@ -27,6 +27,7 @@ import { realmForLevel, REALMS } from '../game/levels'
 import { realmBackdrop } from '../game/realmBackdrops'
 import { playMoroseHush, setSpectralOpenness, spectralDip, duckPunch, stepDuck, resetAudioScene } from '../ui/sfx'
 import { battleSfx, panFor } from '../ui/battleSfx'
+import { haptic, HAPTIC } from '../ui/haptics'
 import { heroVo } from '../ui/vo'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
 import { recordDailyResult } from '../game/daily'
@@ -465,7 +466,7 @@ export class BattleScene extends Phaser.Scene {
       battleSfx.waveStart()
       // the mini-Keeper gets a proper entrance in the demo
       if (this.demoMode && this.sim.waveIndex === this.level.waves.length - 1) {
-        window.setTimeout(() => this.hud.banner('CINDRAL, EMBER OF KAELEN', 0xff4db8), 900)
+        window.setTimeout(() => this.hud.banner('CINDRAL, EMBER OF KAELEN', 0xff4db8, BANNER_PRIORITY.boss), 900)
       }
       // live demo: telegraph the guaranteed-SHATTER build beat at W3
       if (this.demoMode && !this.attract && this.sim.waveIndex === 2) {
@@ -492,7 +493,7 @@ export class BattleScene extends Phaser.Scene {
     if (!this.lowLivesBarked && this.sim.baseHp > 0 && this.sim.baseIntegrity < 0.35) {
       this.lowLivesBarked = true
       this.tryBark('lowLives')
-      this.hud.waveBanner('⚠ The Wellspring is fading!')
+      this.hud.waveBanner('⚠ The Wellspring is fading!', BANNER_PRIORITY.boss)
     }
 
     // Drive the painted Wellspring's desaturate/crack state from base integrity.
@@ -1084,6 +1085,7 @@ export class BattleScene extends Phaser.Scene {
     const kind = this.buildKind
     const placed = this.sim.placeTower(this.buildKind, col, row)
     if (placed) {
+      if (!this.attract) haptic(HAPTIC.place) // light confirming tick under the thumb
       this.recorder?.place(c, kind, col, row)
       this.towersBuilt++
       // KPI instrumentation: time-to-first-tower (first-ever only; guards inside)
@@ -1540,7 +1542,7 @@ export class BattleScene extends Phaser.Scene {
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
         battleSfx.kill(this.sim.comboCount, ev.boss, panFor(ev.x))
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); duckPunch(0.6); this.tryBark('kill') }
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
         // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
         if (ev.kind !== 'keeper' && unlockEnemyCodex(ev.kind)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         break
@@ -1665,6 +1667,7 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2)
         this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)
         this.view.shake(0.05)
+        if (!this.attract) haptic(HAPTIC.reaction) // sharp single bump on detonation
         duckPunch(0.45)
         battleSfx.reaction(ev.key, panFor(ev.x))
         // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
@@ -1775,7 +1778,7 @@ export class BattleScene extends Phaser.Scene {
       this.keeperRedeemed.add(k.id)
       // THE payoff beat: the grey breaks, the Keeper's true name returns in colour
       this.hud.chatBark(k.id, k.barks.redeemed)
-      this.hud.banner(`✦ ${k.trueName.toUpperCase()} — REDEEMED`, k.enemy.accent)
+      this.hud.banner(`✦ ${k.trueName.toUpperCase()} — REDEEMED`, k.enemy.accent, BANNER_PRIORITY.boss)
       if (!appSettings.reducedMotion()) this.greyBloomT = Math.max(this.greyBloomT, 1.3)
       this.view.fxKeeperRedeem(ev.x, ev.y, ev.color, ev.accent)
       duckPunch(0.6)

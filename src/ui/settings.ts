@@ -35,6 +35,7 @@ export interface AppSettings {
   voVol: number // 0..1
   audioSensitivity: AudioSensitivity // 'reduced' softens transients + ducking
   reduceMotion: boolean // explicit user override; the OS preference is honored too
+  haptics: boolean // touch-device vibration on placement / reactions / boss kills
   // --- accessibility ---
   colorblind: ColorblindMode // element palette remap for colour-vision deficiency
   elementGlyphs: boolean // show a distinct SHAPE per element (not colour-only)
@@ -53,7 +54,7 @@ function clamp01(v: unknown, dflt: number): number {
 function defaults(): AppSettings {
   return {
     masterVol: 0.9, sound: true, sfxVol: 0.8, music: true, musicVol: 0.6,
-    vo: true, voVol: 0.75, audioSensitivity: 'full', reduceMotion: false,
+    vo: true, voVol: 0.75, audioSensitivity: 'full', reduceMotion: false, haptics: true,
     colorblind: 'off', elementGlyphs: false, highContrast: false, textScale: 1,
     assist: 'off', keybinds: { ...DEFAULT_KEYBINDS },
   }
@@ -86,6 +87,7 @@ function load(): AppSettings {
       voVol: clamp01(p.voVol, def.voVol),
       audioSensitivity: audioSens,
       reduceMotion: p.reduceMotion === true,
+      haptics: p.haptics !== false,
       colorblind: cb,
       elementGlyphs: p.elementGlyphs === true,
       highContrast: p.highContrast === true,

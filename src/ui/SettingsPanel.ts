@@ -106,6 +106,7 @@ export class SettingsPanel {
       ${section('Accessibility — display', `
         ${toggleRow('High contrast', 'highContrast', s.highContrast)}
         ${toggleRow('Reduce motion', 'reduceMotion', s.reduceMotion)}
+        ${hapticsSupported() ? toggleRow('Vibration', 'haptics', s.haptics) : ''}
         ${sliderRow('Text size', 'textScale', Math.round(s.textScale * 100), 80, 150)}
       `)}
       ${section('Difficulty', `
@@ -196,7 +197,7 @@ export class SettingsPanel {
       this.refreshSnapshot()
       return
     }
-    if (key === 'sound' || key === 'music' || key === 'vo' || key === 'reduceMotion' || key === 'elementGlyphs' || key === 'highContrast') {
+    if (key === 'sound' || key === 'music' || key === 'vo' || key === 'reduceMotion' || key === 'elementGlyphs' || key === 'highContrast' || key === 'haptics') {
       const next = !appSettings.data[key]
       appSettings.set({ [key]: next })
       el.classList.toggle('on', next)
@@ -277,6 +278,13 @@ function section(title: string, inner: string): string {
 }
 function toggleRow(label: string, key: string, on: boolean): string {
   return `<div class="settings-row"><span>${label}</span><div class="settings-switch ${on ? 'on' : ''}" data-toggle="${key}" role="switch" aria-checked="${on}" tabindex="0"></div></div>`
+}
+// Only surface the Vibration toggle where it can actually do something: a real
+// vibrate API behind a touch (coarse) pointer. Desktop never sees a dead switch.
+function hapticsSupported(): boolean {
+  const hasApi = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function'
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+  return hasApi && coarse
 }
 function sliderRow(label: string, key: string, value: number, min = 0, max = 100): string {
   return `<div class="settings-row"><span>${label}</span><input class="settings-slider" type="range" min="${min}" max="${max}" value="${value}" data-slider="${key}" aria-label="${label}" /></div>`
