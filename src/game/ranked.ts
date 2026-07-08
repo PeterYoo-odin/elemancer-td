@@ -32,7 +32,7 @@ import type { SpellKey } from './spells'
 // v3: difficulty overhaul (balance pass 19) — the endless ramp now ACCELERATES
 // (quadratic HP + tougher bosses) and the campaign curve was retuned, so endless
 // run outcomes shift; bump to invalidate old replays under the old ramp.
-export const SIM_VERSION = 3
+export const SIM_VERSION = 4
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift
@@ -144,6 +144,9 @@ const OP_HEROSPELL = 5
 const OP_SPELL = 6
 const OP_TARGET = 7
 const OP_STARTWAVE = 8
+const OP_HEROMOVE = 9 // relocate a fielded hero to a new tile
+const OP_HEROTARGET = 10 // set a hero's auto-attack priority
+const OP_HEROFOCUS = 11 // sticky-lock a hero onto one enemy (0 = clear)
 
 // TargetMode <-> compact index (stable order; append-only if ever extended)
 const TARGET_MODES_ORDER: TargetMode[] = ['First', 'Last', 'Close', 'Strong', 'Weak', 'Primed']
@@ -208,6 +211,16 @@ export class RunRecorder {
     const mi = TARGET_MODES_ORDER.indexOf(mode)
     this.c.push([OP_TARGET, this.tick(clock), id, mi < 0 ? 0 : mi])
   }
+  heroMove(clock: number, slotId: number, col: number, row: number): void {
+    this.c.push([OP_HEROMOVE, this.tick(clock), slotId, col, row])
+  }
+  heroTarget(clock: number, slotId: number, mode: TargetMode): void {
+    const mi = TARGET_MODES_ORDER.indexOf(mode)
+    this.c.push([OP_HEROTARGET, this.tick(clock), slotId, mi < 0 ? 0 : mi])
+  }
+  heroFocus(clock: number, slotId: number, enemyId: number): void {
+    this.c.push([OP_HEROFOCUS, this.tick(clock), slotId, enemyId])
+  }
   startWave(clock: number): void {
     this.c.push([OP_STARTWAVE, this.tick(clock)])
   }
@@ -271,6 +284,15 @@ function applyCmd(sim: Sim, cmd: Cmd): void {
       break
     case OP_STARTWAVE:
       if (sim.state === 'prep') sim.startWave()
+      break
+    case OP_HEROMOVE:
+      sim.moveHero(cmd[2] as number, cmd[3] as number, cmd[4] as number)
+      break
+    case OP_HEROTARGET:
+      sim.setHeroTargeting(cmd[2] as number, TARGET_MODES_ORDER[cmd[3] as number] ?? 'First')
+      break
+    case OP_HEROFOCUS:
+      sim.focusHero(cmd[2] as number, cmd[3] as number)
       break
   }
 }

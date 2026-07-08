@@ -204,6 +204,13 @@ export interface SimHero {
   cd: number // auto-attack cooldown
   aimAngle: number
   fireFlash: number
+  // PLAYER CONTROL — positioning + focus are skill levers (default 'First' so an
+  // un-touched hero behaves byte-identically to before; only a real retarget/move
+  // diverges the sim). `focusId` sticky-locks onto a tapped enemy while it lives
+  // and stays in range; 0 = follow the targeting mode.
+  targeting: TargetMode
+  focusId: number
+  moveFlash: number // view-only relocation flash timer
   // scaled base combat (pre-synergy)
   baseDamage: number
   baseRange: number // tiles
@@ -270,6 +277,8 @@ export type SimEvent =
   | { t: 'upgrade'; x: number; y: number; color: number; radius: number; label: string }
   | { t: 'spell'; key: SpellKey; x: number; y: number; radius: number; color: number; count: number }
   | { t: 'heroDeploy'; x: number; y: number; color: number; radius: number }
+  // A hero relocated tiles — the view streaks a blink from the old cell to the new.
+  | { t: 'heroMove'; slotId: number; fromX: number; fromY: number; x: number; y: number; color: number; radius: number }
   | { t: 'heroFire'; x: number; y: number; tx: number; ty: number; color: number }
   | { t: 'heroSpell'; effect: SpellEffect; name: string; glyph: string; x: number; y: number; radius: number; color: number; count: number }
   // A hero's SIGNATURE mechanic detonated — a purely presentational marker (the
@@ -2219,7 +2228,7 @@ export class Sim {
     if (!h) {
       h = {
         id: this.nextId++, active: false, heroId, def, role: def.role, level: pd.level, col, row, x: cc.x, y: cc.y,
-        cd: 0, aimAngle: 0, fireFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
+        cd: 0, aimAngle: 0, fireFlash: 0, targeting: 'First', focusId: 0, moveFlash: 0, baseDamage: 0, baseRange: 0, attackCd: 1, buffDamage: 0, slowFactor: 1,
         slowDuration: 0, adjBuff: 1, buffMult: 1, buffUntil: 0, spell, spellCd: 0, spellMaxCd: 1,
         greyUntil: 0, sigAwake: false, sigCounter: 0, sigRamp: 0, sigGuardUsed: false,
         wyrm: null, wyrmBreathCd: 0, wyrmUltUsed: false,
@@ -2238,6 +2247,9 @@ export class Sim {
     h.cd = 0
     h.aimAngle = 0
     h.fireFlash = 0
+    h.targeting = 'First'
+    h.focusId = 0
+    h.moveFlash = 0
     h.baseDamage = stats.damage
     h.baseRange = stats.range
     h.attackCd = stats.cooldown
@@ -2359,10 +2371,70 @@ export class Sim {
     return null
   }
 
+  // ---- PLAYER CONTROL: reposition + focus (the skill levers) ---------------
+  // RELOCATE a fielded hero to an empty build tile — placement is a LIVE decision,
+  // not a one-time plop. Free (encourage active play) but a short attack settle so
+  // it isn't a zero-cost teleport-spam. Deterministic; adjacency buffs recompute.
+  canMoveHeroTo(slotId: number, col: number, row: number): boolean {
+    const h = this.heroBySlot(slotId)
+    if (!h) return false
+    if (col === h.col && row === h.row) return false
+    return this.canPlace(col, row)
+  }
+
+  moveHero(slotId: number, col: number, row: number): boolean {
+    if (this.state === 'won' || this.state === 'lost' || this.state === 'draft') return false
+    const h = this.heroBySlot(slotId)
+    if (!h || !this.canMoveHeroTo(slotId, col, row)) return false
+    const fromX = h.x
+    const fromY = h.y
+    this.occupiedHero[h.row][h.col] = null // free the old cell BEFORE claiming the new
+    const cc = cellCenter(col, row)
+    h.col = col
+    h.row = row
+    h.x = cc.x
+    h.y = cc.y
+    h.cd = Math.max(h.cd, this.heroCooldown(h)) // settle: one attack beat after the blink
+    h.moveFlash = 0.4
+    this.occupiedHero[row][col] = h
+    this.recomputeBuffs() // adjacency changed (support links); resonance/synergy are position-free
+    this.emit({ t: 'heroMove', slotId: h.id, fromX, fromY, x: cc.x, y: cc.y, color: h.def.color, radius: this.heroRange(h) })
+    return true
+  }
+
+  // Cycle/set a hero's auto-attack priority (First/Last/Close/Strong/Weak/Primed).
+  // 'Strong' makes a DPS hero lock the boss; 'Primed' hunts reaction detonations.
+  setHeroTargeting(slotId: number, mode: TargetMode): void {
+    const h = this.heroBySlot(slotId)
+    if (h) { h.targeting = mode; h.focusId = 0 } // an explicit mode clears a manual lock
+  }
+
+  // Sticky FOCUS: hammer one specific enemy until it dies or leaves range. The
+  // scene resolves a tap → the enemy id; passing 0 clears the lock.
+  focusHero(slotId: number, enemyId: number): void {
+    const h = this.heroBySlot(slotId)
+    if (h) h.focusId = Math.max(0, Math.floor(enemyId))
+  }
+
+  // Nearest live enemy to a point within a pick radius — the scene maps a tap on
+  // the board to a focus target. Pure read; deterministic.
+  enemyNear(x: number, y: number, maxTiles = 1.6): SimEnemy | null {
+    const r2 = (maxTiles * TILE) * (maxTiles * TILE)
+    let best: SimEnemy | null = null
+    let bd = r2
+    for (const e of this.enemies) {
+      if (!e.active || e.hp <= 0) continue
+      const d = dist2(x, y, e.x, e.y)
+      if (d <= bd) { bd = d; best = e }
+    }
+    return best
+  }
+
   private updateHeroes(dt: number): void {
     for (const h of this.heroes) {
       if (!h.active) continue
       if (h.fireFlash > 0) h.fireFlash = Math.max(0, h.fireFlash - dt)
+      if (h.moveFlash > 0) h.moveFlash = Math.max(0, h.moveFlash - dt)
       if (h.spellCd > 0) h.spellCd = Math.max(0, h.spellCd - dt)
       if (h.greyUntil > this.clock) continue // borrowed by the Moth Mirror: no attacks
       // the bonded Wyrm circles the hero and breathes on its own cadence (only
@@ -2380,9 +2452,19 @@ export class Sim {
     }
   }
 
-  // heroes always fire at the FIRST enemy in range, and CAN hit air (they are mages).
+  // Heroes CAN hit air (they are mages) and honour the player's targeting mode +
+  // sticky focus. Default 'First' with no focus = the classic highest-progress pick,
+  // so an un-retargeted hero is byte-identical to the old behaviour.
   private acquireForHero(h: SimHero, range: number): SimEnemy | null {
     const r2 = range * range
+    // Sticky FOCUS: keep hammering the tapped enemy while it lives + stays in range;
+    // otherwise drop the lock and fall back to the mode (the threat's dead/escaped).
+    if (h.focusId !== 0) {
+      for (const e of this.enemies) {
+        if (e.active && e.hp > 0 && e.id === h.focusId && dist2(h.x, h.y, e.x, e.y) <= r2) return e
+      }
+      h.focusId = 0
+    }
     let best: SimEnemy | null = null
     let bestScore = -Infinity
     for (const e of this.enemies) {
@@ -2390,9 +2472,26 @@ export class Sim {
       const d2 = dist2(h.x, h.y, e.x, e.y)
       if (d2 > r2) continue
       const prog = this.progressOf(e)
-      if (prog > bestScore) { bestScore = prog; best = e }
+      let score: number
+      switch (h.targeting) {
+        case 'Last': score = -prog; break
+        case 'Close': score = -d2; break
+        case 'Strong': score = e.hp; break // lock the fat target (a boss/elite) — burst role
+        case 'Weak': score = -e.hp; break
+        case 'Primed': score = (this.heroWouldDetonate(h, e) ? 1e7 : 0) + prog; break
+        default: score = prog // 'First'
+      }
+      if (score > bestScore) { bestScore = score; best = e }
     }
     return best
+  }
+
+  // Would this hero's next hit detonate a reaction on e? (Primed targeting for heroes.)
+  private heroWouldDetonate(h: SimHero, e: SimEnemy): boolean {
+    if (this.clock < e.reactLockUntil) return false
+    const aura = h.def.element
+    if (e.auraElem === '' || e.auraUntil <= this.clock || e.auraElem === aura) return false
+    return reactionFor(e.auraElem as AuraElement, aura) !== null
   }
 
   private heroAttack(h: SimHero, target: SimEnemy): void {
@@ -2614,10 +2713,17 @@ export class Sim {
     h.spellCd = h.spellMaxCd
     const cx = sp.targeted ? x : h.x
     const cy = sp.targeted ? y : h.y
+    // INVESTMENT PAYOFF: an ULT hits harder for a hero the player has committed to —
+    // element RESONANCE (2+ resonant towers + awakened hero) and the dragon BOND
+    // both amplify the signature spell. Provably 1.0 with no resonance/no bond (the
+    // demo's Lv2 heroes), so the pinned reel is untouched; a built hero's ult turns
+    // the tide. Clamped so the range asserts can never trip.
+    const invest = clamp((this.resHeroMult.get(h.heroId) ?? 1) * (h.wyrm ? h.wyrm.heroAmp : 1), 1, 8)
+    const spDmg = (base: number): number => clamp(base * power * invest, 0, 1e7)
 
     if (sp.effect === 'aoeBurn') {
       const radius = (sp.radius ?? 2) * TILE
-      const dmg = (sp.damage ?? 100) * power
+      const dmg = spDmg(sp.damage ?? 100)
       const r2 = radius * radius
       for (const e of this.enemies) {
         if (!e.active || e.hp <= 0) continue
@@ -2625,7 +2731,7 @@ export class Sim {
         this.applyDirect(e, dmg)
         if (e.active) {
           e.burnUntil = this.clock + (sp.burnDuration ?? 2)
-          e.burnDps = Math.max(e.burnDps, (sp.burnDps ?? 20) * power)
+          e.burnDps = Math.max(e.burnDps, spDmg(sp.burnDps ?? 20))
         }
       }
       this.emit({ t: 'heroSpell', effect: 'aoeBurn', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: 0 })
@@ -2666,7 +2772,7 @@ export class Sim {
       if (heal > 0) this.emit({ t: 'heal', x: cx, y: cy, amount: heal, radius })
     } else if (sp.effect === 'novaBuff') {
       const radius = (sp.radius ?? 2) * TILE
-      const dmg = (sp.damage ?? 80) * power
+      const dmg = spDmg(sp.damage ?? 80)
       const r2 = radius * radius
       for (const e of this.enemies) {
         if (!e.active || e.hp <= 0) continue
@@ -2685,9 +2791,9 @@ export class Sim {
       // execute
       const target = this.nearestEnemyTo(cx, cy)
       if (target) {
-        let dmg = (sp.damage ?? 150) * power
+        let dmg = spDmg(sp.damage ?? 150)
         const thr = sp.executeThreshold ?? 0.3
-        if (target.maxHp > 0 && target.hp / target.maxHp <= thr) dmg *= sp.executeMult ?? 2
+        if (target.maxHp > 0 && target.hp / target.maxHp <= thr) dmg = clamp(dmg * (sp.executeMult ?? 2), 0, 1e7)
         this.applyDirect(target, dmg)
         this.emit({ t: 'heroSpell', effect: 'execute', name: sp.name, glyph: sp.glyph, x: target.x, y: target.y, radius: 0, color, count: 0 })
       } else {
@@ -2722,7 +2828,8 @@ export class Sim {
     const points: Array<[number, number]> = [[h.x, h.y]]
     for (const e of chain) points.push([e.x, e.y])
     this.emit({ t: 'chain', points, color: h.def.color, count: chain.length, supercharged: false })
-    let dmg = (sp.damage ?? 90) * this.config.mods.spellPowerMult
+    const invest = clamp((this.resHeroMult.get(h.heroId) ?? 1) * (h.wyrm ? h.wyrm.heroAmp : 1), 1, 8)
+    let dmg = clamp((sp.damage ?? 90) * this.config.mods.spellPowerMult * invest, 0, 1e7)
     for (const e of chain) {
       if (!e.active) continue
       this.applyDirect(e, dmg)

@@ -12,9 +12,9 @@ import { heroById } from './heroes'
 const TIER1_COUNT = 2
 const TIER2_COUNT = 4
 const TIER1_TOWER = 1.12
-const TIER1_HERO = 1.15
-const TIER2_TOWER = 1.18
-const TIER2_HERO = 1.25
+const TIER1_HERO = 1.22 // committing an element to your hero is a real, felt payoff…
+const TIER2_TOWER = 1.20
+const TIER2_HERO = 1.45 // …and going all-in (4+ towers) makes the hero a centrepiece
 
 export interface ResonanceBonus {
   id: string // stable per (towerKind, tier) — the HUD keys chips on it

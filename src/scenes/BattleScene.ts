@@ -65,7 +65,7 @@ type CoachStep =
 const ENDLESS_START_GOLD = 300
 const ENDLESS_START_LIVES = 20
 
-type InputMode = 'idle' | 'building' | 'deploying' | 'aiming'
+type InputMode = 'idle' | 'building' | 'deploying' | 'aiming' | 'moving'
 
 export interface BattleLaunchData {
   levelId?: string
@@ -142,6 +142,9 @@ export class BattleScene extends Phaser.Scene {
   private aimingSpell: SpellKey | null = null
   private aimingHeroSlot: number | null = null
   private selectedId: number | null = null
+  private selectedHeroSlot: number | null = null // a deployed hero whose panel is open
+  private movingHeroSlot: number | null = null // hero armed for relocation (moving mode)
+  private heroPanelT = 0 // throttles live refresh of the open hero panel's cooldown
 
   private camCtl: CameraControls | null = null
   private onResize = () => this.view?.resize()
@@ -307,6 +310,8 @@ export class BattleScene extends Phaser.Scene {
     this.aimingSpell = null
     this.aimingHeroSlot = null
     this.selectedId = null
+    this.selectedHeroSlot = null
+    this.movingHeroSlot = null
     this.lastTime = 0
     this.hitstopT = 0
     this.lastSimState = ''
@@ -374,6 +379,9 @@ export class BattleScene extends Phaser.Scene {
       onBranch: (id, idx) => { const c = this.sim.clock; if (this.sim.chooseBranch(id, idx)) { this.hud.showUpgrade(this.sim, id); this.recorder?.branch(c, id, idx) } },
       onFuse: (id, partnerId) => { const c = this.sim.clock; if (this.sim.fuseTowers(id, partnerId)) { this.hud.showUpgrade(this.sim, id); this.recorder?.fuse(c, id, partnerId) } },
       onTargeting: (id) => this.cycleTargeting(id),
+      onHeroTargeting: (slot) => this.cycleHeroTargeting(slot),
+      onHeroMove: (slot) => this.armHeroMove(slot),
+      onHeroCast: (slot) => this.castSelectedHero(slot),
       onDraft: (i) => this.pickDraft(i),
       onQuit: () => this.quitBattle(),
       onReplay: () => {
@@ -506,6 +514,17 @@ export class BattleScene extends Phaser.Scene {
 
     // attract cinematography: camera cues + captions keyed to the sim clock
     if (this.attract) this.updateAttract()
+
+    // keep the open hero panel's ULT cooldown live — but only WHILE it's cooling
+    // (once ready the button is static, so no churn/tooltip-dismiss when idle).
+    if (this.selectedHeroSlot != null && this.mode === 'idle') {
+      const sel = this.sim.heroBySlot(this.selectedHeroSlot)
+      if (!sel) { this.deselect() } // the hero left the field — drop the panel
+      else if (sel.spellCd > 0) {
+        this.heroPanelT += dt
+        if (this.heroPanelT >= 0.5) { this.heroPanelT = 0; this.hud.showHeroPanel(this.sim, this.selectedHeroSlot) }
+      }
+    }
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
     this.updateGreying(dt)
@@ -876,22 +895,39 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const cell = this.view.pickCell(x, y)
-    if (!cell) { if (this.mode === 'idle') this.deselect(); return }
+    if (!cell) {
+      // off-grid tap: while a hero is selected, treat it as a FOCUS on the nearest
+      // enemy (chase the boss); otherwise deselect.
+      if (this.mode === 'idle' && this.selectedHeroSlot != null && this.tryFocusAt(x, y)) return
+      if (this.mode === 'idle') this.deselect()
+      return
+    }
 
     const t = this.sim.towerAt(cell.col, cell.row)
+    const hero = this.sim.heroAt(cell.col, cell.row)
+
+    // MOVING: the armed hero relocates to this tile (or re-selects a tapped entity).
+    if (this.mode === 'moving') {
+      if (this.movingHeroSlot != null) this.tryMoveHero(cell.col, cell.row)
+      return
+    }
 
     // An armed option (build/deploy) is superseded the instant you tap an existing
     // tower — the new selection wins on the FIRST tap, no exit-mode click first.
     if (this.mode === 'building') {
+      if (hero) { this.exitBuild(); this.selectHero(hero.id); return }
       if (t) { this.exitBuild(); this.selectTower(t.id); return }
       this.tryPlace(cell.col, cell.row); return
     }
     if (this.mode === 'deploying') {
+      if (hero) { this.exitDeploy(); this.selectHero(hero.id); return }
       if (t) { this.exitDeploy(); this.selectTower(t.id); return }
       this.tryDeploy(cell.col, cell.row); return
     }
 
-    if (t) this.selectTower(t.id) // swaps directly if a different tower's panel was open
+    if (hero) this.selectHero(hero.id) // single-tap select the hero on board
+    else if (t) this.selectTower(t.id) // swaps directly if a different tower's panel was open
+    else if (this.selectedHeroSlot != null && this.tryFocusAt(x, y)) return // tap enemy → focus
     else this.deselect() // tap on empty board: deselect + close panels
   }
 
@@ -913,6 +949,10 @@ export class BattleScene extends Phaser.Scene {
     if (this.mode === 'building' || this.mode === 'deploying') {
       const cell = this.view.pickCell(x, y)
       this.view.setHover(cell, cell ? this.sim.canPlace(cell.col, cell.row) : false)
+    } else if (this.mode === 'moving') {
+      const cell = this.view.pickCell(x, y)
+      const ok = cell != null && this.movingHeroSlot != null && this.sim.canMoveHeroTo(this.movingHeroSlot, cell.col, cell.row)
+      this.view.setHover(cell, ok)
     } else if (this.mode === 'aiming') {
       const cell = this.view.pickCell(x, y)
       this.view.setHover(cell, true)
@@ -1127,11 +1167,108 @@ export class BattleScene extends Phaser.Scene {
 
   private selectTower(id: number): void {
     this.selectedId = id
+    this.selectedHeroSlot = null
+    this.exitMoving()
     this.hud.showUpgrade(this.sim, id)
   }
   private deselect(): void {
     this.selectedId = null
+    this.selectedHeroSlot = null
+    this.exitMoving()
     this.hud.hideUpgrade()
+  }
+
+  // ---- HERO control: select · retarget · relocate · focus · cast -----------
+  private selectHero(slotId: number): void {
+    if (!this.sim.heroBySlot(slotId)) return
+    this.exitBuild()
+    this.exitDeploy()
+    this.exitAiming()
+    this.exitMoving()
+    this.selectedId = null
+    this.selectedHeroSlot = slotId
+    this.hud.showHeroPanel(this.sim, slotId)
+  }
+
+  private cycleHeroTargeting(slotId: number): void {
+    const h = this.sim.heroBySlot(slotId)
+    if (!h) return
+    // heroes hit air freely, so 'Primed' stays; cycle the full wheel
+    const next = TARGET_MODES[(TARGET_MODES.indexOf(h.targeting) + 1) % TARGET_MODES.length]
+    const c = this.sim.clock
+    this.sim.setHeroTargeting(slotId, next)
+    this.recorder?.heroTarget(c, slotId, next)
+    this.hud.showHeroPanel(this.sim, slotId)
+  }
+
+  private armHeroMove(slotId: number): void {
+    if (!this.sim.heroBySlot(slotId)) return
+    this.movingHeroSlot = slotId
+    this.mode = 'moving'
+    this.view.setHover(null, false)
+    this.view.setBuildHighlight(true)
+    this.hud.banner('TAP A TILE TO MOVE', this.sim.heroBySlot(slotId)?.def.color ?? 0x8fbfff)
+  }
+
+  private exitMoving(): void {
+    this.movingHeroSlot = null
+    if (this.mode === 'moving') this.mode = 'idle'
+    this.view.setHover(null, false)
+    this.view.setBuildHighlight(false)
+  }
+
+  private tryMoveHero(col: number, row: number): void {
+    const slot = this.movingHeroSlot
+    if (slot == null) { this.exitMoving(); return }
+    const cc = cellCenter(col, row)
+    if (!this.sim.canMoveHeroTo(slot, col, row)) { this.floatAt(cc.x, cc.y, 'CANT MOVE', 0xff5b7a, 22); return }
+    const c = this.sim.clock
+    if (this.sim.moveHero(slot, col, row)) {
+      this.recorder?.heroMove(c, slot, col, row)
+      this.view.heroCastPose(slot) // little blink pose on arrival
+    }
+    this.exitMoving()
+    this.selectedHeroSlot = slot
+    this.hud.showHeroPanel(this.sim, slot)
+  }
+
+  private castSelectedHero(slotId: number): void {
+    const h = this.sim.heroBySlot(slotId)
+    if (!h || h.spellCd > 0) return
+    if (h.spell.targeted) {
+      // close the panel so the aim tap lands on the board, not the floating sheet
+      this.selectedHeroSlot = null
+      this.hud.hideUpgrade()
+      this.exitMoving()
+      this.mode = 'aiming'
+      this.aimingSpell = null
+      this.aimingHeroSlot = slotId
+    } else {
+      const c = this.sim.clock
+      if (this.sim.castHeroSpell(slotId, h.x, h.y)) {
+        this.view.heroCastPose(slotId)
+        this.bumpArc(h.heroId, 'spell')
+        this.recorder?.heroSpell(c, slotId, h.x, h.y)
+        if (this.selectedHeroSlot === slotId) this.hud.showHeroPanel(this.sim, slotId)
+      }
+    }
+  }
+
+  // A tap resolved to a world point near an enemy → hard-FOCUS the selected hero on
+  // it (chase the boss). Returns true if a focus was set.
+  private tryFocusAt(x: number, y: number): boolean {
+    const slot = this.selectedHeroSlot
+    if (slot == null) return false
+    const p = this.view.pickPoint(x, y)
+    if (!p || !this.inMap(p.x, p.y)) return false
+    const e = this.sim.enemyNear(p.x, p.y)
+    if (!e) return false
+    const c = this.sim.clock
+    this.sim.focusHero(slot, e.id)
+    this.recorder?.heroFocus(c, slot, e.id)
+    this.floatAt(e.x, e.y, '🎯 FOCUS', this.sim.heroBySlot(slot)?.def.color ?? 0xffe27a, 20)
+    this.hud.showHeroPanel(this.sim, slot)
+    return true
   }
   private cycleTargeting(id: number): void {
     const t = this.sim.towerById(id)
@@ -1670,9 +1807,17 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxHeroFire(ev.x, ev.y, ev.tx, ev.ty, ev.color)
         battleSfx.shot('hero', panFor(ev.x))
         break
+      case 'heroMove':
+        // the hero blinks to a new tile — streak from old cell to new + settle ring.
+        this.view.fxHeroFire(ev.fromX, ev.fromY, ev.x, ev.y, ev.color)
+        this.view.fxHeroDeploy(ev.x, ev.y, ev.color, ev.radius)
+        battleSfx.heroDeploy()
+        break
       case 'heroSpell':
         this.view.fxHeroSpell(ev.effect, ev.x, ev.y, ev.radius, ev.color)
-        this.hud.flash(ev.color, 0.4)
+        this.hud.flash(ev.color, 0.55)
+        this.view.shake(0.045) // a signature ULT lands as a real punch
+        if (!this.attract) haptic(HAPTIC.reaction)
         this.hud.banner(ev.name.toUpperCase() + '!', ev.color)
         battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute', panFor(ev.x))
         // the hero's SIGNATURE — a stylized vocal punch on the bus (not the chat feed)

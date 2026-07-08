@@ -2434,8 +2434,12 @@ function heroStats(def, level) {
     dps: clamp(damage / cooldown, 0, 1e7)
   };
 }
+function spellLevelMult(level) {
+  const L = clampLevel(level);
+  return L <= 2 ? 1 + SPELL_GROWTH * (L - 1) : 1 + SPELL_GROWTH + 0.2 * (L - 2);
+}
 function heroSpellScaled(spell, level) {
-  const m = 1 + SPELL_GROWTH * (clampLevel(level) - 1);
+  const m = spellLevelMult(level);
   const scale = (v) => v === void 0 ? void 0 : clamp(v * m, 0, 1e7);
   return {
     ...spell,
@@ -2713,9 +2717,9 @@ function computeSynergies(elements) {
 var TIER1_COUNT = 2;
 var TIER2_COUNT = 4;
 var TIER1_TOWER = 1.12;
-var TIER1_HERO = 1.15;
-var TIER2_TOWER = 1.18;
-var TIER2_HERO = 1.25;
+var TIER1_HERO = 1.22;
+var TIER2_TOWER = 1.2;
+var TIER2_HERO = 1.45;
 var pct = (m) => `+${Math.round((m - 1) * 100)}%`;
 function computeResonances(fielded, towerCounts) {
   const byKind = /* @__PURE__ */ new Map();
@@ -4782,6 +4786,9 @@ var Sim = class {
         cd: 0,
         aimAngle: 0,
         fireFlash: 0,
+        targeting: "First",
+        focusId: 0,
+        moveFlash: 0,
         baseDamage: 0,
         baseRange: 0,
         attackCd: 1,
@@ -4817,6 +4824,9 @@ var Sim = class {
     h.cd = 0;
     h.aimAngle = 0;
     h.fireFlash = 0;
+    h.targeting = "First";
+    h.focusId = 0;
+    h.moveFlash = 0;
     h.baseDamage = stats.damage;
     h.baseRange = stats.range;
     h.attackCd = stats.cooldown;
@@ -4930,10 +4940,71 @@ var Sim = class {
     for (const h of this.heroes) if (h.active && h.id === id) return h;
     return null;
   }
+  // ---- PLAYER CONTROL: reposition + focus (the skill levers) ---------------
+  // RELOCATE a fielded hero to an empty build tile — placement is a LIVE decision,
+  // not a one-time plop. Free (encourage active play) but a short attack settle so
+  // it isn't a zero-cost teleport-spam. Deterministic; adjacency buffs recompute.
+  canMoveHeroTo(slotId, col, row) {
+    const h = this.heroBySlot(slotId);
+    if (!h) return false;
+    if (col === h.col && row === h.row) return false;
+    return this.canPlace(col, row);
+  }
+  moveHero(slotId, col, row) {
+    if (this.state === "won" || this.state === "lost" || this.state === "draft") return false;
+    const h = this.heroBySlot(slotId);
+    if (!h || !this.canMoveHeroTo(slotId, col, row)) return false;
+    const fromX = h.x;
+    const fromY = h.y;
+    this.occupiedHero[h.row][h.col] = null;
+    const cc = cellCenter(col, row);
+    h.col = col;
+    h.row = row;
+    h.x = cc.x;
+    h.y = cc.y;
+    h.cd = Math.max(h.cd, this.heroCooldown(h));
+    h.moveFlash = 0.4;
+    this.occupiedHero[row][col] = h;
+    this.recomputeBuffs();
+    this.emit({ t: "heroMove", slotId: h.id, fromX, fromY, x: cc.x, y: cc.y, color: h.def.color, radius: this.heroRange(h) });
+    return true;
+  }
+  // Cycle/set a hero's auto-attack priority (First/Last/Close/Strong/Weak/Primed).
+  // 'Strong' makes a DPS hero lock the boss; 'Primed' hunts reaction detonations.
+  setHeroTargeting(slotId, mode) {
+    const h = this.heroBySlot(slotId);
+    if (h) {
+      h.targeting = mode;
+      h.focusId = 0;
+    }
+  }
+  // Sticky FOCUS: hammer one specific enemy until it dies or leaves range. The
+  // scene resolves a tap → the enemy id; passing 0 clears the lock.
+  focusHero(slotId, enemyId) {
+    const h = this.heroBySlot(slotId);
+    if (h) h.focusId = Math.max(0, Math.floor(enemyId));
+  }
+  // Nearest live enemy to a point within a pick radius — the scene maps a tap on
+  // the board to a focus target. Pure read; deterministic.
+  enemyNear(x, y, maxTiles = 1.6) {
+    const r2 = maxTiles * TILE * (maxTiles * TILE);
+    let best = null;
+    let bd = r2;
+    for (const e3 of this.enemies) {
+      if (!e3.active || e3.hp <= 0) continue;
+      const d = dist2(x, y, e3.x, e3.y);
+      if (d <= bd) {
+        bd = d;
+        best = e3;
+      }
+    }
+    return best;
+  }
   updateHeroes(dt) {
     for (const h of this.heroes) {
       if (!h.active) continue;
       if (h.fireFlash > 0) h.fireFlash = Math.max(0, h.fireFlash - dt);
+      if (h.moveFlash > 0) h.moveFlash = Math.max(0, h.moveFlash - dt);
       if (h.spellCd > 0) h.spellCd = Math.max(0, h.spellCd - dt);
       if (h.greyUntil > this.clock) continue;
       if (h.wyrm) this.updateWyrm(h, dt);
@@ -4948,9 +5019,17 @@ var Sim = class {
       this.heroAttack(h, target);
     }
   }
-  // heroes always fire at the FIRST enemy in range, and CAN hit air (they are mages).
+  // Heroes CAN hit air (they are mages) and honour the player's targeting mode +
+  // sticky focus. Default 'First' with no focus = the classic highest-progress pick,
+  // so an un-retargeted hero is byte-identical to the old behaviour.
   acquireForHero(h, range) {
     const r2 = range * range;
+    if (h.focusId !== 0) {
+      for (const e3 of this.enemies) {
+        if (e3.active && e3.hp > 0 && e3.id === h.focusId && dist2(h.x, h.y, e3.x, e3.y) <= r2) return e3;
+      }
+      h.focusId = 0;
+    }
     let best = null;
     let bestScore = -Infinity;
     for (const e3 of this.enemies) {
@@ -4958,12 +5037,39 @@ var Sim = class {
       const d2 = dist2(h.x, h.y, e3.x, e3.y);
       if (d2 > r2) continue;
       const prog = this.progressOf(e3);
-      if (prog > bestScore) {
-        bestScore = prog;
+      let score;
+      switch (h.targeting) {
+        case "Last":
+          score = -prog;
+          break;
+        case "Close":
+          score = -d2;
+          break;
+        case "Strong":
+          score = e3.hp;
+          break;
+        case "Weak":
+          score = -e3.hp;
+          break;
+        case "Primed":
+          score = (this.heroWouldDetonate(h, e3) ? 1e7 : 0) + prog;
+          break;
+        default:
+          score = prog;
+      }
+      if (score > bestScore) {
+        bestScore = score;
         best = e3;
       }
     }
     return best;
+  }
+  // Would this hero's next hit detonate a reaction on e? (Primed targeting for heroes.)
+  heroWouldDetonate(h, e3) {
+    if (this.clock < e3.reactLockUntil) return false;
+    const aura = h.def.element;
+    if (e3.auraElem === "" || e3.auraUntil <= this.clock || e3.auraElem === aura) return false;
+    return reactionFor(e3.auraElem, aura) !== null;
   }
   heroAttack(h, target) {
     this.emit({ t: "heroFire", x: h.x, y: h.y - 6, tx: target.x, ty: target.y, color: h.def.color });
@@ -5188,9 +5294,11 @@ var Sim = class {
     h.spellCd = h.spellMaxCd;
     const cx = sp.targeted ? x : h.x;
     const cy = sp.targeted ? y : h.y;
+    const invest = clamp((this.resHeroMult.get(h.heroId) ?? 1) * (h.wyrm ? h.wyrm.heroAmp : 1), 1, 8);
+    const spDmg = (base) => clamp(base * power * invest, 0, 1e7);
     if (sp.effect === "aoeBurn") {
       const radius = (sp.radius ?? 2) * TILE;
-      const dmg = (sp.damage ?? 100) * power;
+      const dmg = spDmg(sp.damage ?? 100);
       const r2 = radius * radius;
       for (const e3 of this.enemies) {
         if (!e3.active || e3.hp <= 0) continue;
@@ -5198,7 +5306,7 @@ var Sim = class {
         this.applyDirect(e3, dmg);
         if (e3.active) {
           e3.burnUntil = this.clock + (sp.burnDuration ?? 2);
-          e3.burnDps = Math.max(e3.burnDps, (sp.burnDps ?? 20) * power);
+          e3.burnDps = Math.max(e3.burnDps, spDmg(sp.burnDps ?? 20));
         }
       }
       this.emit({ t: "heroSpell", effect: "aoeBurn", name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: 0 });
@@ -5239,7 +5347,7 @@ var Sim = class {
       if (heal > 0) this.emit({ t: "heal", x: cx, y: cy, amount: heal, radius });
     } else if (sp.effect === "novaBuff") {
       const radius = (sp.radius ?? 2) * TILE;
-      const dmg = (sp.damage ?? 80) * power;
+      const dmg = spDmg(sp.damage ?? 80);
       const r2 = radius * radius;
       for (const e3 of this.enemies) {
         if (!e3.active || e3.hp <= 0) continue;
@@ -5257,9 +5365,9 @@ var Sim = class {
     } else {
       const target = this.nearestEnemyTo(cx, cy);
       if (target) {
-        let dmg = (sp.damage ?? 150) * power;
+        let dmg = spDmg(sp.damage ?? 150);
         const thr = sp.executeThreshold ?? 0.3;
-        if (target.maxHp > 0 && target.hp / target.maxHp <= thr) dmg *= sp.executeMult ?? 2;
+        if (target.maxHp > 0 && target.hp / target.maxHp <= thr) dmg = clamp(dmg * (sp.executeMult ?? 2), 0, 1e7);
         this.applyDirect(target, dmg);
         this.emit({ t: "heroSpell", effect: "execute", name: sp.name, glyph: sp.glyph, x: target.x, y: target.y, radius: 0, color, count: 0 });
       } else {
@@ -5296,7 +5404,8 @@ var Sim = class {
     const points = [[h.x, h.y]];
     for (const e3 of chain) points.push([e3.x, e3.y]);
     this.emit({ t: "chain", points, color: h.def.color, count: chain.length, supercharged: false });
-    let dmg = (sp.damage ?? 90) * this.config.mods.spellPowerMult;
+    const invest = clamp((this.resHeroMult.get(h.heroId) ?? 1) * (h.wyrm ? h.wyrm.heroAmp : 1), 1, 8);
+    let dmg = clamp((sp.damage ?? 90) * this.config.mods.spellPowerMult * invest, 0, 1e7);
     for (const e3 of chain) {
       if (!e3.active) continue;
       this.applyDirect(e3, dmg);
@@ -5631,7 +5740,7 @@ var WORDS_B = [
 var SEED_SPACE = WORDS_A.length * WORDS_B.length * 100;
 
 // src/game/ranked.ts
-var SIM_VERSION = 3;
+var SIM_VERSION = 4;
 var RANKED_HERO_LEVEL = 5;
 var ENDLESS_START_GOLD = 300;
 var ENDLESS_START_LIVES = 20;
@@ -5686,6 +5795,9 @@ var OP_HEROSPELL = 5;
 var OP_SPELL = 6;
 var OP_TARGET = 7;
 var OP_STARTWAVE = 8;
+var OP_HEROMOVE = 9;
+var OP_HEROTARGET = 10;
+var OP_HEROFOCUS = 11;
 var TARGET_MODES_ORDER = ["First", "Last", "Close", "Strong", "Weak", "Primed"];
 var REPLAY_TICK_CAP = 60 * 60 * 90;
 function applyCmd(sim, cmd) {
@@ -5716,6 +5828,15 @@ function applyCmd(sim, cmd) {
       break;
     case OP_STARTWAVE:
       if (sim.state === "prep") sim.startWave();
+      break;
+    case OP_HEROMOVE:
+      sim.moveHero(cmd[2], cmd[3], cmd[4]);
+      break;
+    case OP_HEROTARGET:
+      sim.setHeroTargeting(cmd[2], TARGET_MODES_ORDER[cmd[3]] ?? "First");
+      break;
+    case OP_HEROFOCUS:
+      sim.focusHero(cmd[2], cmd[3]);
       break;
   }
 }

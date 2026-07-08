@@ -39,6 +39,9 @@ export interface HudCallbacks {
   onBranch(id: number, idx: number): void
   onFuse(id: number, partnerId: number): void // forge a fusion tower with an adjacent max tower
   onTargeting(id: number): void
+  onHeroTargeting(slotId: number): void // cycle a fielded hero's focus priority
+  onHeroMove(slotId: number): void // arm relocation — next tile tap moves the hero
+  onHeroCast(slotId: number): void // cast the selected hero's signature spell
   onDraft(index: number): void
   onQuit(): void
   onReplay(): void
@@ -1464,6 +1467,90 @@ export class BattleHud {
     // the board, so a tower hidden under the open sheet swaps in on one tap. Buttons
     // handle their own clicks (skip them); a long-press for a tooltip suppresses the
     // click, so tips never misfire a passthrough. Scroll drags fire no click.
+    wrap.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return
+      this.cb.onBoardTapThrough(e.clientX, e.clientY)
+    })
+    this.root.append(wrap)
+    this.upgradeEl = wrap
+  }
+
+  // A fielded HERO's control sheet — the counterpart to the tower upgrade sheet.
+  // Reuses the same floating container (so hideUpgrade closes it) but surfaces the
+  // hero levers that make placement a live skill: RELOCATE, retarget priority, and
+  // the signature ULT with its live cooldown. Selected by tapping the hero on board.
+  showHeroPanel(sim: Sim, slotId: number): void {
+    this.hideUpgrade()
+    this.chat.collapse()
+    const h = sim.heroBySlot(slotId)
+    if (!h) return
+    const def = h.def
+    const color = def.color
+    const wrap = el('div', 'eld-upg pe')
+    wrap.style.borderColor = hex(color)
+    wrap.style.boxShadow = `0 12px 34px rgba(0,0,0,.55), 0 0 22px ${hex(color)}55`
+
+    const row1 = el('div', 'row1')
+    row1.append(el('div', 'tt', `${def.glyph} ${def.name} · Lv ${h.level}`), el('div', 'stars', def.role.toUpperCase()))
+    const roleEl = row1.querySelector('.stars') as HTMLElement
+    roleEl.style.color = hex(color)
+
+    const focusHint = h.focusId !== 0 ? ' · 🎯 FOCUSED' : ''
+    const stat = el('div', 'stat pe', `DPS ${Math.round(sim.heroDps(h))}   ·   RNG ${(sim.heroRange(h) / 80).toFixed(1)}   ·   ${def.element}${focusHint}`)
+
+    const ressForHero = sim.activeResonances().filter((r) => r.heroIds.includes(h.heroId))
+    const bondLine = h.wyrm ? `${h.wyrm.wyrm.emoji} ${h.wyrm.wyrm.name} bond · ${h.wyrm.tierLabel}` : ''
+    const resLine = ressForHero.length ? `🔗 ${ressForHero.map((r) => r.name).join(' · ')}` : ''
+    const investTxt = [resLine, bondLine].filter(Boolean).join('   ·   ') || 'Tap an enemy to FOCUS · tap a tile after MOVE to relocate'
+    const evs = el('div', 'evs pe', investTxt)
+    evs.style.color = ressForHero.length || h.wyrm ? '#ffe27a' : '#b8b0d8'
+
+    const close = el('button', 'close pe', '✕')
+    close.onclick = () => this.cb.onSelectDeselect()
+
+    const ctl = el('div', 'ctl')
+    const tgt = iconEl('button', 'tgt pe', `${iconMarkup('target', { size: 13, color: '#e6ddff' })} ${h.targeting}`)
+    tgt.onclick = () => { this.cb.onHeroTargeting(slotId); this.showHeroPanel(sim, slotId) }
+    attachTip(tgt, () => {
+      const hh = this.simRef?.heroBySlot(slotId)
+      const mode = hh?.targeting ?? h.targeting
+      return {
+        tag: 'TARGETING', title: `Priority: ${mode}`, accent: '#a8e9ff',
+        rows: [
+          { k: 'First', v: 'furthest along the path', c: mode === 'First' ? '#8dff4a' : undefined },
+          { k: 'Strong', v: 'highest health — lock the boss/elite', c: mode === 'Strong' ? '#8dff4a' : undefined },
+          { k: 'Weak', v: 'lowest health — finish kills', c: mode === 'Weak' ? '#8dff4a' : undefined },
+          { k: 'Close', v: 'nearest the hero', c: mode === 'Close' ? '#8dff4a' : undefined },
+          { k: 'Primed', v: 'primed for a reaction with this hero', c: mode === 'Primed' ? '#8dff4a' : undefined },
+        ],
+        foot: 'Tap to cycle. Or tap an enemy on the board to hard-FOCUS it.',
+      }
+    })
+    ctl.append(tgt)
+
+    const move = el('button', 'up pe', '⤢ MOVE')
+    move.onclick = () => this.cb.onHeroMove(slotId)
+    attachTip(move, () => ({
+      tag: 'REPOSITION', title: 'Relocate the hero', accent: hex(color),
+      body: 'Move the hero to any open build tile — meet the threat, chase the boss, or slot beside a support. Free; a brief settle after the blink.',
+    }))
+    ctl.append(move)
+
+    const ready = h.spellCd <= 0
+    const cd = Math.ceil(h.spellCd)
+    const cast = el('button', 'up pe' + (ready ? '' : ' no'), ready ? `✦ ${h.spell.name}` : `✦ ${cd}s`)
+    if (ready) cast.onclick = () => this.cb.onHeroCast(slotId)
+    attachTip(cast, () => {
+      const hh = this.simRef?.heroBySlot(slotId)
+      return {
+        tag: 'SIGNATURE ULT', title: hh?.spell.name ?? h.spell.name, accent: hex(color),
+        body: h.spell.blurb + ' — grows with hero level, element resonance and the dragon bond. Save it for a boss or a swarm.',
+        rows: [{ k: 'Cooldown', v: `${Math.round(h.spellMaxCd)}s`, c: '#ffe27a' }],
+      }
+    })
+    ctl.append(cast)
+
+    wrap.append(close, row1, stat, evs, ctl)
     wrap.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('button')) return
       this.cb.onBoardTapThrough(e.clientX, e.clientY)

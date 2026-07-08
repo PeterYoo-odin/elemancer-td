@@ -86,9 +86,19 @@ export function heroStats(def: HeroDef, level: number): HeroStats {
   }
 }
 
+// The ULT should be the thing you SAVE for a boss/swarm — so its power climbs
+// STEEPLY with level. Pinned through Lv2 (identical to the old 10%/level curve, so
+// the scripted Lv2 demo reel is byte-unchanged) then ~2× steeper above: a maxed
+// signature spell reads as a real turn-the-tide button, not a chip. L1=1.0 · L2=1.10
+// · L6=1.90 · L16=3.90 · L20=4.70 (was 2.90).
+export function spellLevelMult(level: number): number {
+  const L = clampLevel(level)
+  return L <= 2 ? 1 + SPELL_GROWTH * (L - 1) : 1 + SPELL_GROWTH + 0.20 * (L - 2)
+}
+
 // Level-scaled spell numbers (a shallow copy with damage/heal/burn scaled by level).
 export function heroSpellScaled(spell: HeroSpellDef, level: number): HeroSpellDef {
-  const m = 1 + SPELL_GROWTH * (clampLevel(level) - 1)
+  const m = spellLevelMult(level)
   const scale = (v: number | undefined): number | undefined => (v === undefined ? undefined : clamp(v * m, 0, 1e7))
   return {
     ...spell,

@@ -354,6 +354,36 @@ for (const arena of arenas) {
 cells.push(suspectCell)
 
 // ---------------------------------------------------------------------------
+//  Sweep D: HERO NECESSITY — a matched WITH-hero vs TOWERS-ONLY comparison on the
+//  SAME seeds/arenas/resources at a tighter regime (fewer lives, so depth is
+//  DPS-limited and a starter party's contribution actually shows). Proves the
+//  necessary condition: an actively-cast, level-scaling hero party clears
+//  MEANINGFULLY further than the identical build with no heroes. (This is a floor:
+//  the harness casts blindly at h.x and never repositions/focuses — a player who
+//  moves + focuses does strictly better, but that's a skill argument, not a metric.)
+// ---------------------------------------------------------------------------
+const REGIME_NEC: Regime = { lives: 12, gold: START_GOLD, cap: 70 }
+const REGIME_NEC_SOLO: Regime = { lives: 12, gold: START_GOLD, cap: 70, noHeroes: true }
+const NEC_BUILDS = ['balanced', 'frost_glacier', 'flame_scorch'].map((id) => BUILDS.find((b) => b.id === id)!)
+let necWithSum = 0
+let necSoloSum = 0
+let necN = 0
+for (const build of NEC_BUILDS) {
+  for (const arena of arenas) {
+    for (const seed of seeds(RUNS_PER_CELL, hash('NEC' + build.id, arena.index))) {
+      necWithSum += playBattle(arena, seed, build, relicNeutral, REGIME_NEC).wavesSurvived
+      necSoloSum += playBattle(arena, seed, build, relicNeutral, REGIME_NEC_SOLO).wavesSurvived
+      necN += 1
+      sims += 2
+    }
+  }
+}
+const necWith = necN > 0 ? necWithSum / necN : 0
+const necSolo = necN > 0 ? necSoloSum / necN : 0
+const necLift = necWith - necSolo
+const necRatio = necSolo > 0 ? necWith / necSolo : 1
+
+// ---------------------------------------------------------------------------
 //  Analysis — flag dominant + dead content.
 // ---------------------------------------------------------------------------
 const towerCells = cells.filter((c) => c.tag === 'tower')
@@ -483,6 +513,15 @@ lines.push(DEGENERATE
   : '- ✅ Within tolerance on this sample (still the strongest synergy — keep watching after any relic change).')
 lines.push('')
 
+lines.push('## 2b. Hero necessity — with-hero vs towers-only')
+lines.push('')
+lines.push(`_Matched pairs on the same seeds/arenas, ${REGIME_NEC.lives} lives, cap ${REGIME_NEC.cap}, builds: ${NEC_BUILDS.map((b) => b.label).join(', ')}._`)
+lines.push('')
+lines.push(`- With an actively-cast starter party (Lv ${PARTY_LEVEL}): **${necWith.toFixed(1)} waves**.`)
+lines.push(`- Identical build, towers only: **${necSolo.toFixed(1)} waves**.`)
+lines.push(`- Hero lift: **${necLift >= 0 ? '+' : ''}${necLift.toFixed(1)} waves (${necRatio.toFixed(2)}× deeper)** — a floor (blind auto-cast, no repositioning/focus).`)
+lines.push('')
+
 lines.push('## 3. Relic strategy lift (balanced build)')
 lines.push('')
 lines.push('| Strategy | Waves survived | vs control |')
@@ -545,6 +584,7 @@ console.log(`BALANCE — ${sims.toLocaleString('en-US')} endless sims across ${a
 console.log('Top 3 tower branches: ' + sortedTower.slice(0, 3).map((c) => `${c.buildLabel} (${avgWaves(c).toFixed(1)}w)`).join(', '))
 console.log('Weakest 2 tower branches: ' + [...sortedTower].slice(-2).map((c) => `${c.buildLabel} (${avgWaves(c).toFixed(1)}w)`).join(', '))
 console.log(`Degeneracy probe (Tempest+Blizzard+ChainReactor, early regime): ${avgWaves(suspectCell).toFixed(1)}w vs ${avgWaves(ctrl).toFixed(1)}w control (${degenRatio.toFixed(2)}×), snowball ${finiteLead.toFixed(1)}w earlier → ${DEGENERATE ? 'DEGENERATE 🚩' : 'within tolerance'}`)
+console.log(`Hero necessity: with-hero ${necWith.toFixed(1)}w vs towers-only ${necSolo.toFixed(1)}w → +${necLift.toFixed(1)}w (${necRatio.toFixed(2)}× deeper) [floor: blind auto-cast]`)
 console.log(`Suggestions: ${suggestions.length} (${suggestions.filter((s) => s.kind === 'nerf').length} nerf, ${suggestions.filter((s) => s.kind === 'buff').length} buff) → see BALANCE_REPORT.md + balance-report.json`)
 
 function log(msg: string): void { console.log('· ' + msg) }
