@@ -10,6 +10,8 @@
 
 import { economy } from '../game/economy'
 import { heroArtUrl } from './heroArt'
+import { playHeroAwakening } from './HeroAwakening'
+import { heroArc, questDone, arcTitle, arcTier, type HeroArc, type ArcProgress } from '../game/heroArcs'
 import { BondPanel } from './BondPanel'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
 import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
@@ -196,6 +198,26 @@ const CSS = `
 .hcd-sec .t { font-size:14px; font-weight:900; }
 .hcd-sec .d { font-size:11.5px; line-height:1.45; color:#cfc2f2; }
 .hcd-sec .lock { font-size:10px; font-weight:900; color:#ffd54a; }
+.hcd-arc .hcd-arctier { color:var(--elem); font-weight:900; }
+.hcd-quest { display:flex; flex-direction:column; gap:3px; background:rgba(255,255,255,.04); border-radius:9px; padding:7px 9px; margin-top:5px; }
+.hcd-quest.done { background:rgba(120,255,190,.09); }
+.hcd-qtop { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.hcd-qn { font-size:12.5px; font-weight:900; color:#efe7ff; }
+.hcd-quest.done .hcd-qn { color:#8fe9b8; }
+.hcd-qc { font-size:11px; font-weight:900; color:#b6a8dc; flex:0 0 auto; }
+.hcd-qd { font-size:10.5px; line-height:1.35; color:#c2b6e6; }
+.hcd-qbar { height:5px; border-radius:3px; background:rgba(0,0,0,.4); overflow:hidden; margin:2px 0 1px; }
+.hcd-qfill { height:100%; background:linear-gradient(90deg,var(--accent),var(--elem)); border-radius:3px; }
+.hcd-quest.done .hcd-qfill { background:linear-gradient(90deg,#4fe39a,#8fe9b8); }
+.hcd-qr { font-size:10px; font-weight:800; color:#ffd873; }
+.hcd-quest.done .hcd-qr { color:#8fe9b8; }
+.hcd-beats { margin-top:8px; display:flex; flex-direction:column; gap:5px; }
+.hcd-beatsh { font-size:10px; font-weight:900; letter-spacing:1.2px; color:#9d8fc5; }
+.hcd-beat { background:rgba(0,0,0,.22); border-radius:9px; padding:7px 9px; border-left:2px solid var(--elem); }
+.hcd-beat.locked { border-left-color:rgba(255,255,255,.14); opacity:.7; }
+.hcd-beatn { font-size:12px; font-weight:900; color:#ffe27a; }
+.hcd-beatn.locked { color:#9a8fc4; font-weight:800; }
+.hcd-beatb { font-size:11px; line-height:1.45; color:#cfc2f2; margin-top:2px; }
 .hcd-stats { z-index:1; display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; }
 .hcd-stat { background:rgba(0,0,0,.3); border-radius:10px; padding:7px 4px; text-align:center; }
 .hcd-stat .v { font-size:15px; font-weight:900; font-variant-numeric:tabular-nums; }
@@ -458,10 +480,16 @@ export class HeroCollection {
       if (res) {
         this.burstHeroId = def.id
         const newLevel = economy.heroState(def.id).level
-        // crossing the awaken threshold is a MOMENT — celebrate the signature
-        if (newLevel === SIGNATURE_UNLOCK_LEVEL) this.toast(`${def.signature.name.toUpperCase()} AWAKENED!`, def.color)
-        else this.toast(`${def.name} → Lv ${newLevel}!`, def.color)
-        this.render()
+        // crossing the awaken threshold is a MOMENT — a brief cinematic beat that
+        // names the signature and lets the hero speak their awakening line
+        if (newLevel === SIGNATURE_UNLOCK_LEVEL) {
+          economy.unlockArcAwakening(def.id) // arc beat 1: the awakening is now canon
+          this.render()
+          void playHeroAwakening(def.id)
+        } else {
+          this.toast(`${def.name} → Lv ${newLevel}!`, def.color)
+          this.render()
+        }
       } else this.toast('Not enough shards', 0xff5b7a)
     }
     return b
@@ -579,6 +607,10 @@ export class HeroCollection {
     if (!awake) resSec.append(iconEl('div', 'lock', `${glyphIcon('🔒', { size: 13 })} Requires the signature awake (Lv ${SIGNATURE_UNLOCK_LEVEL}).`))
     frame.append(resSec)
 
+    // arc + quests (the lightweight character progression beyond XP)
+    const arc = heroArc(def.id)
+    if (arc) frame.append(this.buildArcSection(def, arc))
+
     // stats grid (current → next level delta)
     const cur = heroStats(def, st.level)
     const nxt = st.level < MAX_HERO_LEVEL ? heroStats(def, st.level + 1) : null
@@ -616,6 +648,54 @@ export class HeroCollection {
     box.append(frame)
     veil.append(box)
     document.body.appendChild(veil)
+  }
+
+  // The hero's ARC: a cosmetic title tier, a quest checklist (progress bars), and
+  // the story beats those quests unlock. Reads economy.arcProgress; grants nothing
+  // here (the sim/battle bank progress) — this is the surfacing screen.
+  private buildArcSection(def: HeroDef, arc: HeroArc): HTMLElement {
+    const p: ArcProgress = economy.arcProgress(def.id)
+    const tier = arcTier(arc, p)
+    const sec = el('div', 'hcd-sec hcd-arc')
+    const head = el('div', 'h', `ARC · ${esc(arcTitle(arc, p))}`)
+    head.append(el('span', 'hcd-arctier', ` ${tier}/${arc.quests.length}`))
+    sec.append(head)
+
+    // QUESTS — each a deterministic play challenge with a live progress bar
+    for (const q of arc.quests) {
+      const done = questDone(p, q)
+      const have = Math.min(q.goal, p.metrics[q.metric] ?? 0)
+      const row = el('div', 'hcd-quest' + (done ? ' done' : ''))
+      const top = el('div', 'hcd-qtop')
+      top.append(el('div', 'hcd-qn', `${done ? '✓ ' : ''}${esc(q.name)}`))
+      top.append(el('div', 'hcd-qc', `${have}/${q.goal}`))
+      row.append(top)
+      row.append(el('div', 'hcd-qd', esc(q.desc)))
+      const bar = el('div', 'hcd-qbar')
+      const fill = el('div', 'hcd-qfill')
+      fill.style.width = `${Math.round((have / q.goal) * 100)}%`
+      bar.append(fill)
+      row.append(bar)
+      row.append(el('div', 'hcd-qr', `${done ? '✦ ' : '🎁 '}${esc(q.reward)}`))
+      sec.append(row)
+    }
+
+    // STORY BEATS — unlocked at Lv-3 awakening (beat 0) + one per completed quest
+    const beatsWrap = el('div', 'hcd-beats')
+    beatsWrap.append(el('div', 'hcd-beatsh', 'STORY'))
+    arc.beats.forEach((b, i) => {
+      const unlocked = i < p.beats
+      const beat = el('div', 'hcd-beat' + (unlocked ? '' : ' locked'))
+      if (unlocked) {
+        beat.append(el('div', 'hcd-beatn', esc(b.title)))
+        beat.append(el('div', 'hcd-beatb', esc(b.body)))
+      } else {
+        beat.append(iconEl('div', 'hcd-beatn locked', `${glyphIcon('🔒', { size: 12 })} ${i === 0 ? 'Awaken at Lv 3' : 'Complete a quest to reveal'}`))
+      }
+      beatsWrap.append(beat)
+    })
+    sec.append(beatsWrap)
+    return sec
   }
 
   private closeDetail(): void {

@@ -20,6 +20,15 @@ export interface SavedWyrm {
   xp: number
 }
 
+// Persisted per-hero ARC progress (see heroArcs.ts). Cosmetic/lore only — arc
+// metrics never feed the sim. `beats` = story beats unlocked (0 until Lv-3
+// awakening, then 1 + completed quests). All additive; old saves default to {}.
+export interface SavedArc {
+  metrics: Record<string, number> // ArcMetric -> count
+  quests: string[] // completed quest ids
+  beats: number // unlocked story-beat count
+}
+
 export interface SaveData {
   version: number
   coins: number
@@ -36,6 +45,7 @@ export interface SaveData {
   heroShards: number // free currency for unlocking + levelling heroes
   heroes: Record<string, SavedHero> // heroId -> progression (starters unlocked)
   party: string[] // chosen loadout (hero ids, up to MAX_PARTY) — this is SLOT 1; Ranked always uses it
+  heroArcs: Record<string, SavedArc> // heroId -> arc progress (quests/beats; cosmetic-lore)
   // --- Chromatic Wyrms (companion dragons + the hero↔dragon BOND) ---
   wyrms: Record<string, SavedWyrm> // wyrmId -> growth (earned through play)
   bonds: Record<string, string> // heroId -> bonded wyrmId (Ranked normalizes the Wyrm's level)
@@ -97,6 +107,7 @@ export function defaultSave(): SaveData {
     heroShards: 0,
     heroes: starterHeroes(),
     party: [...STARTER_HERO_IDS],
+    heroArcs: {},
     wyrms: {},
     bonds: {},
     wyrmActSeen: false,
@@ -175,6 +186,22 @@ function coerce(raw: unknown): SaveData {
     const party: string[] = []
     for (const p of o.party) if (typeof p === 'string' && party.length < 3 && !party.includes(p)) party.push(p)
     d.party = party
+  }
+  // --- hero ARCS (each field defended; a partial/old blob keeps the empty default) ---
+  if (o.heroArcs && typeof o.heroArcs === 'object') {
+    for (const [k, v] of Object.entries(o.heroArcs as Record<string, unknown>)) {
+      if (!v || typeof v !== 'object') continue
+      const a = v as Record<string, unknown>
+      const metrics: Record<string, number> = {}
+      if (a.metrics && typeof a.metrics === 'object') {
+        for (const [mk, mv] of Object.entries(a.metrics as Record<string, unknown>)) {
+          if (typeof mv === 'number' && isFinite(mv) && mv >= 0) metrics[mk] = Math.floor(mv)
+        }
+      }
+      const quests = Array.isArray(a.quests) ? a.quests.filter((x) => typeof x === 'string') as string[] : []
+      const beats = typeof a.beats === 'number' && isFinite(a.beats) ? Math.max(0, Math.floor(a.beats)) : 0
+      d.heroArcs[k] = { metrics, quests, beats }
+    }
   }
 
   // --- Chromatic Wyrms (each field defended; old blobs keep the fresh defaults) ---

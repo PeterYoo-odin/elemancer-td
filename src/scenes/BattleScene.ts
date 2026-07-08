@@ -19,7 +19,8 @@ import type { ShareCardOpts } from '../ui/ShareCard'
 import { renderShareCard, copyText } from '../ui/ShareCard'
 import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
-import { barkEngine } from '../game/barks'
+import { barkEngine, pairExchange } from '../game/barks'
+import { heroById } from '../game/heroes'
 import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL, unlockCodexBatch, unlockEnemyCodex, CODEX_ON_KEEPER_REDEEM } from '../game/codex'
 import { KEEPER_BY_ID } from '../game/keepers'
 import { realmForLevel, REALMS } from '../game/levels'
@@ -135,7 +136,13 @@ export class BattleScene extends Phaser.Scene {
   private partyIds: string[] = []
   private lowLivesBarked = false
   private pairTimer = 0
+  private exchangeTimers: number[] = [] // pending back-and-forth line timers
+  private shownPairs = new Set<string>() // pair keys already exchanged this battle
+  private lastPairExchange = -999 // barkNow() of the last exchange (paces them)
   private barkNow(): number { return performance.now() / 1000 }
+  // hero ARC metric tallies for THIS battle — flushed to economy on the result
+  // screen (never during attract/demo). Cosmetic/lore progression, sim-inert.
+  private arcCounts = new Map<string, { signature: number; spell: number; deploy: number }>()
 
   // ONBOARDING & FIRST SESSION — all view-side; the sim never sees any of it.
   private coach: Coach | null = null
@@ -251,6 +258,11 @@ export class BattleScene extends Phaser.Scene {
     this.partyIds = party.map((p) => p.heroId)
     this.lowLivesBarked = false
     window.clearTimeout(this.pairTimer)
+    for (const id of this.exchangeTimers) window.clearTimeout(id)
+    this.exchangeTimers = []
+    this.shownPairs.clear()
+    this.lastPairExchange = -999
+    this.arcCounts.clear()
     barkEngine.resetBattle()
     this.script = null
     this.cueIdx = 0
@@ -355,6 +367,16 @@ export class BattleScene extends Phaser.Scene {
           this.coach.say(lesson.title, lesson.body, 9000)
         }
       }
+    }
+
+    // REALM ENTRY: a hero who KNOWS this realm (origin/mentor/rival) speaks once
+    // on arrival — routed to the chat feed, gated on the campaign (realm-tagged).
+    if (!this.attract && !this.demoMode && !this.endless) {
+      const id = window.setTimeout(() => {
+        if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
+        this.tryBark('levelStart')
+      }, 1800)
+      this.exchangeTimers.push(id)
     }
 
     economy.touchLastSeen()
@@ -760,8 +782,13 @@ export class BattleScene extends Phaser.Scene {
       // canvas tap here is the intended aim — no "just entered" tap to swallow.
       const p = this.view.pickPoint(x, y)
       if (p && this.inMap(p.x, p.y)) {
-        if (this.aimingHeroSlot != null) this.sim.castHeroSpell(this.aimingHeroSlot, p.x, p.y)
-        else if (this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
+        if (this.aimingHeroSlot != null) {
+          const hero = this.sim.heroBySlot(this.aimingHeroSlot)
+          if (this.sim.castHeroSpell(this.aimingHeroSlot, p.x, p.y)) {
+            this.view.heroCastPose(this.aimingHeroSlot)
+            if (hero) this.bumpArc(hero.heroId, 'spell')
+          }
+        } else if (this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
       }
       this.exitAiming()
       return
@@ -849,7 +876,10 @@ export class BattleScene extends Phaser.Scene {
         this.aimingSpell = null
         this.aimingHeroSlot = deployed.id
       } else {
-        this.sim.castHeroSpell(deployed.id, deployed.x, deployed.y)
+        if (this.sim.castHeroSpell(deployed.id, deployed.x, deployed.y)) {
+          this.view.heroCastPose(deployed.id)
+          this.bumpArc(deployed.heroId, 'spell')
+        }
       }
       return
     }
@@ -884,18 +914,72 @@ export class BattleScene extends Phaser.Scene {
       if (unlockCodex('hero-' + h.heroId)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       if (h.sigAwake && unlockCodex('field-signature')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       if (this.sim.activeResonances().length > 0 && unlockCodex('field-resonance')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
+      // an already-awakened hero enters with a signature flourish (earned presence)
+      if (h.sigAwake) this.view.heroAwakenPose(h.id, h.x, h.y, h.def.color)
+      this.bumpArc(h.heroId, 'deploy')
       this.tryBark('deploy', h.heroId)
       // party-composition banter: once a second hero stands on the field, the
-      // squad might have something to say to each other (both must be fielded)
+      // squad might trade a short back-and-forth (both must be fielded together)
       const fielded = this.sim.deployedHeroes().map((d) => d.heroId)
       if (fielded.length >= 2) {
         window.clearTimeout(this.pairTimer)
-        this.pairTimer = window.setTimeout(() => {
-          if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
-          const bark = barkEngine.pick('pair', { party: fielded }, this.barkNow())
-          if (bark) this.hud.chatBark(bark.speaker, bark.text)
-        }, 2600)
+        this.pairTimer = window.setTimeout(() => this.tryPairExchange(fielded), 2600)
       }
+    }
+  }
+
+  // A fielded relationship pair trades a short call→reply exchange in the chat
+  // feed — the Hades trick that turns 8 stat blocks into a CAST. Each pair fires
+  // at most once per battle; exchanges are paced so a deploy burst can't spam.
+  private tryPairExchange(fielded: string[]): void {
+    if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
+    const now = this.barkNow()
+    if (now - this.lastPairExchange < 9) return
+    const ex = pairExchange(fielded, this.shownPairs)
+    if (!ex) return
+    this.shownPairs.add(ex.key)
+    this.lastPairExchange = now
+    // play the lines as a back-and-forth: first now, each reply ~1.9s later
+    ex.lines.forEach((line, i) => {
+      if (i === 0) { this.hud.chatBark(line.speaker, line.text); return }
+      const id = window.setTimeout(() => {
+        if (!this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
+        this.hud.chatBark(line.speaker, line.text)
+      }, 1900 * i)
+      this.exchangeTimers.push(id)
+    })
+  }
+
+  // Tally a hero-arc metric for this battle (deferred to the result screen). Never
+  // runs in attract/demo, so the trailer loop can't farm quest progress.
+  private bumpArc(heroId: string, key: 'signature' | 'spell' | 'deploy'): void {
+    if (this.attract || this.demoMode) return
+    let c = this.arcCounts.get(heroId)
+    if (!c) { c = { signature: 0, spell: 0, deploy: 0 }; this.arcCounts.set(heroId, c) }
+    c[key]++
+  }
+
+  // Flush this battle's arc tallies to the save (economy is the sole writer).
+  // 'win' credits every hero that ended the battle on the field. Newly completed
+  // quests surface a single celebratory banner — the rest live in the collection.
+  private flushArcProgress(win: boolean): void {
+    if (this.attract || this.demoMode) return
+    const fresh: Array<{ heroId: string; quest: string }> = []
+    for (const [heroId, c] of this.arcCounts) {
+      if (c.signature) for (const q of economy.addArcMetric(heroId, 'signature', c.signature)) fresh.push({ heroId, quest: q.name })
+      if (c.spell) for (const q of economy.addArcMetric(heroId, 'spell', c.spell)) fresh.push({ heroId, quest: q.name })
+      if (c.deploy) for (const q of economy.addArcMetric(heroId, 'deploy', c.deploy)) fresh.push({ heroId, quest: q.name })
+    }
+    if (win) {
+      for (const h of this.sim.deployedHeroes()) {
+        for (const q of economy.addArcMetric(h.heroId, 'win', 1)) fresh.push({ heroId: h.heroId, quest: q.name })
+      }
+    }
+    if (fresh.length > 0) {
+      const first = fresh[0]
+      const name = heroById(first.heroId)?.name ?? 'Hero'
+      const extra = fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ''
+      this.hud.banner(`✦ ${name.toUpperCase()} — ${first.quest} complete!${extra}`, heroById(first.heroId)?.color ?? 0xc9b6ff)
     }
   }
 
@@ -1123,6 +1207,8 @@ export class BattleScene extends Phaser.Scene {
     this.deselect()
     this.coach?.clear() // the coach never talks over a result screen
     const win = this.sim.state === 'won'
+    // hero ARCS: bank this battle's quest progress (no-op in attract/demo)
+    this.flushArcProgress(win)
     // opt-in funnel: records the battle outcome + deaths-by-level (no-op without consent)
     if (!this.attract && !this.demoMode) analytics.recordBattleEnd(this.levelId, { win, wave: this.sim.waveIndex })
     // hands-free reel: bloom, then its own end card (prove-it + PLAY CTA)
@@ -1341,6 +1427,7 @@ export class BattleScene extends Phaser.Scene {
       case 'leak':
         this.hud.flash(0xff3b3b, 0.4)
         this.view.shake(0.08)
+        this.view.heroHurtAll() // the line broke — every fielded hero flinches
         battleSfx.leak(ev.boss, panFor(ev.x))
         this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
@@ -1417,6 +1504,12 @@ export class BattleScene extends Phaser.Scene {
         battleSfx.spell(ev.effect === 'aoeBurn' || ev.effect === 'execute', panFor(ev.x))
         // the hero's SIGNATURE — a stylized vocal punch on the bus (not the chat feed)
         heroVo(undefined, 'signature', panFor(ev.x))
+        break
+      case 'heroSig':
+        // a signature mechanic detonated — the hero pops a cast beat + element
+        // flourish, and (out of attract/demo) it feeds that hero's quest progress
+        this.view.pulseHeroSig(ev.slotId, ev.x, ev.y, ev.color)
+        this.bumpArc(ev.heroId, 'signature')
         break
       case 'wyrmBreath':
         // a bonded Wyrm exhales — a coloured elemental burst around its hero.

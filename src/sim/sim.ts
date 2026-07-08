@@ -34,7 +34,7 @@ import {
   neutralRogueEffects, resolveRogueEffects, rogueWave, rollEliteAffixes, isBossRush,
   type RogueEffects, type RogueConfig,
 } from './rogue'
-import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
+import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect, type SignatureKind } from '../game/heroes'
 import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
 import { resolveBond, type BondResolution } from '../game/wyrms'
 import { computeSynergies, neutralSynergy, type SynergyBonus, type SynergyEffects } from '../game/synergy'
@@ -270,6 +270,11 @@ export type SimEvent =
   | { t: 'heroDeploy'; x: number; y: number; color: number; radius: number }
   | { t: 'heroFire'; x: number; y: number; tx: number; ty: number; color: number }
   | { t: 'heroSpell'; effect: SpellEffect; name: string; glyph: string; x: number; y: number; radius: number; color: number; count: number }
+  // A hero's SIGNATURE mechanic detonated — a purely presentational marker (the
+  // combat damage already resolved). The view flares an element flourish + cast
+  // pose on the named hero; the scene attributes hero-quest progress to it. Adds
+  // no numbers, feeds nothing back into the sim (simcheck fingerprint unchanged).
+  | { t: 'heroSig'; kind: SignatureKind; heroId: string; slotId: number; x: number; y: number; color: number }
   | { t: 'banner'; msg: string; color: number }
   | { t: 'text'; x: number; y: number; msg: string; color: number; size: number }
   | { t: 'reaction'; key: ReactionKey; name: string; x: number; y: number; radius: number; color: number; color2: number }
@@ -465,6 +470,12 @@ export class Sim {
     const out = this.events
     this.events = []
     return out
+  }
+
+  // A hero's signature just fired — emit the presentational marker (view flourish
+  // + hero-quest attribution). Pure cosmetics: no damage, no RNG, no state change.
+  private sigFx(h: SimHero): void {
+    this.emit({ t: 'heroSig', kind: h.def.signature.kind, heroId: h.heroId, slotId: h.id, x: h.x, y: h.y, color: h.def.color })
   }
 
   // ---- path / grid --------------------------------------------------------
@@ -786,6 +797,7 @@ export class Sim {
       if (h.sigRamp > prev) {
         this.recomputeBuffs()
         this.emit({ t: 'text', x: h.x, y: h.y - 40, msg: `🌳 ROOTS DEEPEN +${Math.round(h.sigRamp * 100)}%`, color: h.def.color, size: 15 })
+        this.sigFx(h)
       }
     }
     if (!this.config.endless && this.waveIndex >= this.config.level.waves.length - 1) {
@@ -1250,6 +1262,7 @@ export class Sim {
       this.emit({ t: 'heroFire', x: h.x, y: h.y - 6, tx: e.x, ty: e.y, color: h.def.color })
       this.emit({ t: 'aoe', x: e.x, y: e.y, radius: TILE * 1.1, color: h.def.color, alpha: 0.7 })
       this.emit({ t: 'text', x: e.x, y: e.y - e.def.radius - 26, msg: '🛡 THE DAWN HOLDS!', color: h.def.color, size: 18 })
+      this.sigFx(h)
       this.applyDirect(e, nuke)
       if (!e.active) return // smitten at the gate — no leak, bounty paid
       break // it survived the dawn: the leak stands (one intercession per wave)
@@ -2352,6 +2365,7 @@ export class Sim {
     if (foreseen) {
       dmg *= sig.mult ?? 2
       this.emit({ t: 'text', x: tx, y: ty - target.def.radius - 28, msg: '👁 FORESEEN', color: h.def.color, size: 16 })
+      this.sigFx(h)
     }
 
     const atk: AttackStats = { damage: dmg, dmgType: h.def.damageType, element: h.def.element, armorPen: this.upgrades.armorPenBonus, aura: h.def.element }
@@ -2362,8 +2376,8 @@ export class Sim {
     if (foreseen && target.active) {
       target.stunUntil = Math.max(target.stunUntil, this.clock + (sig.stun ?? 0.7))
     }
-    if (nova) this.heroNova(h, tx, ty, dmg)
-    if (wager) this.heroSquall(h, tx, ty, dmg)
+    if (nova) { this.heroNova(h, tx, ty, dmg); this.sigFx(h) }
+    if (wager) { this.heroSquall(h, tx, ty, dmg); this.sigFx(h) }
     if (h.sigAwake && sig.kind === 'twinspark' && target.active) {
       // Two of Us: the twin's echo strike (paints the element again → reactions)
       const echo: AttackStats = { ...atk, damage: dmg * (sig.echo ?? 0.5) }
@@ -2376,7 +2390,7 @@ export class Sim {
       this.addGold(bonus)
       this.emit({ t: 'gold', x: tx, y: ty - 14, amount: bonus })
       h.sigCounter++
-      if (h.sigCounter % 4 === 1) this.emit({ t: 'text', x: tx, y: ty - 34, msg: `PILFERED +${bonus}`, color: h.def.color, size: 15 })
+      if (h.sigCounter % 4 === 1) { this.emit({ t: 'text', x: tx, y: ty - 34, msg: `PILFERED +${bonus}`, color: h.def.color, size: 15 }); this.sigFx(h) }
     }
 
     if (h.role === 'Control' && target.active && h.slowFactor < 1) {

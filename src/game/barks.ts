@@ -152,6 +152,24 @@ export const BARKS: Bark[] = [
   { id: 'pair-lumi-fizz-1', trigger: 'pair', speaker: 'volt', pair: ['glacia', 'volt'], text: 'Lumi, quick — what are the ODDS of— "Yes." …She does that.' },
   { id: 'pair-lumi-fizz-2', trigger: 'pair', speaker: 'glacia', pair: ['glacia', 'volt'], text: 'Fizz\'s next experiment succeeds. The one after that is very loud.' },
   { id: 'pair-ashka-sera-1', trigger: 'pair', speaker: 'ember', pair: ['ember', 'aurelia'], text: 'Dawnhalo. Race you to the body count. …It\'s not a sin if you WIN.' },
+  { id: 'pair-ashka-sera-2', trigger: 'pair', speaker: 'aurelia', pair: ['ember', 'aurelia'], text: 'It is a little bit a sin, Ashka. …Fine. Loser holds the east flank.' },
+  { id: 'pair-galea-fizz-1', trigger: 'pair', speaker: 'zephyra', pair: ['zephyra', 'volt'], text: 'Fizz! Is the rigging conductive? Give it to me straight.' },
+  { id: 'pair-galea-fizz-2', trigger: 'pair', speaker: 'volt', pair: ['zephyra', 'volt'], text: 'Captain, EVERYTHING is conductive if you believe hard enough! …Please don\'t touch the rigging.' },
+  { id: 'pair-thorn-sera-1', trigger: 'pair', speaker: 'aurelia', pair: ['sylvan', 'aurelia'], text: 'Warden Thornwick — how did you bear losing the oldest tree?' },
+  { id: 'pair-thorn-sera-2', trigger: 'pair', speaker: 'sylvan', pair: ['sylvan', 'aurelia'], text: 'Slowly, little dawn. Grief is just love with nowhere to grow. So I planted it.' },
+  { id: 'pair-nyx-lumi-1', trigger: 'pair', speaker: 'glacia', pair: ['glacia', 'vex'], text: 'You took the third coin from my satchel, Nyx. I saw it.' },
+  { id: 'pair-nyx-lumi-2', trigger: 'pair', speaker: 'vex', pair: ['glacia', 'vex'], text: 'You see EVERYTHING, Oracle. …You let me. That\'s the part I like.' },
+  { id: 'pair-ashka-galea-1', trigger: 'pair', speaker: 'ember', pair: ['ember', 'zephyra'], text: 'Captain. First kill\'s mine. Call it.' },
+  { id: 'pair-ashka-galea-2', trigger: 'pair', speaker: 'zephyra', pair: ['ember', 'zephyra'], text: 'Wind\'s up, cinder — WAGER\'S ON! Loser swabs the sky-deck!' },
+
+  // ===== REALM-ENTRY BANTER — a hero speaks when they enter a realm that KNOWS
+  // them (origin / mentor / rival). Fired once on battle start; routed to chat.
+  { id: 'entry-ashka-ember', trigger: 'levelStart', speaker: 'ember', realm: 'emberwaste', text: 'This was Kindlekeep. …It was the last warm street. Point me at what put it out.' },
+  { id: 'entry-lumi-frost', trigger: 'levelStart', speaker: 'glacia', realm: 'frostreach', text: 'Maravelle taught me to read this ice. I did not read that she\'d be waiting in it.' },
+  { id: 'entry-galea-storm', trigger: 'levelStart', speaker: 'zephyra', realm: 'stormpeaks', text: 'Nineteen days becalmed up here. Feel that? The wind\'s remembering us. Sails FULL.' },
+  { id: 'entry-thorn-verd', trigger: 'levelStart', speaker: 'sylvan', realm: 'verdant', text: 'The moss says an old friend went wrong down there. …I already know. Give it a minute.' },
+  { id: 'entry-sera-lumen', trigger: 'levelStart', speaker: 'aurelia', realm: 'lumen', text: 'High Cantor Aurelin lit my first lantern. I never thought I\'d have to relight HIM.' },
+  { id: 'entry-nyx-hollow', trigger: 'levelStart', speaker: 'vex', realm: 'hollow', text: 'Home. Everyone called the Margins "basically grey." They were wrong. I\'ll show him.' },
 
   // ===== FUSION FORGED — two colours refusing to stay apart (the Greying's opposite)
   { id: 'fuse-ashka-1', trigger: 'fusion', speaker: 'ember', text: 'Two fires in one blade. NOW we\'re talking.' },
@@ -273,6 +291,46 @@ export class BarkEngine {
 
 /** shared engine — battle + map both use it so pacing carries across scenes */
 export const barkEngine = new BarkEngine()
+
+// ----------------------------------------------------------------------------
+//  WALK-BANTER EXCHANGES — the Hades trick. When two heroes who KNOW each other
+//  stand on the field together, they trade a short back-and-forth (call → reply).
+//  pick('pair') returns one random line; this returns the whole ORDERED exchange
+//  for a fielded pair the caller hasn't shown yet, so the roster reads as a CAST
+//  and not eight stat blocks. Pure data lookup — no engine state, no sim touch.
+// ----------------------------------------------------------------------------
+
+/** order-independent key for a pair tuple (so [a,b] and [b,a] collapse). */
+export function pairKey(pair: [string, string]): string {
+  return [pair[0], pair[1]].sort().join('+')
+}
+
+export interface PairExchange {
+  key: string
+  lines: Array<{ speaker: string; text: string }>
+}
+
+/**
+ * A ready-to-play exchange for some fielded relationship pair NOT in `shownKeys`,
+ * or null if none is available. Lines come back in authored order (call, reply).
+ */
+export function pairExchange(fielded: string[], shownKeys: Set<string>): PairExchange | null {
+  const set = new Set(fielded)
+  const groups = new Map<string, Bark[]>()
+  for (const b of BARKS) {
+    if (b.trigger !== 'pair' || !b.pair) continue
+    if (!set.has(b.pair[0]) || !set.has(b.pair[1])) continue
+    const k = pairKey(b.pair)
+    if (shownKeys.has(k)) continue
+    const arr = groups.get(k)
+    if (arr) arr.push(b)
+    else groups.set(k, [b])
+  }
+  if (groups.size === 0) return null
+  const keys = [...groups.keys()]
+  const key = keys[Math.floor(Math.random() * keys.length)]
+  return { key, lines: groups.get(key)!.map((b) => ({ speaker: b.speaker, text: b.text })) }
+}
 
 function readJson<T>(key: string, fallback: T): T {
   try {

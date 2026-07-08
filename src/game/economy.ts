@@ -18,6 +18,7 @@ import {
 } from './workshop'
 import { STARTER_HEROES, MAX_PARTY, heroById } from './heroes'
 import { MAX_HERO_LEVEL, clampLevel, xpForLevel, shardCostForLevel } from './heroProgress'
+import { heroArc, emptyArcProgress, type ArcProgress, type ArcMetric, type HeroQuest } from './heroArcs'
 import {
   REALM_FINALE, WYRM_ACT_REALMS, WYRM_MAX_LEVEL, RANKED_WYRM_LEVEL,
   clampWyrmLevel, wyrmXpForLevel, wyrmById, isPrismHero, bondTier, WYRM_ORDER,
@@ -671,6 +672,57 @@ class Economy {
       }
     }
     this.save()
+  }
+
+  // ---- hero ARCS (cosmetic / lore progression; never touches the sim) --------
+
+  /** Read a hero's arc progress (defensive copy; empty default for untouched heroes). */
+  arcProgress(id: string): ArcProgress {
+    const raw = this.data.heroArcs[id]
+    if (!raw) return emptyArcProgress()
+    return { metrics: { ...raw.metrics }, quests: [...raw.quests], beats: Math.max(0, Math.floor(raw.beats)) }
+  }
+
+  private writeArc(id: string, p: ArcProgress): void {
+    this.data.heroArcs[id] = { metrics: { ...p.metrics }, quests: [...p.quests], beats: Math.max(0, Math.floor(p.beats)) }
+  }
+
+  // beat count derives from state: 0 until awakened, then 1 (awakening) + quests done.
+  private syncArcBeats(arc: ReturnType<typeof heroArc>, p: ArcProgress): void {
+    if (!arc || p.beats < 1) return // not awakened yet — beats stay at 0
+    p.beats = Math.min(arc.beats.length, 1 + p.quests.length)
+  }
+
+  /** Lv-3 awakening: unlock the first story beat (idempotent). */
+  unlockArcAwakening(id: string): void {
+    const arc = heroArc(id)
+    if (!arc) return
+    const p = this.arcProgress(id)
+    if (p.beats >= 1) return
+    p.beats = 1
+    this.syncArcBeats(arc, p)
+    this.writeArc(id, p)
+    this.save()
+  }
+
+  /**
+   * Add `n` to a hero's arc METRIC and settle any quests it completes. Returns the
+   * quests newly completed by this call (for a reward toast). Cosmetic/lore only.
+   */
+  addArcMetric(id: string, metric: ArcMetric, n = 1): HeroQuest[] {
+    const arc = heroArc(id)
+    if (!arc || n <= 0) return []
+    const p = this.arcProgress(id)
+    p.metrics[metric] = (p.metrics[metric] ?? 0) + n
+    const fresh: HeroQuest[] = []
+    for (const q of arc.quests) {
+      if (p.quests.includes(q.id)) continue
+      if ((p.metrics[q.metric] ?? 0) >= q.goal) { p.quests.push(q.id); fresh.push(q) }
+    }
+    this.syncArcBeats(arc, p)
+    this.writeArc(id, p)
+    this.save()
+    return fresh
   }
 
   // ---- loadout ----

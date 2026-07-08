@@ -171,6 +171,12 @@ interface HeroSlot {
   wyrm: THREE.Sprite | null
   wyrmMat: THREE.SpriteMaterial | null
   wyrmPhase: number // per-hero orbit phase so companions don't fly in lockstep
+  // --- LIVE PRESENCE: the billboard is no longer a sticker ---
+  phase: number // per-hero idle phase so the roster doesn't breathe in lockstep
+  artBaseW: number // stock sprite width (world units) — squash/stretch multiplies it
+  castUntil: number // clockT until which the CAST pose (spell/signature) plays
+  hurtUntil: number // clockT until which the HURT recoil plays
+  awakenUntil: number // clockT until which the level-3 AWAKENING flourish plays
 }
 
 // painted cutout textures, keyed by heroId — shared across battles, never disposed
@@ -180,6 +186,10 @@ const heroArtTexCache = new Map<string, THREE.CanvasTexture>()
 const wyrmArtTexCache = new Map<string, THREE.CanvasTexture>()
 const WYRM_ART_H = 1.15 // world-units tall — the companion reads smaller than its hero
 const HERO_ART_H = 1.55 // world-units tall — reads over towers without looming
+// hero billboard pose-envelope lengths (seconds) — short so the board stays lively
+const CAST_DUR = 0.5
+const HURT_DUR = 0.45
+const AWAKEN_DUR = 1.1
 
 interface Transient {
   obj: THREE.Object3D
@@ -1842,6 +1852,8 @@ export class BattleView3D {
       art: null, artMat: null, color: def.color, heroId: h.heroId,
       artTint: heroDye(h.heroId)?.tint ?? 0xffffff, // equipped hero-skin dye
       wyrm: null, wyrmMat: null, wyrmPhase: (h.id * 1.7) % (Math.PI * 2),
+      phase: (h.id * 2.399963) % (Math.PI * 2), artBaseW: 0.9,
+      castUntil: 0, hurtUntil: 0, awakenUntil: 0,
     }
 
     // bonded Chromatic Wyrm: a painted billboard that circles above the hero.
@@ -1890,6 +1902,7 @@ export class BattleView3D {
       slot.badge.position.y = HERO_ART_H + 0.32 // clear the taller token
       slot.art = sprite
       slot.artMat = mat
+      slot.artBaseW = HERO_ART_H * cut.aspect
     })
     return slot
   }
@@ -1929,6 +1942,110 @@ export class BattleView3D {
       const beat = this.motionOk ? 1 + Math.sin(this.clockT * 8 + s.wyrmPhase) * 0.05 : 1
       s.wyrm.scale.y = WYRM_ART_H * beat
     }
+
+    this.animateHeroPresence(s, buffed)
+  }
+
+  // Make the deployed hero feel ALIVE on the board: idle breathing + weight-shift
+  // sway, a CAST lunge on spell/signature, a HURT recoil, and a level-3 AWAKENING
+  // rise. Drives the painted billboard when it has landed, else the low-poly
+  // fallback figure (so pyra / any keying failure still animates — no statues).
+  // Every beat degrades to a still, readable pose under reduce-motion.
+  private animateHeroPresence(s: HeroSlot, buffed: boolean): void {
+    const t = this.clockT
+    const usingArt = !!s.art && s.art.visible
+    const body: THREE.Object3D = usingArt ? s.art! : s.figure
+    const baseY = usingArt ? (s.art!.userData.y0 as number) : 0
+    const baseW = usingArt ? s.artBaseW : 1
+    const baseH = usingArt ? HERO_ART_H : 1
+
+    // pose envelopes (1 at trigger → 0 when the window closes); a soft ease-out
+    const env = (until: number, dur: number): number => (until > t ? Math.max(0, Math.min(1, (until - t) / dur)) : 0)
+    const cast = env(s.castUntil, CAST_DUR)
+    const hurt = env(s.hurtUntil, HURT_DUR)
+    const awaken = env(s.awakenUntil, AWAKEN_DUR)
+
+    let dy = 0, sx = 1, sy = 1, tilt = 0, glow = buffed ? 0.15 : 0
+
+    if (this.motionOk) {
+      // idle: a slow breath (vertical squash+lift) plus an even slower weight shift
+      const breath = Math.sin(t * 1.7 + s.phase)
+      const shift = Math.sin(t * 0.9 + s.phase * 1.3)
+      dy += 0.02 + breath * 0.03
+      sy += breath * 0.02
+      sx -= breath * 0.012
+      tilt += shift * 0.05
+      // CAST: an anticipatory dip then a forward lunge + stretch (sin arc peaks mid)
+      if (cast > 0) {
+        const pop = Math.sin(cast * Math.PI)
+        dy += pop * 0.16
+        sy += pop * 0.10
+        sx += pop * 0.05
+        tilt += (1 - cast) * 0.18 * (s.phase > Math.PI ? -1 : 1)
+      }
+      // HURT: a sharp recoil + high-frequency shudder that settles
+      if (hurt > 0) {
+        dy -= hurt * 0.05
+        tilt -= Math.sin(t * 40) * hurt * 0.14
+        sx += hurt * 0.05
+        sy -= hurt * 0.04
+      }
+      // AWAKEN: a proud rise + swell
+      if (awaken > 0) {
+        const rise = Math.sin(awaken * Math.PI)
+        dy += rise * 0.28
+        sy += rise * 0.12
+        sx += rise * 0.06
+      }
+    }
+    // brightness reads even when motion is off, so cast/hurt/awaken never go silent
+    glow += cast * 0.5 + awaken * 0.7
+    const flash = hurt
+
+    body.position.y = baseY + dy
+    body.scale.set(baseW * sx, baseH * sy, 1)
+    if (usingArt && s.artMat) {
+      s.artMat.rotation = tilt
+      // tint: base skin dye, pushed brighter on cast/awaken, reddened on hurt
+      const g2 = Math.max(0, 1 - flash * 0.5)
+      const b2 = Math.max(0, 1 - flash * 0.6)
+      s.artMat.color.setRGB((1 + glow), g2 * (1 + glow * 0.7), b2 * (1 + glow * 0.7))
+      // fold in the equipped dye by multiplying — keeps skins tinted while lit
+      if (s.artTint !== 0xffffff && glow < 0.01 && flash < 0.01) s.artMat.color.setHex(s.artTint)
+    } else {
+      s.figure.rotation.z = tilt
+    }
+    if (glow > 0.01) s.glow.intensity = Math.max(s.glow.intensity, 0.9 + glow * 1.4)
+  }
+
+  /** CAST lunge on a hero's active spell (called with the SimHero slot id). */
+  heroCastPose(slotId: number): void {
+    const s = this.heroViews.get(slotId)
+    if (s) s.castUntil = this.clockT + CAST_DUR
+  }
+
+  /** A hero's SIGNATURE detonated: element flourish (ring + sparks) + a cast pop. */
+  pulseHeroSig(slotId: number, simX: number, simY: number, color: number): void {
+    const s = this.heroViews.get(slotId)
+    if (s) s.castUntil = Math.max(s.castUntil, this.clockT + CAST_DUR * 0.7)
+    if (!this.motionOk) return
+    this.pushRing(simX, simY, TILE_PX * 0.9, color, 0.7)
+    this.emitParticles(wx(simX), 0.9, wz(simY), color, 10, 2.6)
+  }
+
+  /** HURT recoil for every fielded hero (a leak reached the base). */
+  heroHurtAll(): void {
+    for (const [, s] of this.heroViews) s.hurtUntil = this.clockT + HURT_DUR
+  }
+
+  /** AWAKENING flourish on a freshly-deployed level-3 hero (signature awake). */
+  heroAwakenPose(slotId: number, simX: number, simY: number, color: number): void {
+    const s = this.heroViews.get(slotId)
+    if (s) s.awakenUntil = this.clockT + AWAKEN_DUR
+    if (!this.motionOk) return
+    this.pushRing(simX, simY, TILE_PX * 1.3, color, 0.9)
+    this.emitParticles(wx(simX), 1.0, wz(simY), color, 22, 3.4)
+    this.emitParticles(wx(simX), 1.0, wz(simY), 0xffffff, 8, 2.2)
   }
 
   private disposeHeroSlot(s: HeroSlot): void {
