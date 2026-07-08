@@ -186,15 +186,20 @@ function jit(i: number, salt: number): number {
 // Heavy armored bastion. Branches: Sniper = one LONG rifled barrel + scope mast;
 // Mortar = fat up-angled siege tube on struts.
 function buildCannon(b: Build, tb: Build, L: number, branch: number) {
-  const k = 1 + L * 0.09
+  const k = 1 + L * 0.15 // TIER: bolder growth per upgrade (was 0.09) so mass reads
   const accents: AccentSpec[] = []
   // octagonal chamfered plinth (flat facets read "fortified", chamfer kills the box)
   b.add('dark', lathe([[0.47, 0], [0.47, 0.05], [0.40, 0.12], [0.33, 0.15], [0.001, 0.15]], 8), { ry: Math.PI / 8 })
   b.add('trim', band(0.41, 0.02, 8), { y: 0.115, ry: Math.PI / 8 })
+  // T2 fortified skirt: a wider stepped base tier appears — a heavier footprint
+  if (L >= 2) {
+    b.add('dark', lathe([[0.52, 0.05], [0.52, 0.1], [0.46, 0.16], [0.4, 0.18], [0.001, 0.18]], 8), { ry: Math.PI / 8 })
+    b.add('trim', band(0.5, 0.02, 8), { y: 0.16, ry: Math.PI / 8 })
+  }
 
-  const bodyH = 0.5 + L * 0.14
+  const bodyH = 0.5 + L * 0.22 // TIER: hull grows markedly taller each level
   const r0 = 0.30 * k, r1 = 0.215 * k
-  const y0 = 0.14
+  const y0 = L >= 2 ? 0.18 : 0.14
   // battered hull with a flared machicolation collar at the top
   b.add('body', lathe([
     [r0 + 0.03, y0], [r0, y0 + bodyH * 0.28], [r1 + 0.005, y0 + bodyH * 0.78],
@@ -207,15 +212,24 @@ function buildCannon(b: Build, tb: Build, L: number, branch: number) {
     const r = r0 + (r1 - r0) * f
     b.add('trim', band(r + 0.012, 0.024, 18), { y: y0 + bodyH * (0.15 + f * 0.55) })
   }
-  // rivet studs at L2+
+  // rivet studs at L1+ (a row appears, then doubles at L2 — the hull "armors up")
+  if (L >= 1) {
+    const studRows = L >= 2 ? [0.22, 0.5] : [0.22]
+    for (const fr of studRows) for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8
+      const rr = r0 + (r1 - r0) * fr - 0.01
+      b.add('trim', new THREE.IcosahedronGeometry(0.026, 0), { x: Math.cos(a) * rr, z: Math.sin(a) * rr, y: y0 + bodyH * fr })
+    }
+  }
+  // T2 battlement crown: merlon blocks ring the collar — an unmistakable castle-top
   if (L >= 2) for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + Math.PI / 8
-    b.add('trim', new THREE.IcosahedronGeometry(0.024, 0), { x: Math.cos(a) * (r0 - 0.01), z: Math.sin(a) * (r0 - 0.01), y: y0 + bodyH * 0.22 })
+    b.add('dark', new THREE.BoxGeometry(0.06, 0.09, 0.06), { x: Math.cos(a) * (r1 + 0.05), z: Math.sin(a) * (r1 + 0.05), y: y0 + bodyH + 0.03, ry: -a })
   }
-  // glowing sight-slit ring under the collar — the element core
-  b.add('core', band(r1 + 0.028, 0.014, 18), { y: y0 + bodyH * 0.85 })
+  // glowing sight-slit ring under the collar — the element core (fattens per tier)
+  b.add('core', band(r1 + 0.028, 0.014 + L * 0.006, 18), { y: y0 + bodyH * 0.85 })
 
-  const turretY = y0 + bodyH + 0.015
+  const turretY = y0 + bodyH + (L >= 2 ? 0.05 : 0.015)
   // armored dome + collar
   tb.add('dark', cyl(0.205 * k, 0.23 * k, 0.07, 16))
   const dome = orb(0.195 * k, 16, 10)
@@ -224,7 +238,12 @@ function buildCannon(b: Build, tb: Build, L: number, branch: number) {
     tb.add('trim', orb(0.085 * k, 10, 8), { y: 0.12, z: 0.155 * k, sz: 0.55 })
     tb.add('trim', orb(0.085 * k, 10, 8), { y: 0.12, z: -0.155 * k, sz: 0.55 })
   }
-  if (L >= 2) tb.add('dark', cyl(0.035, 0.045, 0.14, 8), { x: -0.1 * k, y: 0.16 }) // exhaust stack
+  if (L >= 2) { // twin exhaust stacks flank the breech — a machined, upgraded read
+    tb.add('dark', cyl(0.035, 0.05, 0.18, 8), { x: -0.1 * k, z: 0.06, y: 0.16 })
+    tb.add('dark', cyl(0.035, 0.05, 0.18, 8), { x: -0.1 * k, z: -0.06, y: 0.16 })
+    tb.add('core', orb(0.02, 8, 6), { x: -0.1 * k, z: 0.06, y: 0.35 })
+    tb.add('core', orb(0.02, 8, 6), { x: -0.1 * k, z: -0.06, y: 0.35 })
+  }
 
   const gy = 0.15 // gun axis height above pivot
   if (L >= 3 && branch === 0) {
@@ -263,14 +282,19 @@ function buildCannon(b: Build, tb: Build, L: number, branch: number) {
 // Crystalline spire. Branches: Blizzard = wide radiating crown + spinning halo;
 // Glacier = one MASSIVE chunky deep-blue crystal.
 function buildFrost(b: Build, tb: Build, L: number, branch: number) {
-  const k = 1 + L * 0.09
+  const k = 1 + L * 0.15 // TIER: the spire visibly bulks up per upgrade (was 0.09)
   const accents: AccentSpec[] = []
   // soft snowy plinth
   b.add('body', lathe([[0.44, 0], [0.45, 0.06], [0.37, 0.12], [0.29, 0.15], [0.001, 0.15]], 20))
   b.add('trim', band(0.40, 0.018, 20), { y: 0.10 })
+  // T2 frozen terrace: a wider drift-ring skirts the base — heavier, glacial footprint
+  if (L >= 2) {
+    b.add('body', lathe([[0.5, 0.04], [0.51, 0.1], [0.42, 0.16], [0.34, 0.18], [0.001, 0.18]], 20))
+    b.add('core', band(0.46, 0.012, 24), { y: 0.15 })
+  }
 
-  const pedH = 0.32 + L * 0.09
-  const y0 = 0.14
+  const pedH = 0.32 + L * 0.16 // TIER: pedestal climbs taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
   // tiered icy pedestal — shelf bumps like frozen drip terraces
   b.add('body', lathe([
     [0.27 * k, y0], [0.24 * k, y0 + pedH * 0.3], [0.285 * k, y0 + pedH * 0.38],
@@ -299,10 +323,15 @@ function buildFrost(b: Build, tb: Build, L: number, branch: number) {
     tb.add('core', crystal(0.09, 0.42, 5), { x: 0.13, z: 0.05, rz: -0.32 })
     tb.add('core', crystal(0.08, 0.36, 5), { x: -0.1, z: -0.09, rz: 0.3, ry: 1.1 })
   } else {
-    const h = 0.5 + L * 0.12
-    tb.add('core', crystal(0.1 + L * 0.016, h, 6))
-    tb.add('core', crystal(0.055, h * 0.55, 5), { x: 0.1, z: 0.045, rz: -0.3 })
-    tb.add('core', crystal(0.05, h * 0.45, 5), { x: -0.09, z: -0.065, rz: 0.28, ry: 0.9 })
+    const h = 0.5 + L * 0.2 // TIER: the core crystal spears taller each level
+    tb.add('core', crystal(0.1 + L * 0.03, h, 6))
+    tb.add('core', crystal(0.055 + L * 0.012, h * 0.55, 5), { x: 0.1, z: 0.045, rz: -0.3 })
+    tb.add('core', crystal(0.05 + L * 0.012, h * 0.45, 5), { x: -0.09, z: -0.065, rz: 0.28, ry: 0.9 })
+    // T2 satellite shards flanking the core — the crystal "grows a cluster"
+    if (L >= 2) {
+      tb.add('core', crystal(0.04, h * 0.35, 5), { x: 0.02, z: 0.11, rz: -0.18, ry: 2.1 })
+      tb.add('core', crystal(0.04, h * 0.32, 5), { x: -0.03, z: -0.11, rz: 0.16, ry: 3.4 })
+    }
   }
   if (blizzard) {
     accents.push({ shape: 'ring', role: 'core', attach: 'turret', y: 0.42, scale: 0.34, tiltX: 0.5, spin: 1.1, scaleY: 0.5 })
@@ -313,7 +342,7 @@ function buildFrost(b: Build, tb: Build, L: number, branch: number) {
     accents.push({ shape: 'shard', role: 'core', attach: 'turret', y: 0.3, scale: 0.05, orbit: 0.26 + L * 0.03, spin: 0.8, bobAmp: 0.05, phase: 0.7 })
   }
 
-  const coreH = glacier ? 0.95 : 0.5 + L * 0.12
+  const coreH = glacier ? 0.95 : 0.5 + L * 0.2
   return {
     turretY: topY,
     height: topY + coreH,
@@ -326,24 +355,30 @@ function buildFrost(b: Build, tb: Build, L: number, branch: number) {
 // Molten obsidian. Branches: Scorch = wide low fire-pit + ground ember nubs;
 // Phoenix = swept bronze wings + a tall teardrop flame spike.
 function buildFlame(b: Build, tb: Build, L: number, branch: number) {
-  const k = 1 + L * 0.09
+  const k = 1 + L * 0.15 // TIER: the obsidian gourd swells per upgrade (was 0.09)
   const accents: AccentSpec[] = []
   const scorch = L >= 3 && branch === 0
   const phoenix = L >= 3 && branch === 1
   // volcanic plinth + ember ring smouldering at its foot
   b.add('dark', lathe([[0.45, 0], [0.44, 0.07], [0.35, 0.13], [0.27, 0.15], [0.001, 0.15]], 18))
   b.add('core', band(0.365, 0.011, 18), { y: 0.03 })
+  // T2 magma shelf: a cracked outer tier oozes a brighter ember seam
+  if (L >= 2) {
+    b.add('dark', lathe([[0.51, 0.05], [0.5, 0.11], [0.4, 0.16], [0.32, 0.18], [0.001, 0.18]], 18))
+    b.add('core', band(0.45, 0.015, 24), { y: 0.09 })
+  }
 
-  const bodH = 0.4 + L * 0.11
-  const y0 = 0.14
+  const bodH = 0.4 + L * 0.19 // TIER: taller molten hull each level
+  const y0 = L >= 2 ? 0.18 : 0.14
   // obsidian gourd: swollen belly, pinched waist, flared neck
   b.add('dark', lathe([
     [0.19 * k, y0], [0.29 * k, y0 + bodH * 0.22], [0.265 * k, y0 + bodH * 0.5],
     [0.16 * k, y0 + bodH * 0.8], [0.2 * k, y0 + bodH], [0.001, y0 + bodH],
   ], 18))
-  // ember-crack bands glowing through the obsidian
-  b.add('core', band(0.285 * k, 0.012, 18), { y: y0 + bodH * 0.24 })
-  if (L >= 1) b.add('core', band(0.245 * k, 0.011, 18), { y: y0 + bodH * 0.56 })
+  // ember-crack bands glowing through the obsidian (more cracks light up per tier)
+  b.add('core', band(0.285 * k, 0.012 + L * 0.004, 18), { y: y0 + bodH * 0.24 })
+  if (L >= 1) b.add('core', band(0.245 * k, 0.011 + L * 0.004, 18), { y: y0 + bodH * 0.56 })
+  if (L >= 2) b.add('core', band(0.26 * k, 0.012, 18), { y: y0 + bodH * 0.4 })
   if (L >= 1) {
     // side vents with hot tips
     for (const sz of [1, -1]) {
@@ -380,7 +415,7 @@ function buildFlame(b: Build, tb: Build, L: number, branch: number) {
 
   // the living flame — a slim teardrop tongue licking out of the bowl, not a
   // fat orb: seated deep so only the tapering top rises past the bronze rim
-  const fs = scorch ? 0.15 : 0.1 + L * 0.014
+  const fs = scorch ? 0.15 : 0.1 + L * 0.03 // TIER: the flame tongue grows bigger/brighter
   const fy = phoenix ? 2.9 : 2.1
   accents.push({ shape: 'flame', role: 'core', attach: 'turret', y: 0.08 + fs * fy * 0.55, scale: fs, scaleY: fy, flicker: 0.24, bobSpeed: 2.6 })
   accents.push({ shape: 'flame', role: 'core', attach: 'turret', y: 0.1 + fs * fy * 0.72, scale: fs * 0.48, scaleY: fy * 1.3, flicker: 0.36, phase: 1.7, bobSpeed: 3.2 })
@@ -404,16 +439,25 @@ function buildFlame(b: Build, tb: Build, L: number, branch: number) {
 // Tesla spire. Branches: Tempest = triple spires + racing arc ring;
 // Overload = one massive coil stack, giant orb, lightning rod.
 function buildStorm(b: Build, tb: Build, L: number, branch: number) {
-  const k = 1 + L * 0.09
+  const k = 1 + L * 0.15 // TIER: the tesla mast thickens per upgrade (was 0.09)
   const accents: AccentSpec[] = []
   const tempest = L >= 3 && branch === 0
   const overload = L >= 3 && branch === 1
   // dark plinth + brass ring
   b.add('dark', lathe([[0.44, 0], [0.44, 0.06], [0.35, 0.13], [0.26, 0.15], [0.001, 0.15]], 18))
   b.add('trim', band(0.375, 0.022, 18), { y: 0.11 })
+  // T2 grounded base ring: a heavier brass footing with charge nodes
+  if (L >= 2) {
+    b.add('dark', lathe([[0.5, 0.04], [0.49, 0.1], [0.4, 0.16], [0.32, 0.18], [0.001, 0.18]], 18))
+    b.add('trim', band(0.46, 0.022, 24), { y: 0.15 })
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4
+      b.add('core', orb(0.028, 8, 6), { x: Math.cos(a) * 0.44, z: Math.sin(a) * 0.44, y: 0.17 })
+    }
+  }
 
-  const mastH = 0.52 + L * 0.15
-  const y0 = 0.14
+  const mastH = 0.52 + L * 0.24 // TIER: the mast rises markedly taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
   const mr = overload ? 1.25 : 1
   b.add('dark', cyl(0.095 * k * mr, 0.185 * k * mr, mastH, 14), { y: y0 })
   // brass coils climbing the mast
@@ -446,7 +490,7 @@ function buildStorm(b: Build, tb: Build, L: number, branch: number) {
     p.rotateZ(-0.55)
     tb.add('trim', p, { ry: -a, x: Math.cos(a) * 0.08, z: Math.sin(a) * 0.08, y: 0.04 })
   }
-  const orbR = (overload ? 0.17 : 0.1 + L * 0.016)
+  const orbR = (overload ? 0.17 : 0.1 + L * 0.032) // TIER: the charge orb swells brighter
   accents.push({ shape: 'orb', role: 'core', attach: 'turret', y: 0.16 + orbR, scale: orbR, flicker: 0.14, bobAmp: 0.02, spin: 1.8 })
   if (overload) {
     tb.add('trim', cone(0.016, 0.42, 6), { y: 0.16 + orbR * 0.6 }) // rod piercing the orb
@@ -465,16 +509,21 @@ function buildStorm(b: Build, tb: Build, L: number, branch: number) {
 // Runed monolith. Branches: Amplify = wide slow twin halos (network reach);
 // Prism = aimed faceted prism + focusing lens (beam weapon).
 function buildArcane(b: Build, tb: Build, L: number, branch: number) {
-  const k = 1 + L * 0.08
+  const k = 1 + L * 0.14 // TIER: the monolith broadens per upgrade (was 0.08)
   const accents: AccentSpec[] = []
   const amplify = L >= 3 && branch === 0
   const prism = L >= 3 && branch === 1
   // pale plinth with a glowing rune-ring inlay
   b.add('body', lathe([[0.43, 0], [0.44, 0.05], [0.36, 0.12], [0.28, 0.15], [0.001, 0.15]], 20))
   b.add('core', band(0.335, 0.011, 20), { y: 0.04 })
+  // T2 rune-dais: a second inscribed tier lifts the pillar, glowing glyph-ring
+  if (L >= 2) {
+    b.add('body', lathe([[0.49, 0.04], [0.5, 0.1], [0.4, 0.16], [0.32, 0.18], [0.001, 0.18]], 20))
+    b.add('core', band(0.44, 0.012, 28), { y: 0.16 })
+  }
 
-  const pilH = 0.38 + L * 0.1
-  const y0 = 0.14
+  const pilH = 0.38 + L * 0.18 // TIER: pillar climbs taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
   // waisted pillar flaring into a cradle dish
   b.add('body', lathe([
     [0.24 * k, y0], [0.145 * k, y0 + pilH * 0.35], [0.13 * k, y0 + pilH * 0.6],
@@ -502,8 +551,8 @@ function buildArcane(b: Build, tb: Build, L: number, branch: number) {
     tb.add('core', ringX(0.045, 0.01), { x: 0.26, y: coreY })
     accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: 0.2, tiltX: 1.571, tiltZ: 1.571, spin: 3 })
   } else {
-    // floating core orb
-    accents.push({ shape: 'orb', role: 'core', attach: 'turret', y: coreY, scale: 0.115 + L * 0.02, spin: 1.3, bobAmp: 0.045, flicker: 0.08 })
+    // floating core orb (TIER: swells brighter each level)
+    accents.push({ shape: 'orb', role: 'core', attach: 'turret', y: coreY, scale: 0.115 + L * 0.038, spin: 1.3, bobAmp: 0.045, flicker: 0.08 })
     const r1 = amplify ? 0.46 : 0.22 + L * 0.025
     accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: r1, scaleY: amplify ? 0.35 : 0.6, tiltX: 0.45, spin: amplify ? 0.55 : 0.95 })
     accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: r1 * 0.78, scaleY: 0.6, tiltX: -0.6, spin: -1.3, phase: 2.4 })

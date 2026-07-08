@@ -4913,6 +4913,22 @@ var Sim = class {
   heroRange(h) {
     return clamp(h.baseRange * TILE * this.synergyEffects.allStatMult * this.config.mods.rangeMult, TILE * 0.5, TILE * 12);
   }
+  // Read-only range PREVIEWS for the placement range ring (WYSIWYG before commit).
+  // These mirror effRange/heroRange for a FRESH unit — level-1 tower (buffRng=1,
+  // unfused) or a party hero at its progression level — using the exact same
+  // clamp bounds so the previewed ring equals the range the moment you place.
+  previewTowerRange(kind, col, row) {
+    const base = TOWERS[kind].levels[0].range;
+    const terr = terrainRngMul(this.terrain[row]?.[col] ?? "");
+    return clamp(base * TILE * this.config.mods.rangeMult * terr, TILE * 0.5, TILE * 12);
+  }
+  previewHeroRange(heroId) {
+    const def = heroById(heroId);
+    const pd = this.partyDefs.find((p) => p.heroId === heroId);
+    if (!def || !pd) return 0;
+    const base = heroStats(def, pd.level).range;
+    return clamp(base * TILE * this.synergyEffects.allStatMult * this.config.mods.rangeMult, TILE * 0.5, TILE * 12);
+  }
   heroCooldown(h) {
     const syn = this.synergyEffects;
     return clamp(h.attackCd * syn.atkSpeedMult / Math.max(0.5, syn.allStatMult), 0.05, 10);

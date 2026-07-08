@@ -120,6 +120,7 @@ interface TowerSlot {
   ring: THREE.Mesh
   ringMat: THREE.MeshBasicMaterial
   glow: THREE.PointLight
+  glowBase: number // idle glow intensity — ramps per tier so upgrades read brighter
   level: number
   branch: number
   kind: TowerKind
@@ -345,6 +346,15 @@ export class BattleView3D {
   private buildHighlight = new THREE.Group()
   private hoverMesh!: THREE.Mesh
   private hoverMat!: THREE.MeshBasicMaterial
+  // PLACEMENT range ring — a live, element-tinted coverage preview shown while the
+  // player is positioning a tower/hero (before commit). Ring outline is the primary
+  // read; a faint disc hints the covered area. Sized to the unit's real range.
+  private placeRing!: THREE.Mesh
+  private placeRingMat!: THREE.MeshBasicMaterial
+  private placeDisc!: THREE.Mesh
+  private placeDiscMat!: THREE.MeshBasicMaterial
+  private placeRingR = 1 // current world radius (base for the idle breathe)
+  private placeRingOk = true
   private portalMesh!: THREE.Mesh
   private extraPortals: THREE.Mesh[] = [] // additional spawn portals (multi-lane maps)
   private baseMesh!: THREE.Mesh
@@ -506,6 +516,7 @@ export class BattleView3D {
     this.setupParticles()
     this.setupMotes()
     this.setupHover()
+    this.setupPlaceRing()
 
     // post-processing: single bloom pass for neon glow
     this.composer = new EffectComposer(this.renderer)
@@ -1134,6 +1145,54 @@ export class BattleView3D {
     this.scene.add(this.hoverMesh)
   }
 
+  // Placement range ring: a crisp unit-radius outline (scaled to the unit's real
+  // range) plus a faint coverage disc, both re-tinted per unit and flipped red on
+  // a blocked tile. Kept flat on the ground, breathing gently while shown.
+  private setupPlaceRing(): void {
+    const ringGeo = new THREE.RingGeometry(0.955, 1.0, 72) // outer edge == radius 1 → scale = range
+    this.placeRingMat = new THREE.MeshBasicMaterial({ color: 0x9affc0, transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false })
+    this.placeRing = new THREE.Mesh(ringGeo, this.placeRingMat)
+    this.placeRing.rotation.x = -Math.PI / 2
+    this.placeRing.position.y = GROUND + 0.025
+    this.placeRing.renderOrder = 3
+    this.placeRing.visible = false
+    this.scene.add(this.placeRing)
+
+    const discGeo = new THREE.CircleGeometry(1, 72)
+    this.placeDiscMat = new THREE.MeshBasicMaterial({ color: 0x9affc0, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false })
+    this.placeDisc = new THREE.Mesh(discGeo, this.placeDiscMat)
+    this.placeDisc.rotation.x = -Math.PI / 2
+    this.placeDisc.position.y = GROUND + 0.018
+    this.placeDisc.renderOrder = 2
+    this.placeDisc.visible = false
+    this.scene.add(this.placeDisc)
+
+    this.disposables.push(ringGeo, this.placeRingMat, discGeo, this.placeDiscMat)
+  }
+
+  // Show/refresh the placement range ring at a buildable tile. `rangePx` is the
+  // unit's REAL range (sim px); `color` its element tint; `ok` false → blocked tile.
+  // Pass cell=null (or range<=0) to hide it. Called live from the scene's hover.
+  setPlaceRing(cell: { col: number; row: number } | null, rangePx: number, color: number, ok: boolean): void {
+    if (!cell || rangePx <= 0) { this.placeRing.visible = false; this.placeDisc.visible = false; return }
+    const x = wx(MAP_X + cell.col * TILE_PX + TILE_PX / 2)
+    const z = wz(MAP_Y + cell.row * TILE_PX + TILE_PX / 2)
+    const r = wr(rangePx)
+    this.placeRingR = r
+    this.placeRingOk = ok
+    const c = ok ? color : 0xff5b7a
+    this.placeRing.position.set(x, GROUND + 0.025, z)
+    this.placeDisc.position.set(x, GROUND + 0.018, z)
+    this.placeRing.scale.set(r, r, 1)
+    this.placeDisc.scale.set(r, r, 1)
+    this.placeRingMat.color.setHex(c)
+    this.placeDiscMat.color.setHex(c)
+    this.placeRingMat.opacity = ok ? 0.92 : 0.7
+    this.placeDiscMat.opacity = ok ? 0.06 : 0.04
+    this.placeRing.visible = true
+    this.placeDisc.visible = true
+  }
+
   // ---------------------------------------------------------------- particles
   private setupParticles(): void {
     const geo = new THREE.BufferGeometry()
@@ -1491,7 +1550,9 @@ export class BattleView3D {
 
   // ---------------------------------------------------------------- hover/ghost
   setHover(cell: { col: number; row: number } | null, ok: boolean): void {
-    if (!cell) { this.hoverMesh.visible = false; return }
+    // Clearing the tile marker also retires the placement range ring — every
+    // build/deploy/move exit path already routes through setHover(null,...).
+    if (!cell) { this.hoverMesh.visible = false; this.placeRing.visible = false; this.placeDisc.visible = false; return }
     const x = wx(MAP_X + cell.col * TILE_PX + TILE_PX / 2)
     const z = wz(MAP_Y + cell.row * TILE_PX + TILE_PX / 2)
     this.hoverMesh.visible = true
@@ -1717,6 +1778,12 @@ export class BattleView3D {
     slot.height = v.height
     slot.emitter = v.emitter ?? null
     slot.glow.position.y = v.height * 0.8
+    // TIER GLOW-UP: the element core burns brighter and reaches farther each tier
+    // (T1→T2→T3), so an upgrade lands as a visible surge of light, and the two T3
+    // branches over-drive it hardest. Base is folded into the fire/pulse in sync.
+    const tier = Math.min(t.level, 3)
+    slot.glowBase = 0.5 + tier * 0.42 + (t.level >= 3 ? 0.45 : 0)
+    slot.glow.distance = 4 + tier * 1.3 + (t.level >= 3 ? 1.4 : 0)
     for (const spec of v.accents) this.addAccent(slot, kind, spec)
 
     slot.level = t.level
@@ -1748,7 +1815,7 @@ export class BattleView3D {
 
     const slot: TowerSlot = {
       group: g, bodyGroup, turret, accents: [], emitter: null, emitAcc: 0, height: 1,
-      ring, ringMat, glow, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
+      ring, ringMat, glow, glowBase: 0.5, level: t.level, branch: t.branch, kind: t.kind, fireT: 0,
       aimYaw: -t.aimAngle, targetYaw: -t.aimAngle, recoilT: 0, lastFireFlash: 0,
       dropT: 0.0001, dropDone: false, pulseT: 0, phase: (t.x * 13.37 + t.y * 7.77) % (Math.PI * 2), turretY0: 0, baseRange: 0,
       greyed: false, greyVeil: null, fused: false, fusionRing: null,
@@ -1784,10 +1851,15 @@ export class BattleView3D {
 
   private rebuildTurret(slot: TowerSlot, t: SimTower): void {
     this.assembleTower(slot, t)
-    // upgrade flourish: scale-punch + sparkle fountain + glow spike (via pulseT)
-    slot.pulseT = 0.5
-    this.emitParticles(wx(t.x), GROUND + 1.1, wz(t.y), towerPalette(t.kind).color, 20, 2.6)
-    this.emitParticles(wx(t.x), GROUND + 1.3, wz(t.y), 0xffffff, 8, 2)
+    // upgrade flourish: scale-punch + sparkle fountain + glow spike (via pulseT).
+    // A T3 branch fork is the grandest beat — punch harder and kick the camera so
+    // the new silhouette lands as a real GLOW-UP, not a quiet swap.
+    const branchPick = t.level >= 3
+    slot.pulseT = branchPick ? 0.62 : 0.55
+    const pc = towerPalette(t.kind).color
+    this.emitParticles(wx(t.x), GROUND + 1.1, wz(t.y), pc, branchPick ? 30 : 22, 2.8)
+    this.emitParticles(wx(t.x), GROUND + 1.35, wz(t.y), 0xffffff, branchPick ? 14 : 9, 2.2)
+    if (branchPick) this.pushIn(0.4)
   }
 
   // ---------------------------------------------------------------- projectiles
@@ -2063,7 +2135,7 @@ export class BattleView3D {
           this.emitParticles(wx(t.x), GROUND + 1.0, wz(t.y), pc, 14, 2.2)
         }
       }
-      s.glow.intensity = greyed ? 0.05 : 0.5 + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
+      s.glow.intensity = greyed ? 0.05 : s.glowBase + (t.fireFlash > 0 ? 1.6 : 0) + s.pulseT * 3
 
       // FUSION halo: a precessing ring in the absorbed element's colour, plus a
       // one-time forge celebration the moment the fusion lands.
@@ -3212,8 +3284,8 @@ export class BattleView3D {
       // upgrade flourish scale-punch (decays)
       if (s.pulseT > 0) {
         s.pulseT = Math.max(0, s.pulseT - dt)
-        const k = s.pulseT / 0.5
-        s.group.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.14)
+        const k = s.pulseT / 0.62
+        s.group.scale.setScalar(1 + Math.sin(Math.min(1, k) * Math.PI) * 0.2)
       } else {
         s.group.scale.setScalar(1)
       }
@@ -3259,6 +3331,14 @@ export class BattleView3D {
           }
         }
       }
+    }
+
+    // placement range ring: gentle breathe (frozen under reduce-motion) so the
+    // live coverage preview reads as "alive" without distracting from the board.
+    if (this.placeRing.visible) {
+      const br = this.motionOk ? 1 + Math.sin(this.clockT * 4) * 0.012 : 1
+      this.placeRing.scale.set(this.placeRingR * br, this.placeRingR * br, 1)
+      this.placeRingMat.opacity = (this.placeRingOk ? 0.82 : 0.62) + (this.motionOk ? Math.sin(this.clockT * 4) * 0.14 : 0.1)
     }
 
     // THE PRISM WELLSPRING: gentle hover + spin; at low integrity it shudders and

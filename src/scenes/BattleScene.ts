@@ -22,6 +22,7 @@ import { music } from '../ui/music'
 import { appSettings } from '../ui/settings'
 import { barkEngine, pairExchange } from '../game/barks'
 import { heroById } from '../game/heroes'
+import { towerPalette } from '../game/skins'
 import { unlockCodex, recordReaction, reactionsDiscoveredCount, REACTION_TOTAL, unlockCodexBatch, unlockEnemyCodex, CODEX_ON_KEEPER_REDEEM } from '../game/codex'
 import { KEEPER_BY_ID } from '../game/keepers'
 import { realmForLevel, REALMS } from '../game/levels'
@@ -946,13 +947,30 @@ export class BattleScene extends Phaser.Scene {
 
   private handleHover(x: number, y: number): void {
     if (!this.sim) return
-    if (this.mode === 'building' || this.mode === 'deploying') {
+    if (this.mode === 'building') {
       const cell = this.view.pickCell(x, y)
-      this.view.setHover(cell, cell ? this.sim.canPlace(cell.col, cell.row) : false)
+      const ok = cell ? this.sim.canPlace(cell.col, cell.row) : false
+      this.view.setHover(cell, ok)
+      // LIVE coverage preview: this tower's real range, sized to the hovered tile.
+      if (cell && this.buildKind) {
+        this.view.setPlaceRing(cell, this.sim.previewTowerRange(this.buildKind, cell.col, cell.row), towerPalette(this.buildKind).color, ok)
+      }
+    } else if (this.mode === 'deploying') {
+      const cell = this.view.pickCell(x, y)
+      const ok = cell ? this.sim.canPlace(cell.col, cell.row) : false
+      this.view.setHover(cell, ok)
+      // hero coverage/aura preview at its progression range
+      if (cell && this.buildHeroId) {
+        const def = heroById(this.buildHeroId)
+        this.view.setPlaceRing(cell, this.sim.previewHeroRange(this.buildHeroId), def ? def.color : 0x9affc0, ok)
+      }
     } else if (this.mode === 'moving') {
       const cell = this.view.pickCell(x, y)
       const ok = cell != null && this.movingHeroSlot != null && this.sim.canMoveHeroTo(this.movingHeroSlot, cell.col, cell.row)
       this.view.setHover(cell, ok)
+      // the armed hero's REAL range follows the tile it would relocate to
+      const h = this.movingHeroSlot != null ? this.sim.heroBySlot(this.movingHeroSlot) : null
+      if (cell && h) this.view.setPlaceRing(cell, this.sim.heroRange(h), h.def.color, ok)
     } else if (this.mode === 'aiming') {
       const cell = this.view.pickCell(x, y)
       this.view.setHover(cell, true)
