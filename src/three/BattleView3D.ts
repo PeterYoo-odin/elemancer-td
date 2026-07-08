@@ -22,6 +22,7 @@ import type { SpellEffect } from '../game/heroes'
 import type { EnemyKind } from '../game/enemies'
 import type { FieldPalette } from '../game/levels'
 import type { RealmBackdrop } from '../game/realmBackdrops'
+import { RealmAtmosphere } from './RealmAtmosphere'
 import { TERRAIN_META } from '../game/paths'
 import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
@@ -422,6 +423,12 @@ export class BattleView3D {
   private motePos!: Float32Array
   private moteSeed!: Float32Array
 
+  // painted-backdrop "aliveness" pass: procedural moving atmosphere layers over the
+  // static per-realm painting (parallax, drifting FX, critters, foreground frame).
+  private backdropMesh?: THREE.Mesh // the painted cylinder (parallax-swayed vs atmosphere)
+  private atmosphere?: RealmAtmosphere
+  private atmoReactFade = 0 // 0..1, a big reaction burst briefly fades ambient particles
+
   constructor(
     private sim: Sim,
     private palette: FieldPalette,
@@ -568,6 +575,20 @@ export class BattleView3D {
     mesh.renderOrder = -1
     mesh.frustumCulled = false
     this.scene.add(mesh)
+    this.backdropMesh = mesh
+
+    // Aliveness pass: procedural moving layers over the painting (see RealmAtmosphere).
+    // Built now (procedural — no extra fetch), recessive by construction, reduce-motion
+    // aware. The painting stays the "far" plane; these deepen it without stealing focus.
+    // Guarded: this is visual polish over a flagship board — any device-specific failure
+    // (canvas 2D / material quirk) must degrade to the static painting, never break the
+    // view (mirrors the texture-load onError fallback above).
+    try {
+      this.atmosphere = new RealmAtmosphere(this.scene, this.camera, this.backdrop, this.motionOk)
+    } catch (e) {
+      console.warn('RealmAtmosphere init failed — falling back to static backdrop', e)
+      this.atmosphere = undefined
+    }
 
     new THREE.TextureLoader().load(
       this.backdrop.url,
@@ -1034,6 +1055,37 @@ export class BattleView3D {
       this.motePos[i * 3 + 2] = bz + Math.cos(t * 0.17 + ph * 1.7) * 0.5
     }
     ;(this.motes.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
+  }
+
+  // Drive the painted-backdrop aliveness pass: a whisper of parallax sway on the
+  // painting itself (differential vs the atmosphere layers = depth) + the wave-driven
+  // atmosphere (warm/thicken as the boss nears) and the reaction-burst recede (gameplay
+  // FX briefly own the frame). All no-ops under reduce-motion (atmosphere.update guards).
+  private updateBackdrop(dt: number): void {
+    if (!this.atmosphere) return
+    this.atmoReactFade = Math.max(0, this.atmoReactFade - dt * 1.6)
+    // painting sways a touch LESS than the mid/near atmosphere → parallax read
+    if (this.backdropMesh && this.motionOk) this.backdropMesh.rotation.y = Math.sin(this.camBaseAngle) * 0.03
+    // tension: how close the boss is. Run progress + a strong bump while a boss lives.
+    const waves = Math.max(1, this.sim.config.level.waves.length)
+    let bossAlive = false
+    for (const e of this.sim.enemies) { if (e.active && e.def.boss) { bossAlive = true; break } }
+    const progress = Math.min(1, this.sim.waveIndex / waves)
+    const tension = Math.min(1, progress * 0.45 + (bossAlive ? 0.6 : 0))
+    try {
+      this.atmosphere.update(dt, {
+        clockT: this.clockT,
+        camBaseAngle: this.camBaseAngle,
+        tension,
+        reactionFade: this.atmoReactFade,
+      })
+    } catch (e) {
+      // a failing atmosphere must never take the whole frame down — drop it and
+      // continue on the static painting.
+      console.warn('RealmAtmosphere update failed — dropping atmosphere', e)
+      this.atmosphere.dispose()
+      this.atmosphere = undefined
+    }
   }
 
   private emitParticles(x: number, y: number, z: number, color: number, count: number, speed: number): void {
@@ -2568,6 +2620,9 @@ export class BattleView3D {
     this.emitParticles(x, 0.9, z, 0xffffff, 8, 2.6)
     this.shake(0.085)
     this.pushIn(0.35)
+    // big reaction burst → briefly fade the backdrop's OWN ambient particles so the
+    // gameplay FX own the frame (dynamic particle budget, not a fixed one)
+    this.atmoReactFade = 1
   }
 
   fxSpell(key: string, simX: number, simY: number, radiusPx: number, color: number): void {
@@ -3005,6 +3060,7 @@ export class BattleView3D {
     this.updateProjTrails(dt)
     this.updateParticles(dt)
     this.updateMotes()
+    this.updateBackdrop(dt)
     this.updateTransients(dt)
 
     // bloom surge decay (0.62 = the calibrated base set in the constructor)
@@ -3049,6 +3105,9 @@ export class BattleView3D {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+
+    // painted-backdrop atmosphere (its own geoms/mats/textures + camera-child frame)
+    this.atmosphere?.dispose()
 
     // transients
     for (const tr of this.transients) {
