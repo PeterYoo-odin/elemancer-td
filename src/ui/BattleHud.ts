@@ -139,6 +139,9 @@ const CSS = `
   border:1px solid var(--stroke); border-radius:16px; padding:8px 12px; font-weight:900; font-size:15px;
   line-height:1; white-space:nowrap; box-shadow:0 4px 14px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
 .eld-combo.show { display:flex; }
+/* milestone pop: a quick punch on the chip every 10 kills, then it settles back —
+   the "juice" without a giant repeating center banner */
+.eld-combo.pop { animation:eldstatpop .34s cubic-bezier(.2,1.6,.4,1); }
 
 /* telegraph pill — docked in the bottom bar's prep row (never over the board) */
 .eld-telegraph { flex:1 1 140px; min-width:0; overflow:hidden; text-overflow:ellipsis;
@@ -273,10 +276,16 @@ const CSS = `
   16%{ transform:translate(-50%,-128%) scale(1.55) rotate(3deg);}
   32%{ transform:translate(-50%,-108%) scale(1.1) rotate(0deg);}
   100%{ transform:translate(calc(-50% + var(--dx)),-215%) scale(1); opacity:0; } }
-.eld-banner { position:absolute; left:50%; top:34%; transform:translateX(-50%); font-size:40px; font-weight:900;
-  text-shadow:0 3px 0 rgba(0,0,0,.55); animation:eldbanner 1.6s ease-out forwards; white-space:nowrap; }
-@keyframes eldbanner { 0%{ opacity:0; transform:translateX(-50%) scale(.6);} 15%{ opacity:1; transform:translateX(-50%) scale(1);}
-  80%{ opacity:1;} 100%{ opacity:0; transform:translateX(-50%) scale(1) translateY(-30px);} }
+/* generic notify banner → a COMPACT top-center toast in a RESERVED band that clears
+   the top bar + boss bar (top ~128px) and never covers the board/heroes/center. */
+.eld-banner { position:absolute; left:50%; top: calc(env(safe-area-inset-top,0px) + 128px); transform:translateX(-50%);
+  font-size:18px; font-weight:900; letter-spacing:.4px; line-height:1.2; text-align:center;
+  max-width:min(90vw,430px); padding:8px 18px; border-radius:13px;
+  background:rgba(14,9,30,.9); border:1px solid rgba(255,255,255,.18); box-shadow:0 6px 20px rgba(0,0,0,.5);
+  text-shadow:0 2px 4px rgba(0,0,0,.7); animation:eldbanner 1.2s ease-out forwards; }
+@keyframes eldbanner { 0%{ opacity:0; transform:translateX(-50%) translateY(-8px) scale(.9);}
+  14%{ opacity:1; transform:translateX(-50%) translateY(0) scale(1);}
+  82%{ opacity:1;} 100%{ opacity:0; transform:translateX(-50%) translateY(-14px) scale(.98);} }
 @media (min-width:900px){ .eld-dock{ max-width:560px; left:50%; transform:translateX(-50%); border-radius:20px 20px 0 0;} }
 
 /* ---- hero bar (deploy party heroes / cast their spells) ---- */
@@ -303,17 +312,26 @@ const CSS = `
   box-shadow:0 1px 3px rgba(0,0,0,.5); }
 .eld-hero .hwyrm.perfect { box-shadow:0 0 6px 1px var(--wc, #fff), 0 1px 3px rgba(0,0,0,.5); }
 
-/* ---- synergy panel (active element team bonuses) ---- */
-.eld-syn { position:absolute; left:10px; top: calc(env(safe-area-inset-top,0px) + 96px); display:flex; flex-direction:column; gap:5px; max-width:190px; z-index:21; }
+/* ---- synergy RAIL (active element team bonuses) ----
+   A compact rail of buff ICONS docked to the very LEFT edge — it never overlaps
+   the board. Collapsed to a small "⚡ N" tab during combat; tap the tab to reveal
+   the icons, tap an icon for its full description. Frees the left half of the board. */
+.eld-syn { position:absolute; left:0; top: calc(env(safe-area-inset-top,0px) + 100px); display:flex; flex-direction:column;
+  gap:4px; z-index:21; align-items:flex-start; max-width:64px; }
 .eld-syn.hidden { display:none; }
-.eld-syn .syn-h { font-size:11px; font-weight:900; letter-spacing:1.5px; color:#c9b6ff; opacity:.9; text-shadow:0 1px 2px #000; }
-.eld-syn .syn-chip { display:flex; align-items:center; gap:6px; border:1px solid; border-radius:11px; padding:4px 9px 4px 7px;
-  background:linear-gradient(180deg, rgba(42,30,84,.94), rgba(22,14,46,.94)); box-shadow:0 3px 10px rgba(0,0,0,.4);
-  animation:eldsynin .3s cubic-bezier(.2,1.3,.5,1); }
-.eld-syn .syn-chip .si { font-size:15px; }
-.eld-syn .syn-chip .st { display:flex; flex-direction:column; line-height:1.15; }
-.eld-syn .syn-chip .sn { font-size:12px; font-weight:900; }
-.eld-syn .syn-chip .sd { font-size:10px; font-weight:700; color:#d8d0ff; opacity:.9; }
+.eld-syn .syn-tog { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:900; letter-spacing:.5px;
+  color:#c9b6ff; background:linear-gradient(180deg, rgba(42,30,84,.94), rgba(22,14,46,.94));
+  border:1px solid rgba(201,182,255,.42); border-left:none; border-radius:0 11px 11px 0; padding:4px 9px 4px 6px;
+  box-shadow:0 2px 9px rgba(0,0,0,.45); cursor:pointer; white-space:nowrap; text-shadow:0 1px 2px #000; }
+.eld-syn .syn-tog .cv { font-size:8px; opacity:.8; transition:transform .18s ease; }
+.eld-syn.collapsed .syn-tog .cv { transform:rotate(-90deg); }
+.eld-syn .syn-rail { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+.eld-syn.collapsed .syn-rail { display:none; }
+.eld-syn .syn-pill { display:flex; align-items:center; gap:3px; border:1px solid; border-left:none; border-radius:0 11px 11px 0;
+  padding:3px 7px 3px 5px; background:linear-gradient(180deg, rgba(42,30,84,.94), rgba(22,14,46,.94));
+  box-shadow:0 2px 9px rgba(0,0,0,.4); animation:eldsynin .3s cubic-bezier(.2,1.3,.5,1); cursor:pointer; }
+.eld-syn .syn-pill .si { font-size:15px; line-height:1; }
+.eld-syn .syn-pill .sv { font-size:9px; font-weight:900; line-height:1; opacity:.92; }
 @keyframes eldsynin { from { transform:translateX(-14px); opacity:0; } to { transform:translateX(0); opacity:1; } }
 
 /* ---- motion pass: scene entrance, counter pops, pings, banners, coins ---- */
@@ -366,14 +384,18 @@ const CSS = `
 }
 .eld-hud.reduced .eld-spell.ping { animation:none; }
 
-/* wave banner: bigger, sweeping, letter-spaced */
-.eld-wavebanner { position:absolute; left:50%; top:30%; transform:translateX(-50%); font-size:54px; font-weight:900;
-  letter-spacing:6px; white-space:nowrap; color:#fff;
-  text-shadow:0 4px 0 rgba(0,0,0,.5), 0 0 26px rgba(176,107,255,.9);
-  animation: eldwaveb 1.7s cubic-bezier(.2,1.2,.4,1) forwards; }
-@keyframes eldwaveb { 0%{ opacity:0; transform:translateX(-50%) scale(1.9); letter-spacing:18px; }
-  22%{ opacity:1; transform:translateX(-50%) scale(1); letter-spacing:6px; }
-  78%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-24px) scale(.96); } }
+/* wave-clear toast: shares the reserved top-center band with the notify toast
+   (the banner queue guarantees only ONE shows at a time). Brief (~1s), never
+   parked over the board. */
+.eld-wavebanner { position:absolute; left:50%; top: calc(env(safe-area-inset-top,0px) + 128px); transform:translateX(-50%);
+  font-size:23px; font-weight:900; letter-spacing:4px; white-space:nowrap; color:#fff; padding:9px 22px; border-radius:14px;
+  background:rgba(14,9,30,.9); border:1px solid rgba(176,107,255,.5);
+  text-shadow:0 2px 6px rgba(0,0,0,.6), 0 0 18px rgba(176,107,255,.75);
+  box-shadow:0 6px 22px rgba(0,0,0,.5), 0 0 18px rgba(176,107,255,.25);
+  animation: eldwaveb 1.15s cubic-bezier(.2,1.2,.4,1) forwards; }
+@keyframes eldwaveb { 0%{ opacity:0; transform:translateX(-50%) translateY(-8px) scale(.86); letter-spacing:10px; }
+  20%{ opacity:1; transform:translateX(-50%) translateY(0) scale(1); letter-spacing:4px; }
+  80%{ opacity:1; } 100%{ opacity:0; transform:translateX(-50%) translateY(-16px) scale(.97); } }
 
 /* one-time "the UI can explain itself" hint (first battle only) */
 .eld-hint { position:absolute; top: calc(env(safe-area-inset-top,0px) + 66px); left:50%; transform:translateX(-50%) translateY(-6px);
@@ -423,7 +445,7 @@ const CSS = `
 
 /* ELEMENTAL REACTION callout: Balatro-style slam — huge, overshoots in, wobbles, punches out */
 .eld-react { position:absolute; left:50%; top:27%; z-index:32; pointer-events:none; font-weight:900;
-  font-size: clamp(36px, 10vw, 62px); letter-spacing:3px; white-space:nowrap; text-align:center;
+  font-size: clamp(30px, 8.5vw, 58px); letter-spacing:3px; white-space:nowrap; text-align:center;
   transform:translate(-50%,-50%);
   text-shadow: 0 4px 0 rgba(0,0,0,.5), 0 0 34px currentColor, 0 0 10px currentColor;
   animation: eldreact 1s cubic-bezier(.16,1.5,.3,1) forwards; }
@@ -436,6 +458,17 @@ const CSS = `
   40%  { transform:translate(-50%,-50%) scale(1) rotate(0deg); }
   80%  { opacity:1; }
   100% { opacity:0; transform:translate(-50%,-58%) scale(.9); }
+}
+
+/* SHORT viewports (landscape phones): the dock is tall, so pull the reserved
+   top-center toast band up under the stat bar and shrink the center reaction so
+   these brief punches never reach down onto the heroes / dock. */
+@media (max-height: 520px) {
+  .eld-banner, .eld-wavebanner { top: calc(env(safe-area-inset-top,0px) + 56px); }
+  .eld-wavebanner { font-size:19px; letter-spacing:3px; padding:6px 16px; }
+  .eld-banner { font-size:15px; padding:6px 14px; }
+  .eld-react { top:24%; font-size: clamp(24px, 5.5vw, 40px); letter-spacing:2px; }
+  .eld-react .rx-sub { font-size:10px; letter-spacing:4px; }
 }
 `
 
@@ -501,8 +534,14 @@ export class BattleHud {
   private heroBtns = new Map<string, { root: HTMLElement; port: HTMLElement; lvl: HTMLElement; mask: HTMLElement; cdtxt: HTMLElement; badge: HTMLElement }>()
   private heroBarBuilt = false
   private synPanel: HTMLElement
+  private synTog!: HTMLElement
   private synList: HTMLElement
   private lastSynKey = ''
+  private synUserToggled = false
+  private lastComboCount = 0
+  // board bounds (px) so floating numbers can't fly into the top bar or under the dock
+  private fxTop = 110
+  private fxBottom = 9999
 
   // panels
   private upgradeEl: HTMLElement | null = null
@@ -713,15 +752,21 @@ export class BattleHud {
     this.root.append(dock)
     this.dockEl = dock
 
-    // synergy panel (element team bonuses) — hidden until a synergy is active
-    this.synPanel = el('div', 'eld-syn hidden')
-    const synHead = el('div', 'syn-h pe', 'SYNERGIES')
-    attachTip(synHead, () => ({
+    // synergy rail (element team bonuses) — a compact left-edge icon rail, hidden
+    // until a synergy is active, collapsed to a "⚡ N" tab during combat.
+    this.synPanel = el('div', 'eld-syn hidden collapsed')
+    this.synTog = el('div', 'syn-tog pe')
+    this.synTog.addEventListener('click', () => {
+      this.synUserToggled = true
+      this.synPanel.classList.toggle('collapsed')
+    })
+    attachTip(this.synTog, () => ({
       tag: 'TEAM BONUS', title: 'Element synergies', accent: '#c9b6ff',
       body: 'Field heroes and towers that share an element to awaken team-wide bonuses. They stay active while the element stays on the board.',
+      foot: 'Tap a buff icon for its full effect.',
     }))
-    this.synPanel.append(synHead)
-    this.synList = el('div', 'syn-list')
+    this.synPanel.append(this.synTog)
+    this.synList = el('div', 'syn-rail')
     this.synPanel.append(this.synList)
     this.root.append(this.synPanel)
 
@@ -743,8 +788,14 @@ export class BattleHud {
   }
 
   private updateDockH(): void {
-    const h = Math.ceil(this.dockEl.getBoundingClientRect().height)
+    const r = this.dockEl.getBoundingClientRect()
+    const h = Math.ceil(r.height)
     if (h > 0) this.root.style.setProperty('--dock-h', `${h}px`)
+    // keep floating numbers in the board band: bottom above the dock (heroes live
+    // in it), top below the stat bar. On short/landscape viewports the dock is
+    // tall, so we lower the TOP rather than push the bottom over the dock/heroes.
+    this.fxBottom = Math.max(70, (r.top || window.innerHeight) - 14)
+    this.fxTop = Math.min(110, this.fxBottom - 30)
   }
 
   private iconDiv(t: string): HTMLElement {
@@ -803,14 +854,17 @@ export class BattleHud {
       ? `WAVE ${sim.waveIndex + 1} ∞`
       : `WAVE ${Math.min(sim.waveIndex + 1, ctx.totalWaves)}/${ctx.totalWaves}`
 
-    // combo readout
+    // combo readout — a compact persistent chip in the top bar, with a brief pop
+    // on each 10-kill milestone (never a repeating center banner)
     if (sim.comboCount >= 2) {
       this.comboEl.textContent = `COMBO ×${sim.comboCount}  ·  ${sim.comboMult.toFixed(2)}×`
       this.comboEl.style.color = hex(comboColor(sim.comboCount))
       this.comboEl.classList.add('show')
+      if (Math.floor(sim.comboCount / 10) > Math.floor(this.lastComboCount / 10)) this.popClass(this.comboEl, 'pop', 360)
     } else {
       this.comboEl.classList.remove('show')
     }
+    this.lastComboCount = sim.comboCount
 
     // start button + telegraph (prep only)
     if (sim.state === 'prep') {
@@ -1026,41 +1080,45 @@ export class BattleHud {
     const bonuses = sim.activeSynergies()
     const resonances = sim.activeResonances()
     const key = bonuses.map((b) => b.id).join(',') + '|' + resonances.map((r) => r.id + r.count).join(',')
-    if (key === this.lastSynKey) return
-    this.lastSynKey = key
-    this.synList.innerHTML = ''
-    if (bonuses.length === 0 && resonances.length === 0) { this.synPanel.classList.add('hidden'); return }
-    this.synPanel.classList.remove('hidden')
-    for (const b of bonuses) {
-      const chip = el('div', 'syn-chip pe')
-      chip.style.borderColor = hex(b.color)
-      chip.style.color = hex(b.color)
-      chip.append(el('span', 'si', b.icon))
-      const st = el('div', 'st')
-      st.append(el('div', 'sn', b.name), el('div', 'sd', b.desc))
-      chip.append(st)
-      this.synList.append(chip)
-      attachTip(chip, () => ({
-        tag: 'ACTIVE SYNERGY', title: b.name, accent: hex(b.color), body: b.desc,
-        foot: 'Awakened by fielding allies that share an element. It fades if they leave the board.',
-      }))
+    if (key !== this.lastSynKey) {
+      this.lastSynKey = key
+      this.synList.innerHTML = ''
+      const n = bonuses.length + resonances.length
+      if (n === 0) {
+        this.synPanel.classList.add('hidden')
+      } else {
+        this.synPanel.classList.remove('hidden')
+        this.synTog.textContent = ''
+        this.synTog.append(document.createTextNode(`⚡ ${n} `), el('span', 'cv', '▾'))
+        for (const b of bonuses) {
+          const pill = el('div', 'syn-pill pe')
+          pill.style.borderColor = hex(b.color)
+          pill.style.color = hex(b.color)
+          pill.append(el('span', 'si', b.icon))
+          this.synList.append(pill)
+          attachTip(pill, () => ({
+            tag: 'ACTIVE SYNERGY', title: b.name, accent: hex(b.color), body: b.desc,
+            foot: 'Awakened by fielding allies that share an element. It fades if they leave the board.',
+          }))
+        }
+        // ELEMENT RESONANCE pills (hero ↔ tower bonds) — tiny tier/count badge
+        for (const r of resonances) {
+          const pill = el('div', 'syn-pill pe')
+          pill.style.borderColor = hex(r.color)
+          pill.style.color = hex(r.color)
+          pill.append(el('span', 'si', r.icon), el('span', 'sv', r.tier === 2 ? 'II' : `×${r.count}`))
+          this.synList.append(pill)
+          attachTip(pill, () => ({
+            tag: 'ELEMENT RESONANCE', title: r.name, accent: hex(r.color),
+            body: `${r.heroNames.join(' & ')} resonates with your ${r.count} ${r.towerName} towers — ${r.desc}.`,
+            foot: r.tier === 1 ? `Build ${4 - r.count} more ${r.towerName} tower${4 - r.count === 1 ? '' : 's'} for tier II.` : 'Tier II — fully resonant.',
+          }))
+        }
+      }
     }
-    // ELEMENT RESONANCE chips (hero ↔ tower bonds)
-    for (const r of resonances) {
-      const chip = el('div', 'syn-chip pe')
-      chip.style.borderColor = hex(r.color)
-      chip.style.color = hex(r.color)
-      chip.append(el('span', 'si', r.icon))
-      const st = el('div', 'st')
-      st.append(el('div', 'sn', r.name), el('div', 'sd', r.desc))
-      chip.append(st)
-      this.synList.append(chip)
-      attachTip(chip, () => ({
-        tag: 'ELEMENT RESONANCE', title: r.name, accent: hex(r.color),
-        body: `${r.heroNames.join(' & ')} resonates with your ${r.count} ${r.towerName} towers — ${r.desc}.`,
-        foot: r.tier === 1 ? `Build ${4 - r.count} more ${r.towerName} tower${4 - r.count === 1 ? '' : 's'} for tier II.` : 'Tier II — fully resonant.',
-      }))
-    }
+    // collapse to the tab in combat, expand during prep — unless the player has
+    // manually toggled it this battle (then respect their choice).
+    if (!this.synUserToggled) this.synPanel.classList.toggle('collapsed', sim.state !== 'prep')
   }
 
   // ------------------------------------------------------------- tooltip content
@@ -1616,8 +1674,12 @@ export class BattleHud {
     // reduce-motion: keep only the meaningful hits (crit / combo). Plain damage
     // numbers arc and fly the most, so they're the ones we suppress — "fewer/none".
     if (reduced && style === 'norm') return
-    if (this.floatCount >= (reduced ? 8 : 26)) return
+    if (this.floatCount >= (reduced ? 8 : 22)) return
     this.floatCount++
+    // clamp the spawn into the board band so numbers arc off the target without
+    // flying up into the top bar / combo chip or landing under the dock + HUD.
+    x = Math.max(24, Math.min(window.innerWidth - 24, x))
+    y = Math.max(this.fxTop, Math.min(this.fxBottom, y))
     const d = el('div', 'eld-float' + (style === 'crit' ? ' crit' : ''), msg)
     d.style.left = `${x}px`
     d.style.top = `${y}px`
@@ -1662,7 +1724,7 @@ export class BattleHud {
 
   waveBanner(msg: string, priority: number = BANNER_PRIORITY.wave): void {
     this.chat.add(null, msg, 'event') // record FIRST — the queue may defer/drop the visual
-    this.enqueueBanner({ cls: 'eld-wavebanner', msg, priority, dur: 1750 })
+    this.enqueueBanner({ cls: 'eld-wavebanner', msg, priority, dur: 1150 })
   }
 
   // ------------------------------------------------------------- chat feed
@@ -1765,7 +1827,7 @@ export class BattleHud {
 
   banner(msg: string, color: number, priority: number = BANNER_PRIORITY.notify): void {
     this.chat.add(null, msg, 'event') // record FIRST — the pop may be queued/dropped, the feed remembers
-    this.enqueueBanner({ cls: 'eld-banner', msg, color, priority, dur: 1650 })
+    this.enqueueBanner({ cls: 'eld-banner', msg, color, priority, dur: 1200 })
   }
 
   dispose(): void {
