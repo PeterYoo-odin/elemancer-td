@@ -341,6 +341,7 @@ export class BattleView3D {
   private hoverMesh!: THREE.Mesh
   private hoverMat!: THREE.MeshBasicMaterial
   private portalMesh!: THREE.Mesh
+  private extraPortals: THREE.Mesh[] = [] // additional spawn portals (multi-lane maps)
   private baseMesh!: THREE.Mesh
   // THE PRISM WELLSPRING — the defended base. A procedural crystalline fount
   // (baseMesh core + halo ring + light) that desaturates/cracks with HP, with an
@@ -1018,6 +1019,20 @@ export class BattleView3D {
     portalMesh.rotation.x = Math.PI / 2
     this.scene.add(portalMesh)
     this.portalMesh = portalMesh
+
+    // MULTI-LANE maps spawn from 2+ portals converging on the base — draw one torus
+    // per additional route so the extra spawn point reads clearly (the road tiles are
+    // already laid by the grid). They share the primary's geometry/material.
+    this.extraPortals = []
+    const allPortals = this.sim.portals()
+    for (let i = 1; i < allPortals.length; i++) {
+      const p = allPortals[i]
+      const m = new THREE.Mesh(portalGeo, portalMat)
+      m.position.set(wx(p.x), GROUND + 0.35, wz(p.y))
+      m.rotation.x = Math.PI / 2
+      this.scene.add(m)
+      this.extraPortals.push(m)
+    }
 
     const bx = wx(base.x)
     const bz = wz(base.y)
@@ -3121,6 +3136,7 @@ export class BattleView3D {
     this.portalMesh.rotation.z += dt * 1.2
     this.portalPulse = Math.max(0, this.portalPulse - dt * 3.5)
     this.portalMesh.scale.setScalar(1 + this.portalPulse * 0.35)
+    for (const p of this.extraPortals) p.rotation.z += dt * 1.2
     this.baseMesh.rotation.y += dt * 0.8
     this.baseMesh.position.y = GROUND + 0.55 + Math.sin(this.clockT * 2) * 0.06
 

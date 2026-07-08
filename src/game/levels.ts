@@ -7,12 +7,12 @@
 import type { EnemyKind } from './enemies'
 import type { TowerKind } from './towers'
 import type { TerrainCell } from './paths'
-import { serpentine, pathCellsFor, GRID_COLS, GRID_ROWS } from './paths'
+import { serpentine, pathCellsFor, pathPlanFor, GRID_COLS, GRID_ROWS } from './paths'
 import { buildCampaign, PAL, LEVELS_PER_WORLD } from './campaign'
 
 // Re-export the path primitives so existing importers (sim, scenes, layout) keep
 // their import site unchanged.
-export { serpentine, pathCellsFor, GRID_COLS, GRID_ROWS }
+export { serpentine, pathCellsFor, pathPlanFor, GRID_COLS, GRID_ROWS }
 export { LEVELS_PER_WORLD }
 
 export interface WaveEntry {
@@ -45,8 +45,13 @@ export interface LevelDef {
   name: string
   blurb: string
   lanes: number[] // serpentine rows (fallback route when `path` is absent)
-  /** authored spawn→base cell route (contiguous); overrides `lanes` when present */
+  /** authored spawn→base cell route (contiguous); overrides `lanes` when present.
+   * For a MULTI-lane level this is route 0 (the primary, for tile orientation). */
   path?: Array<[number, number]>
+  /** MULTI-SPAWN: 2+ contiguous spawn→base routes that all converge on ONE shared
+   * base cell. When present the sim spawns enemies from every route's portal
+   * (round-robin), raising coverage decisions. `path` mirrors routes[0]. */
+  paths?: Array<Array<[number, number]>>
   /** sim-readable terrain flags on build tiles (lava/high-ground/fog/…) */
   terrain?: TerrainCell[]
   /** PATHFORGE: open-grid building — EVERY non-road tile is buildable (not just

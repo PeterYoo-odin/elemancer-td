@@ -25,8 +25,9 @@ import { RNG } from '../sim/rng'
 import type { EnemyKind } from './enemies'
 import type { TowerKind } from './towers'
 import {
-  buildPath, computeBuildCandidates, PATH_ARCHETYPES,
-  type PathArchetype, type TerrainKind, type TerrainCell,
+  buildPathPlan, computeBuildCandidates,
+  SIMPLE_ARCHETYPES, COMPLEX_ARCHETYPES, MULTI_TOPOLOGIES,
+  type PathArchetype, type PathTopology, type TerrainKind, type TerrainCell,
 } from './paths'
 import type { LevelDef, Wave, WaveEntry, RealmDef, FieldPalette } from './levels'
 
@@ -304,16 +305,50 @@ function entryCount(kind: EnemyKind, prog: number, waveFrac: number): number {
   return Math.max(1, Math.round(n))
 }
 
-// Deterministically sprinkle realm terrain onto buildable tiles.
-function genTerrain(rng: RNG, path: [number, number][], kinds: TerrainKind[], localDepth: number): TerrainCell[] {
+// Difficulty-tiered archetype pick, blended with the realm's thematic set for
+// flavor. Early stops draw the SIMPLE (open, few-turn) shapes; deep + landmark
+// stops draw the COMPLEX (many-chokepoint) shapes — map complexity tracks the curve.
+function pickArchetype(rng: RNG, prog: number, realmArchetypes: PathArchetype[], forceComplex: boolean): PathArchetype {
+  const tier: PathArchetype[] = forceComplex || prog >= 2.6
+    ? COMPLEX_ARCHETYPES
+    : prog < 0.9
+      ? SIMPLE_ARCHETYPES
+      : [...SIMPLE_ARCHETYPES, 'serpentine', 'verticalSnake', 'zigzag', 'switchback']
+  const pool = [...tier, ...realmArchetypes]
+  return pool.length ? rng.pick(pool) : 'serpentine'
+}
+
+// Deterministically place realm terrain onto buildable tiles, SHAPED by openness
+// (req #3/#4): range-buff tiles (high-ground / sacred) land in OPEN pockets so
+// coverage pays off, while hazard/damage tiles cling to the tight path edges near
+// chokepoints. Takes the full route PLAN (union of all lanes). Density ramps with
+// depth. Per-realm `kinds` keeps each realm's terrain flavor distinct.
+function genTerrain(rng: RNG, routes: [number, number][][], kinds: TerrainKind[], localDepth: number): TerrainCell[] {
   if (kinds.length === 0) return []
-  const cands = computeBuildCandidates(path)
+  const flat = routes.flat()
+  const cands = computeBuildCandidates(flat)
   if (cands.length === 0) return []
-  const density = 0.14 + 0.16 * localDepth // 14%→30% of buildable tiles carry terrain
+  const onPath = new Set(flat.map(([c, r]) => `${c},${r}`))
+  const rangeKinds = kinds.filter((k) => k === 'highground' || k === 'sacred')
+  const otherKinds = kinds.filter((k) => k !== 'highground' && k !== 'sacred')
+  // openness = non-path neighbours (0..8) — higher means a more open pocket.
+  const openness = (col: number, row: number): number => {
+    let open = 0
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue
+      if (!onPath.has(`${col + dc},${row + dr}`)) open++
+    }
+    return open
+  }
+  const density = 0.16 + 0.18 * localDepth // 16%→34% of buildable tiles carry terrain
   const target = Math.min(cands.length - 1, Math.max(1, Math.round(cands.length * density)))
   const chosen = rng.sample(cands, target)
   const out: TerrainCell[] = []
-  for (const [col, row] of chosen) out.push({ col, row, kind: rng.pick(kinds) })
+  for (const [col, row] of chosen) {
+    const isOpen = openness(col, row) >= 6
+    const pool = isOpen && rangeKinds.length ? rangeKinds : !isOpen && otherKinds.length ? otherKinds : kinds
+    out.push({ col, row, kind: rng.pick(pool) })
+  }
   return out
 }
 
@@ -324,14 +359,36 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
   const globalDepth = (realmOrder + localDepth) / REALM_GEN.length
   const isFinale = j === count - 1
   const isLandmark = !isFinale && (j + 1) % LANDMARK_EVERY === 0
-
-  const archetype: PathArchetype = isLandmark
-    ? rg.archetypes[(j * 7) % rg.archetypes.length]
-    : rng.pick(rg.archetypes.length ? rg.archetypes : PATH_ARCHETYPES)
-  const path = buildPath(archetype, () => rng.next())
-  const terrain = genTerrain(rng, path, rg.terrain, localDepth)
-
   const prog = realmOrder + localDepth
+
+  // TOPOLOGY & SHAPE tied to difficulty (req #1/#5). Early stops read open + simple;
+  // deep + landmark stops get trickier — more turns, and MULTI-SPAWN lanes that
+  // converge on the base. The wave is SPLIT across lanes (not duplicated), so
+  // beatability holds; the simcheck gate re-proves every generated level.
+  const forceComplex = isLandmark || isFinale
+  const archetype = pickArchetype(rng, prog, rg.archetypes, forceComplex)
+  // MULTI-SPAWN frequency is a TRAPEZOID over the ladder: it stays off for the first
+  // few tutorial stops, ramps up so it's already present within the opening realm
+  // (the owner's "first 15 levels" — where the repetitive feel was reported), holds a
+  // plateau through the mid realms, then tapers to zero before the deepest realms.
+  // Why the taper: the difficulty curve (#37) pins the deep realms at the HP/count
+  // beatability ceiling, so the extra COVERAGE burden of two lanes there would make
+  // them unwinnable for a min-resource defence — those realms get their "trickier
+  // topology" from COMPLEX single-lane shapes instead. Finales (each realm's hardest
+  // stop) never go multi. All of this is re-proven beatable by the simcheck gate.
+  const MULTI_LO = 0.25, MULTI_HI = 2.0 // active window in prog units (Emberwaste→Frostreach)
+  let multiChance = 0
+  if (!isFinale && prog >= MULTI_LO && prog <= MULTI_HI) {
+    const rampUp = Math.min(1, (prog - MULTI_LO) / 0.5)
+    const rampDown = Math.min(1, (MULTI_HI - prog) / 0.4)
+    multiChance = 0.4 * Math.max(0, Math.min(rampUp, rampDown))
+    if (isLandmark) multiChance += 0.2
+  }
+  const topology: PathTopology = rng.chance(Math.min(0.7, multiChance)) ? rng.pick(MULTI_TOPOLOGIES) : 'single'
+  const plan = buildPathPlan(topology, archetype, () => rng.next())
+  const path = plan[0]
+  const paths = plan.length > 1 ? plan : undefined
+  const terrain = genTerrain(rng, plan, rg.terrain, localDepth)
   const baseHp = difficultyHp(prog)
   const waveCount = Math.max(5, Math.min(9, 5 + Math.round(localDepth * 4)))
   const unlocked = unlockedKinds(prog)
@@ -403,15 +460,19 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
   // stops have few waves to bank gold yet already face the realm's harsh new mix) —
   // so the boundary is a fair step-up, not a spike only one build survives.
   const opener = localDepth < 0.25 ? Math.round((0.25 - localDepth) * 180) : 0
-  const startGold = Math.round(240 + prog * 45 + opener + (isLandmark || isFinale ? 40 : 0))
+  // MULTI-SPAWN cushion: two entry mouths demand earlier coverage on both lanes, so
+  // a small opening-gold bump keeps these fair (not a knife-edge) without touching
+  // single-lane economy. The wave is still SPLIT not multiplied.
+  const multiCushion = paths ? 45 : 0
+  const startGold = Math.round(240 + prog * 45 + opener + multiCushion + (isLandmark || isFinale ? 40 : 0))
   const startLives = Math.max(12, Math.round(20 - globalDepth * 6))
   const baseCoins = Math.round(30 + globalDepth * 130 + (isLandmark ? 20 : 0) + (isFinale ? 40 : 0))
 
   return {
     id, index: 0, name,
     blurb: isFinale ? `${rg.name} finale · ${rg.keeperId}` : isLandmark ? `${rg.name} · landmark` : `${rg.name} · stop ${j + 1}`,
-    lanes: [3, 6, 9], // fallback; `path` drives the real route
-    path, terrain,
+    lanes: [3, 6, 9], // fallback; `path`/`paths` drive the real route(s)
+    path, paths, terrain,
     landmark: isFinale ? 'finale' : isLandmark ? 'landmark' : undefined,
     startGold, startLives, baseCoins, palette: rg.palette,
     unlockTower,

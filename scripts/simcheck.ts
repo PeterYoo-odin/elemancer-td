@@ -15,7 +15,7 @@ import {
 } from '../src/sim/index'
 import { weeklyPlan, activeEvent, weekIndex, weeklyMutator, EVENTS } from '../src/game/events'
 import { NEUTRAL } from '../src/game/workshop'
-import { LEVELS, pathCellsFor, type LevelDef } from '../src/game/levels'
+import { LEVELS, pathCellsFor, pathPlanFor, type LevelDef } from '../src/game/levels'
 import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
 import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
@@ -454,28 +454,47 @@ console.log(`\ncampaign ladder — ${LEVELS.length} live levels across ${new Set
 // determinism: rebuilding the campaign yields an identical ladder (ids + waves).
 function campaignFingerprint(): string {
   const c = buildCampaign()
-  return c.levels.map((l) => `${l.id}:${l.waves.length}:${(l.path ?? []).length}:${(l.terrain ?? []).length}`).join('|')
+  return c.levels.map((l) => `${l.id}:${l.waves.length}:${(l.path ?? []).length}:${(l.paths ?? []).length}:${(l.terrain ?? []).length}`).join('|')
 }
 if (campaignFingerprint() !== campaignFingerprint()) fail('campaign generator is non-deterministic')
 if (GENERATOR_MAX_PER_WORLD < 80) fail('generator ceiling too low to scale to hundreds/world')
 
-// well-formedness: contiguous indices + contiguous in-bounds paths + in-bounds terrain.
+// well-formedness: contiguous indices + EVERY route contiguous & in-bounds + all
+// routes of a multi-lane level converge on the IDENTICAL base cell + in-bounds terrain.
+let multiSpawnLevels = 0
+const topologyTally = { single: 0, multi: 0 }
 LEVELS.forEach((lvl, i) => {
   if (lvl.index !== i) fail(`level ${lvl.id} index ${lvl.index} != position ${i} (isLevelUnlocked would break)`)
-  const cells = pathCellsFor(lvl)
-  if (cells.length < 2) fail(`level ${lvl.id} path too short (${cells.length})`)
-  for (let ci = 0; ci < cells.length; ci++) {
-    const [c, r] = cells[ci]
-    if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) fail(`level ${lvl.id} path cell off-grid @${ci}: ${c},${r}`)
-    if (ci > 0) {
-      const [pc, pr] = cells[ci - 1]
-      if (Math.abs(c - pc) + Math.abs(r - pr) > 1) fail(`level ${lvl.id} path not contiguous @${ci}: ${pc},${pr}→${c},${r}`)
+  const plan = pathPlanFor(lvl)
+  if (plan.length < 1) fail(`level ${lvl.id} has no route`)
+  if (plan.length > 1) { multiSpawnLevels++; topologyTally.multi++ } else topologyTally.single++
+  let sharedBase: [number, number] | null = null
+  plan.forEach((cells, ri) => {
+    if (cells.length < 2) fail(`level ${lvl.id} route ${ri} too short (${cells.length})`)
+    for (let ci = 0; ci < cells.length; ci++) {
+      const [c, r] = cells[ci]
+      if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) fail(`level ${lvl.id} route ${ri} cell off-grid @${ci}: ${c},${r}`)
+      if (ci > 0) {
+        const [pc, pr] = cells[ci - 1]
+        if (Math.abs(c - pc) + Math.abs(r - pr) > 1) fail(`level ${lvl.id} route ${ri} not contiguous @${ci}: ${pc},${pr}→${c},${r}`)
+      }
     }
-  }
+    const last = cells[cells.length - 1]
+    if (sharedBase === null) sharedBase = last
+    else if (last[0] !== sharedBase[0] || last[1] !== sharedBase[1]) {
+      fail(`level ${lvl.id} route ${ri} ends at ${last[0]},${last[1]} — not the shared base ${sharedBase[0]},${sharedBase[1]}`)
+    }
+  })
+  // route 0 must equal pathCellsFor (the primary the view/orientation consume)
+  const primary = pathCellsFor(lvl)
+  if (primary.length !== plan[0].length) fail(`level ${lvl.id} pathCellsFor != route 0`)
   for (const t of lvl.terrain ?? []) {
     if (t.col < 0 || t.col >= GRID_COLS || t.row < 0 || t.row >= GRID_ROWS) fail(`level ${lvl.id} terrain off-grid: ${t.col},${t.row}`)
   }
 })
+// The topology variety must actually REACH the live ladder — not merely be supported.
+if (multiSpawnLevels < 3) fail(`too few multi-spawn levels in the live ladder (${multiSpawnLevels}) — topology variety not reaching players`)
+console.log(`  topology mix: ${topologyTally.single} single-lane, ${topologyTally.multi} multi-spawn (${multiSpawnLevels} across ${LEVELS.length})`)
 
 // beatability: the fair, MIN-RESOURCE bot must WIN every live level using only the
 // towers actually unlocked by that point in the ladder + starter heroes.

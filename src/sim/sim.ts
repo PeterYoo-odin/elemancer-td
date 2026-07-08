@@ -9,7 +9,7 @@
 import { ENEMIES, leakDamageFor, type EnemyDef, type EnemyKind } from '../game/enemies'
 import { TOWERS, type TowerBranch, type TowerDef, type TowerKind, type TowerLevel } from '../game/towers'
 import { type LevelDef, type Wave } from '../game/levels'
-import { pathCellsFor, terrainDmgMul, terrainRngMul, terrainNoBuild, type TerrainKind } from '../game/paths'
+import { pathPlanFor, terrainDmgMul, terrainRngMul, terrainNoBuild, type TerrainKind } from '../game/paths'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
 import type { RunModifiers } from '../game/workshop'
 import { RNG } from './rng'
@@ -108,7 +108,8 @@ export interface SimEnemy {
   hp: number
   shield: number
   shieldMax: number
-  dist: number // progress along the path in px
+  dist: number // progress along its route in px
+  pathId: number // which route (index into the level's plan) this enemy follows
   x: number
   y: number
   // statuses (absolute clock deadlines)
@@ -304,6 +305,7 @@ interface SpawnItem {
   at: number
   keeperId?: string
   echo?: boolean
+  pathId: number // which spawn route this enemy enters on (round-robin across routes)
 }
 
 export class Sim {
@@ -315,9 +317,11 @@ export class Sim {
   grid: string[][] = []
   terrain: TerrainKind[][] = [] // per-cell terrain flag ('' = none); read by canPlace/effDamage/effRange
   private occupied: (SimTower | null)[][] = []
-  private waypoints: { x: number; y: number }[] = []
-  private segments: Array<{ ax: number; ay: number; bx: number; by: number; len: number }> = []
-  pathLength = 0
+  // MULTI-ROUTE: one waypoint chain + segment list + length per spawn route. All
+  // routes converge on the SAME base cell. Single-route levels have routes.length===1
+  // so every consumer (movement, targeting, view) behaves byte-identically to before.
+  private routes: Array<{ waypoints: { x: number; y: number }[]; segments: Array<{ ax: number; ay: number; bx: number; by: number; len: number }>; length: number }> = []
+  pathLength = 0 // = the LONGEST route's length (the dist-range invariant upper bound)
 
   // pooled entities (iterate skipping .active === false; never per-frame alloc)
   enemies: SimEnemy[] = []
@@ -481,7 +485,7 @@ export class Sim {
 
   // ---- path / grid --------------------------------------------------------
   private buildGrid(): void {
-    const pathCells = pathCellsFor(this.config.level)
+    const plan = pathPlanFor(this.config.level)
     this.grid = []
     this.terrain = []
     this.occupied = []
@@ -507,10 +511,12 @@ export class Sim {
       if (tc.row >= 0 && tc.row < ROWS && tc.col >= 0 && tc.col < COLS) this.terrain[tc.row][tc.col] = tc.kind
     }
     const onPath = new Set<string>()
-    for (const [c, r] of pathCells) {
-      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
-        this.grid[r][c] = 'path'
-        onPath.add(`${c},${r}`)
+    for (const route of plan) {
+      for (const [c, r] of route) {
+        if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+          this.grid[r][c] = 'path'
+          onPath.add(`${c},${r}`)
+        }
       }
     }
     // PATHFORGE open-grid mode: EVERY non-road tile is buildable (the player's maze
@@ -532,27 +538,34 @@ export class Sim {
         this.grid[r][c] = near ? 'build' : 'blocked'
       }
     }
-    this.waypoints = []
-    const first = pathCells[0]
-    this.waypoints.push(cellCenter(first[0] - 1.2, first[1]))
-    for (const [c, r] of pathCells) this.waypoints.push(cellCenter(c, r))
-    this.segments = []
+    this.routes = []
     this.pathLength = 0
-    for (let i = 0; i < this.waypoints.length - 1; i++) {
-      const a = this.waypoints[i]
-      const b = this.waypoints[i + 1]
-      const len = distance(a.x, a.y, b.x, b.y)
-      this.segments.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y, len })
-      this.pathLength += len
+    for (const route of plan) {
+      const wps: { x: number; y: number }[] = []
+      const first = route[0]
+      wps.push(cellCenter(first[0] - 1.2, first[1])) // off-board portal entry
+      for (const [c, r] of route) wps.push(cellCenter(c, r))
+      const segs: Array<{ ax: number; ay: number; bx: number; by: number; len: number }> = []
+      let length = 0
+      for (let i = 0; i < wps.length - 1; i++) {
+        const a = wps[i]
+        const b = wps[i + 1]
+        const len = distance(a.x, a.y, b.x, b.y)
+        segs.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y, len })
+        length += len
+      }
+      this.routes.push({ waypoints: wps, segments: segs, length })
+      this.pathLength = Math.max(this.pathLength, length)
     }
   }
 
-  private positionAt(dist: number): { x: number; y: number; done: boolean } {
-    const wp = this.waypoints
+  private positionAt(dist: number, pathId = 0): { x: number; y: number; done: boolean } {
+    const route = this.routes[pathId] ?? this.routes[0]
+    const wp = route.waypoints
     const last = wp[wp.length - 1]
-    if (dist >= this.pathLength) return { x: last.x, y: last.y, done: true }
+    if (dist >= route.length) return { x: last.x, y: last.y, done: true }
     let d = Math.max(0, dist)
-    for (const s of this.segments) {
+    for (const s of route.segments) {
       if (d <= s.len) {
         const t = s.len === 0 ? 0 : d / s.len
         return { x: s.ax + (s.bx - s.ax) * t, y: s.ay + (s.by - s.ay) * t, done: false }
@@ -562,13 +575,33 @@ export class Sim {
     return { x: last.x, y: last.y, done: true }
   }
 
-  waypointFor(which: 'portal' | 'base'): { x: number; y: number } {
-    return which === 'portal' ? this.waypoints[1] : this.waypoints[this.waypoints.length - 1]
+  // Progress fraction toward the base ∈ [0, ~1] — the ROUTE-COMMENSURATE proxy for
+  // "how far along" an enemy is. Raw `dist` isn't comparable across routes of
+  // different lengths, so all cross-enemy leader/First/Last scoring uses this. For a
+  // single-route level it's a monotonic scaling of dist ⇒ identical selection.
+  private progressOf(e: SimEnemy): number {
+    const route = this.routes[e.pathId] ?? this.routes[0]
+    return route && route.length > 0 ? e.dist / route.length : e.dist
   }
 
-  // The full waypoint chain, for the view to draw the road/dashes (read-only use).
+  waypointFor(which: 'portal' | 'base'): { x: number; y: number } {
+    const r0 = this.routes[0]
+    return which === 'portal' ? r0.waypoints[1] : r0.waypoints[r0.waypoints.length - 1]
+  }
+
+  // Every route's spawn portal (waypoint[1]) — the view draws one portal each.
+  portals(): Array<{ x: number; y: number }> {
+    return this.routes.map((r) => r.waypoints[1])
+  }
+
+  // Route 0's waypoint chain (primary), for single-route consumers/back-compat.
   pathWaypoints(): ReadonlyArray<{ x: number; y: number }> {
-    return this.waypoints
+    return this.routes[0].waypoints
+  }
+
+  // Every route's full waypoint chain, for the view to draw all roads/dashes.
+  routeWaypoints(): ReadonlyArray<ReadonlyArray<{ x: number; y: number }>> {
+    return this.routes.map((r) => r.waypoints)
   }
 
   buildCells(): Array<{ col: number; row: number }> {
@@ -783,10 +816,17 @@ export class Sim {
   private buildSpawnQueue(): void {
     this.spawnQueue = []
     const wave = this.currentWave()
+    const routeCount = Math.max(1, this.routes.length)
     let t = this.clock + 0.4
+    let rr = 0 // round-robin cursor: each ordinary spawn enters on the next route
     for (const entry of wave.entries) {
       for (let i = 0; i < entry.count; i++) {
-        this.spawnQueue.push({ kind: entry.kind, hpMul: entry.hpMul, at: t, keeperId: entry.keeperId, echo: entry.echo })
+        // A single marquee entity (keeper/boss) rides route 0 rather than being
+        // halved across lanes. Everything else round-robins the routes so each
+        // portal carries a SHARE of the wave (split, not duplicated ⇒ fair).
+        const solo = entry.kind === 'keeper' || (ENEMIES[entry.kind]?.boss ?? false)
+        const pathId = solo ? 0 : rr++ % routeCount
+        this.spawnQueue.push({ kind: entry.kind, hpMul: entry.hpMul, at: t, keeperId: entry.keeperId, echo: entry.echo, pathId })
         t += Math.max(0.02, entry.spacing)
       }
       t += 0.5
@@ -869,7 +909,7 @@ export class Sim {
   }
 
   // ---- enemies ------------------------------------------------------------
-  private spawnEnemy(kind: EnemyKind, hpMul: number, keeperId?: string, echo?: boolean): void {
+  private spawnEnemy(kind: EnemyKind, hpMul: number, keeperId?: string, echo?: boolean, pathId = 0): void {
     // Corrupted Keepers ride the same pipeline with their own stat block. Echoes
     // (final-gauntlet ghosts) come pre-weakened; an unknown id degrades to the
     // fallback ENEMIES.keeper block instead of crashing.
@@ -889,7 +929,8 @@ export class Sim {
     const maxHp = Math.max(1, Math.round(def.hp * Math.max(0.1, hpMul)))
     let shieldMax = def.shield ? Math.max(0, Math.round(def.shield * Math.max(0.1, hpMul))) : 0
     if (affix && affix.shieldFrac > 0) shieldMax += Math.round(maxHp * affix.shieldFrac)
-    const start = this.positionAt(0)
+    const routeId = pathId >= 0 && pathId < this.routes.length ? pathId : 0
+    const start = this.positionAt(0, routeId)
     const e = this.freeEnemy()
     e.active = true
     e.def = def
@@ -899,6 +940,7 @@ export class Sim {
     e.shield = shieldMax
     e.shieldMax = shieldMax
     e.dist = 0
+    e.pathId = routeId
     e.x = start.x
     e.y = start.y
     e.slowUntil = 0
@@ -955,7 +997,7 @@ export class Sim {
     for (const e of this.enemies) if (!e.active) { e.id = this.nextId++; return e }
     const e: SimEnemy = {
       id: 0, active: false, def: ENEMIES.runner, kind: 'runner', maxHp: 1, hp: 1, shield: 0, shieldMax: 0,
-      dist: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
+      dist: 0, pathId: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
       poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0,
       auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0,
       keeperId: '', keeperEcho: false, phase: 1, castAt: 0, castWarned: false, speedMult: 1,
@@ -970,7 +1012,7 @@ export class Sim {
     if (this.state === 'active') {
       while (this.spawnQueue.length && this.spawnQueue[0].at <= this.clock) {
         const item = this.spawnQueue.shift()!
-        this.spawnEnemy(item.kind, item.hpMul, item.keeperId, item.echo)
+        this.spawnEnemy(item.kind, item.hpMul, item.keeperId, item.echo, item.pathId)
       }
     }
 
@@ -1019,8 +1061,9 @@ export class Sim {
       let speed = e.def.speed * TILE * e.speedMult
       if (stunned) speed = 0
       else if (slowed) speed *= clamp(e.slowFactor, 0.05, 1)
-      e.dist = clamp(e.dist + speed * dt, 0, this.pathLength + 1)
-      const pos = this.positionAt(e.dist)
+      const routeLen = (this.routes[e.pathId] ?? this.routes[0]).length
+      e.dist = clamp(e.dist + speed * dt, 0, routeLen + 1)
+      const pos = this.positionAt(e.dist, e.pathId)
       e.x = pos.x
       e.y = pos.y
 
@@ -1658,15 +1701,16 @@ export class Sim {
       if (!this.canTarget(t, e)) continue
       const d2 = dist2(t.x, t.y, e.x, e.y)
       if (d2 > r2) continue
+      const prog = this.progressOf(e) // route-commensurate "how far to base"
       let score: number
       switch (t.targeting) {
-        case 'First': score = e.dist; break
-        case 'Last': score = -e.dist; break
+        case 'First': score = prog; break
+        case 'Last': score = -prog; break
         case 'Close': score = -d2; break
         case 'Strong': score = e.hp; break
         case 'Weak': score = -e.hp; break
-        case 'Primed': score = (this.wouldDetonate(t, e) ? 1e7 : 0) + e.dist; break
-        default: score = e.dist
+        case 'Primed': score = (this.wouldDetonate(t, e) ? 1e7 : 0) + prog; break
+        default: score = prog
       }
       if (score > bestScore) {
         bestScore = score
@@ -2345,7 +2389,8 @@ export class Sim {
       if (!e.active || e.hp <= 0) continue
       const d2 = dist2(h.x, h.y, e.x, e.y)
       if (d2 > r2) continue
-      if (e.dist > bestScore) { bestScore = e.dist; best = e }
+      const prog = this.progressOf(e)
+      if (prog > bestScore) { bestScore = prog; best = e }
     }
     return best
   }

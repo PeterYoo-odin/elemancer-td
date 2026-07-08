@@ -87,10 +87,21 @@ export type PathArchetype =
   | 'zigzag'
   | 'corridor'
   | 'switchback'
+  | 'straight'   // long open trunk, 1–2 gentle jogs (the SIMPLE end — few turns)
+  | 'lbend'      // a single 90° elbow (down-then-across) — short & readable
+  | 'ushape'     // down one side, across, up the other — a wide U
+  | 'coil'       // tight offset switchbacks packed into one half (many chokepoints)
 
 export const PATH_ARCHETYPES: PathArchetype[] = [
   'serpentine', 'verticalSnake', 'spiral', 'hairpin', 'zigzag', 'corridor', 'switchback',
+  'straight', 'lbend', 'ushape', 'coil',
 ]
+
+// SIMPLE archetypes (few turns, open feel) vs COMPLEX (many turns/chokes). The
+// generator draws from the simple set at shallow difficulty and the complex set as
+// the curve steepens, so early maps read open and deep maps read tangled.
+export const SIMPLE_ARCHETYPES: PathArchetype[] = ['straight', 'lbend', 'ushape', 'corridor']
+export const COMPLEX_ARCHETYPES: PathArchetype[] = ['spiral', 'hairpin', 'coil', 'switchback', 'zigzag']
 
 // Horizontal serpentine expressed through varying lane rows.
 function buildSerpentine(rng: () => number): Cell[] {
@@ -189,6 +200,54 @@ function buildSwitchback(rng: () => number): Cell[] {
   return connectAnchors(anchors)
 }
 
+// Straight-with-turns — a long trunk broken by one or two gentle jogs. The SIMPLE
+// end of the spectrum: reads as open, contrasts sharply with the tangled shapes.
+function buildStraight(rng: () => number): Cell[] {
+  const row = clampRow(2 + Math.floor(rng() * (GRID_ROWS - 4)))
+  const turnCol = clampCol(2 + Math.floor(rng() * (GRID_COLS - 4)))
+  const endRow = clampRow(row + (rng() < 0.5 ? -3 : 3))
+  return connectAnchors([[0, row], [turnCol, row], [turnCol, endRow], [GRID_COLS - 1, endRow]])
+}
+
+// L-bend — a single 90° elbow (enter top, descend, turn out to a side). Short and
+// very legible; leaves a big open quadrant that rewards long-range coverage.
+function buildLbend(rng: () => number): Cell[] {
+  const enterCol = clampCol(1 + Math.floor(rng() * (GRID_COLS - 2)))
+  const cornerRow = clampRow(GRID_ROWS - 2 - Math.floor(rng() * 2))
+  const goRight = enterCol < GRID_COLS / 2
+  return connectAnchors([[enterCol, 0], [enterCol, cornerRow], [goRight ? GRID_COLS - 1 : 0, cornerRow]])
+}
+
+// U-shape — down one side, across the floor, up the other. A wide, open loop with
+// a long single-file base run (a natural late chokepoint) but airy flanks.
+function buildUshape(rng: () => number): Cell[] {
+  const inset = clampCol(1 + Math.floor(rng() * 2))
+  const bottom = clampRow(GRID_ROWS - 1 - Math.floor(rng() * 2))
+  const topRight = clampRow(1 + Math.floor(rng() * 3))
+  return connectAnchors([
+    [inset, 0], [inset, bottom], [clampCol(GRID_COLS - 1 - inset), bottom], [clampCol(GRID_COLS - 1 - inset), topRight],
+  ])
+}
+
+// Coil — tight offset switchbacks packed into one vertical half, leaving the other
+// half wide open. Maximum chokepoints on one flank, maximum openness on the other.
+function buildCoil(rng: () => number): Cell[] {
+  const leftHalf = rng() < 0.5
+  const near = leftHalf ? 0 : GRID_COLS - 1
+  const far = clampCol(leftHalf ? GRID_COLS - 3 : 2)
+  const rungs = 4 + Math.floor(rng() * 2) // 4..5
+  const step = (GRID_ROWS - 1) / rungs
+  const anchors: Cell[] = [[near, 0]]
+  for (let i = 0; i < rungs; i++) {
+    const r = clampRow(step * (i + 1))
+    const side = i % 2 === 0 ? far : near
+    anchors.push([side, clampRow(r - step / 2)])
+    anchors.push([side, r])
+  }
+  anchors.push([clampCol((near + far) / 2), GRID_ROWS - 1])
+  return connectAnchors(anchors)
+}
+
 const BUILDERS: Record<PathArchetype, (rng: () => number) => Cell[]> = {
   serpentine: buildSerpentine,
   verticalSnake: buildVerticalSnake,
@@ -197,6 +256,10 @@ const BUILDERS: Record<PathArchetype, (rng: () => number) => Cell[]> = {
   zigzag: buildZigzag,
   corridor: buildCorridor,
   switchback: buildSwitchback,
+  straight: buildStraight,
+  lbend: buildLbend,
+  ushape: buildUshape,
+  coil: buildCoil,
 }
 
 // Build a path of the given archetype using a deterministic [0,1) source.
@@ -205,9 +268,115 @@ export function buildPath(archetype: PathArchetype, rng: () => number): Cell[] {
   return cells.length >= 2 ? cells : serpentine([3, 6, 9])
 }
 
-// The buildable (tower) candidate cells for a path: every in-bounds NON-path cell
-// with a path cell in its 8-neighbourhood — the same rule the sim uses to mark
-// 'build' tiles. Used by the generator to place terrain only where towers can go.
+// ---------------------------------------------------------------------------
+// MULTI-ROUTE TOPOLOGIES — a level may spawn enemies from 2+ portals that all
+// CONVERGE ON ONE SHARED BASE cell. Each route is an independent ordered
+// spawn→base list (the sim gives every enemy one route). Splitting a wave's
+// spawns across routes (rather than duplicating them) raises coverage decisions
+// without multiplying pressure, so beatability stays fair. Invariant enforced by
+// `normalizePlan`: every route ends at the identical base cell.
+// ---------------------------------------------------------------------------
+export type PathPlan = Cell[][] // 1..N contiguous routes, all ending at the same base cell
+
+export type PathTopology =
+  | 'single'      // one route (uses an archetype) — the classic layout
+  | 'dualLane'    // two portals down opposite flanks, meeting at a central base
+  | 'crossing'    // two portals whose lanes cross mid-field before the base
+  | 'forkRejoin'  // one portal that splits into two lanes and rejoins at the base
+
+export const MULTI_TOPOLOGIES: PathTopology[] = ['dualLane', 'crossing', 'forkRejoin']
+
+// The shared MERGE point (near the top) and the long winding trunk both lanes
+// traverse together down to the base. Keeping the split short (just the entry
+// stubs) and the shared gauntlet long is what keeps multi-spawn beatable by a
+// min-resource defence — a tower on the trunk fires on every enemy, both lanes.
+function convergeTrunk(rng: () => number): { merge: Cell; trunk: Cell[] } {
+  const bcol = clampCol(GRID_COLS / 2)
+  const base: Cell = [bcol, GRID_ROWS - 1]
+  const merge: Cell = [bcol, clampRow(2)]
+  const lc = clampCol(1)
+  const rc = clampCol(GRID_COLS - 2)
+  // VARY the sweep rows + the initial sweep direction so multi-spawn trunks aren't
+  // clones of each other (the trunk is the long shared gauntlet; if it were fixed,
+  // every multi map would read identically — the repetition we're curing). 8 base
+  // variants × the entry-stub jitter below.
+  const r1 = clampRow(3 + Math.floor(rng() * 2)) // 3..4
+  const r2 = clampRow(6 + Math.floor(rng() * 2)) // 6..7
+  const r3 = clampRow(GRID_ROWS - 2)
+  const startRight = rng() < 0.5
+  const s1 = startRight ? rc : lc
+  const s2 = startRight ? lc : rc
+  const trunk = connectAnchors([
+    merge, [s1, r1], [s2, r1], [s2, r2], [s1, r2], [s1, r3], [bcol, r3], base,
+  ])
+  return { merge, trunk }
+}
+
+// Two portals down the left & right flanks that MERGE near the top into the shared
+// trunk. The parallel entry mouths are the coverage decision; the trunk is shared.
+function planDualLane(rng: () => number): PathPlan {
+  const { merge, trunk } = convergeTrunk(rng)
+  const lx = clampCol(1 + Math.floor(rng() * 2))
+  const rx = clampCol(GRID_COLS - 2 - Math.floor(rng() * 2))
+  const a = connectAnchors([[lx, 0], [lx, merge[1]], merge, ...trunk])
+  const b = connectAnchors([[rx, 0], [rx, merge[1]], merge, ...trunk])
+  return [a, b]
+}
+
+// Two portals whose entry stubs CROSS (each dives to the opposite flank) before
+// merging into the shared trunk — a read-the-crossing coverage puzzle up top.
+function planCrossing(rng: () => number): PathPlan {
+  const { merge, trunk } = convergeTrunk(rng)
+  const swap = clampRow(1)
+  const a = connectAnchors([[1, 0], [1, swap], [GRID_COLS - 1, swap], [GRID_COLS - 1, merge[1]], merge, ...trunk])
+  const b = connectAnchors([[GRID_COLS - 2, 0], [GRID_COLS - 2, merge[1]], [0, merge[1]], merge, ...trunk])
+  return [a, b]
+}
+
+// One portal at the top that FORKS into a left and a right branch, both bowing out
+// then rejoining at the shared trunk's merge point (a diamond mouth). The player
+// sees a single spawn split and must guard both bows before they reconverge.
+function planForkRejoin(rng: () => number): PathPlan {
+  const { merge, trunk } = convergeTrunk(rng)
+  const head: Cell = [clampCol(GRID_COLS / 2), 0]
+  const bow = clampRow(1)
+  const lc = clampCol(1 + Math.floor(rng() * 2))
+  const rc = clampCol(GRID_COLS - 2 - Math.floor(rng() * 2))
+  const left = connectAnchors([head, [lc, bow], [lc, merge[1]], merge, ...trunk])
+  const right = connectAnchors([head, [rc, bow], [rc, merge[1]], merge, ...trunk])
+  return [left, right]
+}
+
+// Drop malformed routes (< 2 cells) and force the shared-base invariant: every
+// route is snapped to end at the FIRST route's final cell. If nothing survives,
+// falls back to a plain serpentine so the sim always has a valid route.
+function normalizePlan(plan: PathPlan): PathPlan {
+  const routes = plan.filter((r) => r.length >= 2)
+  if (routes.length === 0) return [serpentine([3, 6, 9])]
+  const base = routes[0][routes[0].length - 1]
+  return routes.map((r) => {
+    const last = r[r.length - 1]
+    if (last[0] === base[0] && last[1] === base[1]) return r
+    return connectAnchors([...r, base]) // stitch the route onto the shared base
+  })
+}
+
+// Build a full path PLAN (1..N routes) for a topology. Single topologies wrap the
+// archetype builder; multi-route topologies converge on one base. Deterministic
+// via the [0,1) source; contiguity + shared base guaranteed.
+export function buildPathPlan(topology: PathTopology, archetype: PathArchetype, rng: () => number): PathPlan {
+  switch (topology) {
+    case 'dualLane': return normalizePlan(planDualLane(rng))
+    case 'crossing': return normalizePlan(planCrossing(rng))
+    case 'forkRejoin': return normalizePlan(planForkRejoin(rng))
+    default: return [buildPath(archetype, rng)]
+  }
+}
+
+// The buildable (tower) candidate cells for a path (or the UNION of all routes in
+// a multi-lane plan): every in-bounds NON-path cell with a path cell in its
+// 8-neighbourhood — the same rule the sim uses to mark 'build' tiles. Used by the
+// generator to place terrain only where towers can go.
 export function computeBuildCandidates(path: Cell[]): Cell[] {
   const onPath = new Set<string>()
   for (const [c, r] of path) onPath.add(`${c},${r}`)
@@ -227,11 +396,19 @@ export function computeBuildCandidates(path: Cell[]): Cell[] {
   return out
 }
 
-// The ordered spawn→base cells the sim & view both consume for a level: the
-// authored `path` if present, else the archetype-free serpentine fallback.
-export function pathCellsFor(level: Pick<LevelDef, 'path' | 'lanes'>): Cell[] {
-  if (level.path && level.path.length >= 2) return level.path
-  return serpentine(level.lanes)
+// The full route PLAN (1..N spawn→base routes) the sim consumes for a level:
+// `paths` (multi-lane) if present, else the single authored `path`, else the
+// archetype-free serpentine fallback. Every route ends at the same base cell.
+export function pathPlanFor(level: Pick<LevelDef, 'path' | 'paths' | 'lanes'>): Cell[][] {
+  if (level.paths && level.paths.length >= 1 && level.paths.every((r) => r.length >= 2)) return level.paths
+  if (level.path && level.path.length >= 2) return [level.path]
+  return [serpentine(level.lanes)]
+}
+
+// The PRIMARY ordered spawn→base cells (route 0) — used for tile orientation and
+// any single-route consumer. Multi-lane levels expose the rest via pathPlanFor.
+export function pathCellsFor(level: Pick<LevelDef, 'path' | 'paths' | 'lanes'>): Cell[] {
+  return pathPlanFor(level)[0]
 }
 
 // ---------------------------------------------------------------------------
