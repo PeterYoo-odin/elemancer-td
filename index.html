@@ -37,6 +37,15 @@
     <meta name="apple-mobile-web-app-title" content="Chromancer" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- SELF-HOSTED wordmark face, preloaded, so the branded cold-load screen
+         paints the CHROMANCER wordmark crisp on the FIRST frame — no FOUT swap
+         from a serif fallback while Google Fonts is still in flight. The rest of
+         the app's weights (Cinzel 700, Baloo 2, Nunito) still stream from Google. -->
+    <link rel="preload" href="./fonts/cinzel-900-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Warm the title key art at LOW priority so the front page looks premium the
+         instant the menu paints, without starving the critical game JS on a
+         throttled mobile connection. -->
+    <link rel="preload" href="./concepts/00-keyart-v2.jpg" as="image" fetchpriority="low" />
     <!-- Cinzel: the CHROMANCER wordmark. Baloo 2 / Nunito: the HUD + UI face the
          stylesheets already declare (loading them here is what makes the whole
          game render with one cohesive typeface instead of system fallbacks). -->
@@ -48,9 +57,86 @@
       html, body { margin: 0; padding: 0; height: 100%; background: #020204; overflow: hidden; }
       #game { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
       canvas { max-width: 100%; max-height: 100%; touch-action: none; }
+
+      /* Self-hosted wordmark face — used ONLY by the cold-load screen so it is
+         guaranteed present on first paint (preloaded above). */
+      @font-face {
+        font-family: 'CinzelLoad';
+        font-style: normal;
+        font-weight: 900;
+        font-display: block;
+        src: url('./fonts/cinzel-900-latin.woff2') format('woff2');
+      }
+
+      /* ── BRANDED COLD-LOAD SCREEN ──────────────────────────────────────────
+         Zero-JS, inline in the document so it is the VERY FIRST paint — the
+         Chromancer wordmark + a color-vs-grey "painting" sweep instead of a
+         blank screen while the game JS downloads and boots. It sits below the
+         Odin splash (z 100) so the splash covers it seamlessly, and is torn
+         down by src/ui/brandLoader.ts the moment a real screen (menu / battle)
+         is ready — no layout shift (it is a fixed overlay above #game). */
+      #chromancer-boot {
+        position: fixed; inset: 0; z-index: 90;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: clamp(16px, 4.5vh, 30px);
+        background: radial-gradient(120% 90% at 50% 38%, #0b0912 0%, #050408 60%, #020204 100%);
+        transition: opacity .45s ease;
+      }
+      #chromancer-boot.cb-leave { opacity: 0; pointer-events: none; }
+      #chromancer-boot .cb-mark {
+        font-family: 'CinzelLoad', 'Cinzel', Georgia, 'Times New Roman', serif;
+        font-weight: 900; font-size: clamp(30px, 9.2vw, 60px); letter-spacing: .16em;
+        margin-left: .16em; /* optically re-centre the tracking */
+        line-height: 1;
+        /* grey base with a moving spectrum band sweeping across — the game's
+           "paint the world back" motif, running before any asset arrives. */
+        background: linear-gradient(100deg,
+          #444055 0%, #444055 30%,
+          #ff5d73 40%, #ffb43c 46%, #ffe86a 50%, #4ad6c4 55%, #6ea8ff 61%,
+          #444055 72%, #444055 100%);
+        background-size: 300% 100%;
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; color: transparent;
+        animation: cbSweep 2.6s ease-in-out infinite;
+      }
+      #chromancer-boot .cb-tag {
+        font-family: 'Nunito', system-ui, sans-serif; font-weight: 700;
+        font-size: clamp(10px, 2.7vw, 13px); letter-spacing: .42em; margin-left: .42em;
+        color: #6b6486; text-transform: uppercase;
+      }
+      #chromancer-boot .cb-track {
+        position: relative; width: clamp(150px, 44vw, 240px); height: 4px;
+        border-radius: 3px; overflow: hidden; background: #221d33;
+      }
+      #chromancer-boot .cb-fill {
+        position: absolute; top: 0; left: 0; height: 100%; border-radius: 3px;
+        width: 40%;
+        background: linear-gradient(90deg, #ff5d73, #ffd54a, #4ad6c4, #6ea8ff);
+        background-size: 200% 100%;
+        animation: cbSlide 1.25s ease-in-out infinite, cbHue 2.6s linear infinite;
+      }
+      /* When brandLoader.ts reports a real fraction, the fill becomes determinate
+         (JS clears the indeterminate slide animation and drives width directly). */
+      #chromancer-boot .cb-fill.cb-determinate {
+        animation: cbHue 2.6s linear infinite; left: 0;
+        transition: width .2s ease;
+      }
+      @keyframes cbSweep { 0% { background-position: 130% 0; } 100% { background-position: -130% 0; } }
+      @keyframes cbSlide { 0% { left: -42%; } 100% { left: 100%; } }
+      @keyframes cbHue { 0% { background-position: 0 0; } 100% { background-position: 200% 0; } }
+      @media (prefers-reduced-motion: reduce) {
+        #chromancer-boot .cb-mark { animation: none; }
+        #chromancer-boot .cb-fill { animation: cbHue 3s linear infinite; left: 0; width: 100%; }
+      }
     </style>
   </head>
   <body>
+    <!-- First paint: the branded loader. Torn down by src/ui/brandLoader.ts. -->
+    <div id="chromancer-boot" role="status" aria-label="Loading Chromancer">
+      <div class="cb-mark">CHROMANCER</div>
+      <div class="cb-tag">Paint the world back</div>
+      <div class="cb-track"><div class="cb-fill"></div></div>
+    </div>
     <div id="game"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

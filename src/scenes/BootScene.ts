@@ -1,16 +1,16 @@
 import Phaser from 'phaser'
-import { models } from '../three/models'
 import { splashDone } from '../ui/bootGate'
 import { readLaunchParams, codeToSeed } from '../game/seedcode'
 import { levelById } from '../game/levels'
+import { launchBattle } from '../ui/battleLoader'
 import type { BattleLaunchData } from './BattleScene'
 
 /**
- * BootScene — silent asset preloader behind the Odin Platforms splash (a DOM
- * overlay created in main.ts). It advances to the menu once BOTH the splash
- * has finished and the 3D kit is loaded. Its own visuals only matter in the
- * rare case where loading outlasts the splash: a minimal dark screen with a
- * slim gold progress bar.
+ * BootScene — the gate behind the Odin Platforms splash (a DOM overlay created
+ * in main.ts). The heavy 3D kit no longer loads here: it is code-split into the
+ * battle chunk and streamed on demand (see battleLoader.ts), so the menu path is
+ * lean. Boot now simply waits for the splash, then routes. Its own visuals only
+ * show in the rare case loading outlasts the splash: a minimal dark screen.
  */
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -33,29 +33,17 @@ export class BootScene extends Phaser.Scene {
       .setAlpha(0)
     this.tweens.add({ targets: label, alpha: 0.9, duration: 600, delay: 300 })
 
-    const barW = 320
-    const barY = height * 0.55 + 44
-    this.add.rectangle(width / 2, barY, barW, 4, 0x2a1c48).setOrigin(0.5)
-    const barFill = this.add.rectangle(width / 2 - barW / 2, barY, 2, 4, 0xffd54a).setOrigin(0, 0.5)
-
-    const assetsReady = models.ready
-      ? Promise.resolve()
-      : models
-          .load((frac) => {
-            barFill.width = Math.max(2, barW * frac)
-          })
-          .catch(() => undefined) // never trap the player on a failed asset
-
     // The splash fades itself out over the top of this scene; by the time it's
-    // gone (or the assets finish, whichever is later) we go straight to Menu —
-    // unless a growth deep-link (?attract / ?demo / ?seed) routes into a run.
-    void Promise.all([assetsReady, splashDone]).then(() => {
+    // gone we go straight to Menu — unless a growth deep-link (?attract / ?demo
+    // / ?seed) routes into a run, in which case the battle chunk streams on
+    // demand behind the branded loader.
+    void splashDone.then(() => {
       if (!this.scene.isActive('Boot')) return
       // ?pathforge=CODE → the Pathforge build page seeded to that shared puzzle.
       const pfSeed = pathforgeDeepLink()
       if (pfSeed !== null) { this.scene.start('Pathforge', { seed: pfSeed }); return }
       const route = deepLinkRoute()
-      if (route) this.scene.start('Battle', route)
+      if (route) launchBattle(this, route)
       else this.scene.start('Menu')
     })
   }

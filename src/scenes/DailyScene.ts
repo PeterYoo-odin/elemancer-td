@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { DailySeedPage } from '../ui/DailySeedPage'
 import { music } from '../ui/music'
+import { launchBattle } from '../ui/battleLoader'
 
 // DailyScene — thin Phaser wrapper mounting the HTML/CSS Daily Seed overlay
 // (DailySeedPage). Owns only the mount/teardown lifecycle and routes "Play
@@ -20,7 +21,7 @@ export class DailyScene extends Phaser.Scene {
 
     this.page = new DailySeedPage({
       onBack: () => this.scene.start('Menu'),
-      onPlay: (seed) => this.scene.start('Battle', { endless: true, seedOverride: seed, daily: true }),
+      onPlay: (seed) => launchBattle(this, { endless: true, seedOverride: seed, daily: true }),
     })
 
     this.events.once('shutdown', () => {

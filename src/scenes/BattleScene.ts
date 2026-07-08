@@ -14,6 +14,7 @@ import { NORMAL_MODE, levelForMode, startLivesForMode, towerCapForMode, partyAll
 import { Sim, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, cellCenter, type SimEvent } from '../sim'
 import { BattleView3D } from '../three/BattleView3D'
 import { CameraControls } from '../three/cameraControls'
+import { hideBrandLoader } from '../ui/brandLoader'
 import { BattleHud, BANNER_PRIORITY, type HudContext } from '../ui/BattleHud'
 import type { ShareCardOpts } from '../ui/ShareCard'
 import { renderShareCard, copyText } from '../ui/ShareCard'
@@ -353,6 +354,10 @@ export class BattleScene extends Phaser.Scene {
     const realmIdx = Math.max(0, REALMS.indexOf(realmForLevel(this.levelId)))
     this.view = new BattleView3D(this.sim, this.level.palette, accent, pathCells, realmBackdrop(realmIdx))
     this.view.mount(document.body)
+    // The WebGL board is mounted — retire the branded cold-load screen (raised by
+    // battleLoader while the lazy battle chunk streamed in) on the next frame,
+    // once the canvas has painted, so there is never a blank gap or a flash.
+    requestAnimationFrame(() => hideBrandLoader())
 
     // ---- DOM HUD ----
     this.hud = new BattleHud({

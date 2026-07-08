@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { WorldMap } from '../ui/WorldMap'
 import { music } from '../ui/music'
+import { launchBattle } from '../ui/battleLoader'
 
 // Campaign world map. The visuals live in WorldMap (an HTML/CSS overlay, like
 // FrontPage/BattleHud): the six realms of Aetheria as one scrolling journey,
@@ -21,7 +22,7 @@ export class MapScene extends Phaser.Scene {
     music.setTrack('map')
 
     this.map = new WorldMap({
-      onPlay: (levelId, mode) => this.scene.start('Battle', { levelId, endless: false, difficulty: mode?.difficulty, challenge: mode?.challenge }),
+      onPlay: (levelId, mode) => launchBattle(this, { levelId, endless: false, difficulty: mode?.difficulty, challenge: mode?.challenge }),
       onBack: () => this.scene.start('Menu'),
     })
 

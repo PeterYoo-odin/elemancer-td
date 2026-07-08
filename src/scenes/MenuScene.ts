@@ -5,6 +5,8 @@ import { showOdinSplash } from '../ui/OdinSplash'
 import { music } from '../ui/music'
 import { playCutsceneOnce } from '../ui/Cutscene'
 import { scheduleCloudPush } from '../game/cloudSave'
+import { launchBattle, prefetchBattle } from '../ui/battleLoader'
+import { hideBrandLoader } from '../ui/brandLoader'
 
 // Main menu / hub. The visuals live in FrontPage (an HTML/CSS overlay, like
 // BattleHud); this scene owns its lifecycle, routes navigation to the other
@@ -21,6 +23,11 @@ export class MenuScene extends Phaser.Scene {
     // Solid backdrop behind the DOM overlay (visible for a frame on scene swaps).
     this.add.rectangle(width / 2, height / 2, width, height, 0x0a0716)
     music.setTrack('map')
+    // The hub is up — tear down the branded cold-load screen (no-op if a splash /
+    // battle path already removed it), and warm the battle chunk in the
+    // background so offline play stays whole and the first run enters instantly.
+    hideBrandLoader()
+    prefetchBattle(this.game)
     // Mirror the (possibly just-updated) save up to the ranked account. Debounced
     // + a no-op when unwired; every return to the hub keeps the cloud in sync.
     scheduleCloudPush()
@@ -32,14 +39,14 @@ export class MenuScene extends Phaser.Scene {
         const fresh = economy.totalStars() === 0 && Object.keys(economy.data.firstClears).length === 0
         // First-ever Play: the OPENING motion-comic (skippable, once) sets the
         // stakes before the first battle. Returning players go to the map.
-        if (fresh) playCutsceneOnce('opening', () => this.scene.start('Battle', { levelId: 'l1' }))
+        if (fresh) playCutsceneOnce('opening', () => launchBattle(this, { levelId: 'l1' }))
         else this.scene.start('Map')
       },
       onHeroes: () => this.scene.start('Heroes'),
       onWorkshop: () => this.scene.start('Workshop'),
       onShop: () => this.scene.start('Shop'),
-      onEndless: () => this.scene.start('Battle', { endless: true }),
-      onRoguelike: () => this.scene.start('Battle', { roguelike: true }),
+      onEndless: () => launchBattle(this, { endless: true }),
+      onRoguelike: () => launchBattle(this, { roguelike: true }),
       onDaily: () => this.scene.start('Daily'),
       onRanked: () => this.scene.start('Ranked'),
       onPathforge: () => this.scene.start('Pathforge'),

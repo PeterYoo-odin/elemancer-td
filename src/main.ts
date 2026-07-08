@@ -2,7 +2,9 @@ import Phaser from 'phaser'
 import { BootScene } from './scenes/BootScene'
 import { MenuScene } from './scenes/MenuScene'
 import { MapScene } from './scenes/MapScene'
-import { BattleScene } from './scenes/BattleScene'
+// BattleScene is NOT imported here: it (and the whole Three.js WebGL renderer it
+// drags in) is code-split into a lazy chunk and registered on demand by
+// src/ui/battleLoader.ts, so the title + menu cold-load never downloads it.
 import { WorkshopScene } from './scenes/WorkshopScene'
 import { ShopScene } from './scenes/ShopScene'
 import { HeroesScene } from './scenes/HeroesScene'
@@ -74,7 +76,9 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 1280,
   },
   render: { antialias: true, pixelArt: false },
-  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene, PathforgeScene],
+  // 'Battle' is intentionally absent — battleLoader.ts adds it the first time a
+  // run is entered (or on the menu's idle prefetch).
+  scene: [BootScene, MenuScene, MapScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene, PathforgeScene],
 }
 
 new Phaser.Game(config)

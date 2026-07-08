@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { RankedPage } from '../ui/RankedPage'
 import { music } from '../ui/music'
+import { launchBattle } from '../ui/battleLoader'
 import type { RankedMode } from '../game/ranked'
 
 // RankedScene — thin Phaser wrapper mounting the HTML/CSS Ranked hub (RankedPage).
@@ -21,7 +22,7 @@ export class RankedScene extends Phaser.Scene {
     this.page = new RankedPage({
       onBack: () => this.scene.start('Menu'),
       onPlay: (mode: RankedMode, seed: number | undefined) => {
-        this.scene.start('Battle', {
+        launchBattle(this, {
           endless: true,
           daily: mode === 'daily',
           weekly: mode === 'weekly',
@@ -29,7 +30,7 @@ export class RankedScene extends Phaser.Scene {
         })
       },
       onGhost: (mode: RankedMode, seed: number, runId: string) => {
-        this.scene.start('Battle', {
+        launchBattle(this, {
           endless: true,
           daily: mode === 'daily',
           weekly: mode === 'weekly',

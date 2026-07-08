@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { PathforgePage } from '../ui/PathforgePage'
 import { music } from '../ui/music'
+import { launchBattle } from '../ui/battleLoader'
 
 // PathforgeScene — thin Phaser wrapper mounting the Pathforge build overlay
 // (PathforgePage). Owns only mount/teardown; "Begin the Defense" launches a seeded
@@ -22,7 +23,7 @@ export class PathforgeScene extends Phaser.Scene {
       {
         onBack: () => this.scene.start('Menu'),
         onPlay: (seed, route) =>
-          this.scene.start('Battle', {
+          launchBattle(this, {
             pathforge: true,
             seedOverride: seed,
             pathforgeMaze: route.map(([c, r]) => [c, r] as [number, number]),
