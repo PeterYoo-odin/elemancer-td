@@ -1,7 +1,7 @@
 import Phaser from 'phaser'
 import { models } from '../three/models'
 import { splashDone } from '../ui/bootGate'
-import { readLaunchParams } from '../game/seedcode'
+import { readLaunchParams, codeToSeed } from '../game/seedcode'
 import { levelById } from '../game/levels'
 import type { BattleLaunchData } from './BattleScene'
 
@@ -51,6 +51,9 @@ export class BootScene extends Phaser.Scene {
     // unless a growth deep-link (?attract / ?demo / ?seed) routes into a run.
     void Promise.all([assetsReady, splashDone]).then(() => {
       if (!this.scene.isActive('Boot')) return
+      // ?pathforge=CODE → the Pathforge build page seeded to that shared puzzle.
+      const pfSeed = pathforgeDeepLink()
+      if (pfSeed !== null) { this.scene.start('Pathforge', { seed: pfSeed }); return }
       const route = deepLinkRoute()
       if (route) this.scene.start('Battle', route)
       else this.scene.start('Menu')
@@ -80,4 +83,16 @@ function deepLinkRoute(): BattleLaunchData | null {
     return { ...common, endless: true }
   }
   return null
+}
+
+// ?pathforge=CODE → the shared seed to open the Pathforge build page on. Returns the
+// resolved seed, or null when the param is absent/malformed (plain launch).
+function pathforgeDeepLink(): number | null {
+  try {
+    const code = new URLSearchParams(window.location.search).get('pathforge')
+    if (!code) return null
+    return codeToSeed(code)
+  } catch {
+    return null
+  }
 }

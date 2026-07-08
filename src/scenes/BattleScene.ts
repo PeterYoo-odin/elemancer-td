@@ -34,6 +34,7 @@ import { recordDailyResult } from '../game/daily'
 import { rankedConfig, RunRecorder, rankedPeriod, GhostRunner, type RankedMode, type DeclaredHero } from '../game/ranked'
 import { submitRun, fetchGhost } from '../game/rankedNet'
 import { recordRankedLocal } from '../game/rankedLocal'
+import { pathforgeLevel, recordPathforgeBest } from '../game/pathforge'
 import { weeklyPlan, planHeadline, recordWeeklyBest, type WeeklyPlan } from '../game/events'
 import { MUTATORS } from '../sim'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
@@ -80,6 +81,8 @@ export interface BattleLaunchData {
   daily?: boolean // launched from the in-game Daily screen — log the result locally
   weekly?: boolean // launched from the Ranked screen's Weekly board (shared weekly seed)
   ghostRunId?: string // race a downloaded top run's replay ghost alongside this run
+  pathforge?: boolean // PATHFORGE: defend the player-built maze (seeded endless, local score)
+  pathforgeMaze?: Array<[number, number]> // the committed spawn→base road route
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -92,6 +95,8 @@ export class BattleScene extends Phaser.Scene {
   private attract = false
   private seedOverride: number | undefined
   private isDaily = false
+  private pathforge = false
+  private pathforgeMaze: Array<[number, number]> | null = null
   private captionsOn = true
   private loopReel = false
   private seed = 0
@@ -183,7 +188,14 @@ export class BattleScene extends Phaser.Scene {
     // reuses the endless scaffolding (infinite waves + draft loop) but never writes
     // the Ranked ladder (endlessBest), so the provably-fair board stays pure.
     this.roguelike = !this.demoMode && !!data?.roguelike
-    this.endless = !this.demoMode && (!!data?.endless || this.roguelike)
+    // PATHFORGE reuses the endless scaffolding (seeded infinite waves) on the player's
+    // OWN maze, with a local per-seed board — never the Ranked ladder (its maze isn't
+    // in the replay log), so the provably-fair board stays pure.
+    this.pathforge = !this.demoMode && !!data?.pathforge
+    this.pathforgeMaze = (this.pathforge && data?.pathforgeMaze && data.pathforgeMaze.length >= 2)
+      ? data.pathforgeMaze.map(([c, r]) => [c, r] as [number, number])
+      : null
+    this.endless = !this.demoMode && (!!data?.endless || this.roguelike || this.pathforge)
     this.levelId = this.demoMode ? 'demo' : data?.levelId ?? 'l1'
     // Difficulty/challenge modes apply to campaign play only (never demo/attract/endless).
     this.runMode = (this.demoMode || data?.endless)
@@ -193,7 +205,7 @@ export class BattleScene extends Phaser.Scene {
     this.isDaily = !!data?.daily
     // RANKED (provably-fair) = the pure normalized modes only. Roguelike is endless
     // but carries mutators/relics, so it rides its OWN weekly board, not this one.
-    this.ranked = this.endless && !this.roguelike && !this.attract && !this.demoMode
+    this.ranked = this.endless && !this.roguelike && !this.attract && !this.demoMode && !this.pathforge
     this.rankedMode = this.isDaily ? 'daily' : data?.weekly ? 'weekly' : 'endless'
     this.ghostRunId = data?.ghostRunId
     // reset per-run ranked state (the scene instance is reused across restarts)
@@ -211,7 +223,9 @@ export class BattleScene extends Phaser.Scene {
     // per-realm musical colour for the adaptive tension bed
     music.setRealm(this.endless ? undefined : realmForLevel(this.levelId).id)
     // ---- run config ----
-    const baseLevel = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
+    const baseLevel = (this.pathforge && this.pathforgeMaze)
+      ? pathforgeLevel(this.pathforgeMaze)
+      : this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
     // Heroic scales the waves (deterministic, harder); other modes leave waves intact.
     this.level = levelForMode(baseLevel, this.runMode)
     // ROGUELIKE: resolve THIS week's shared plan (headline mutator + live event +
@@ -220,7 +234,9 @@ export class BattleScene extends Phaser.Scene {
     this.roguePlan = this.roguelike ? weeklyPlan(Date.now()) : null
     // Demo/attract runs are provably fair showcases: NEUTRAL modifiers always,
     // so a shared seed replays identically on every account.
-    const mods = this.demoMode ? { ...NEUTRAL } : economy.runModifiers(this.endless)
+    // PATHFORGE is a pure-skill board: NEUTRAL modifiers (no purchased advantage),
+    // exactly like demo/ranked, so "same seed + open grid" stays fair.
+    const mods = (this.demoMode || this.pathforge) ? { ...NEUTRAL } : economy.runModifiers(this.endless)
     // ASSIST (accessibility): a personal, opt-in easier ride for NORMAL campaign play
     // only — never endless/ranked/demo, so leaderboards and showcases stay fair. It
     // only ever GRANTS resources (never makes the game harder) and adds no immunities.
@@ -357,7 +373,9 @@ export class BattleScene extends Phaser.Scene {
       onQuit: () => this.quitBattle(),
       onReplay: () => {
         if (this.sim.state === 'lost') ftue.recordRetry() // death → same-seed retry taken
-        this.scene.restart({ levelId: this.levelId, endless: this.endless, demo: this.demoMode, seedOverride: this.seed })
+        this.scene.restart(this.pathforge
+          ? { pathforge: true, seedOverride: this.seed, pathforgeMaze: this.pathforgeMaze ?? undefined }
+          : { levelId: this.levelId, endless: this.endless, demo: this.demoMode, seedOverride: this.seed })
       },
       onBack: () => this.scene.start(this.endless ? 'Menu' : 'Map'),
     })
@@ -388,6 +406,8 @@ export class BattleScene extends Phaser.Scene {
       // The weekly headline mutator (+ live event) — the run's rule twist, up front.
       const head = MUTATORS[this.roguePlan.headline]
       this.hud.banner(`${head?.icon ?? '🎲'} ${planHeadline(this.roguePlan)}`, this.roguePlan.event?.color ?? head?.color ?? 0xc06bff)
+    } else if (this.pathforge) {
+      this.hud.banner('PATHFORGE · HOLD THE LINE ON YOUR MAZE', 0x6bd7ff)
     } else if (this.endless) {
       // The store constitution, on screen: Ranked ignores every purchase —
       // heroes normalized, boosts/convenience/extra slots disabled.
@@ -1338,6 +1358,18 @@ export class BattleScene extends Phaser.Scene {
         const bestTag = pb ? ' · NEW WEEKLY BEST!' : ''
         this.hud.showResult({ win: false, title: 'RUN OVER', color: 0xc06bff, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${bestTag}`, endless: true, share: this.buildShare(false) })
         window.setTimeout(() => this.showRunSummary(), 480)
+      } else if (this.pathforge) {
+        // PATHFORGE: purely-local per-seed best (the fair board — no endlessBest, no
+        // ranked submit). Hero shards still accrue (meta progression never touches the
+        // fair run itself). Score = waves survived on the player's own maze.
+        const wave = this.sim.waveIndex + 1
+        const pb = recordPathforgeBest(this.seed, wave)
+        const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
+        this.hud.showResult({
+          win: false, title: 'THE LINE BREAKS', color: 0x6bd7ff, stars: 0, coins: 0, diamonds: 0, shards,
+          unlocked: null, sub: `Reached wave ${wave}${pb ? ' · NEW BEST FOR THIS SEED!' : ''}`,
+          endless: true, share: this.buildShare(false),
+        })
       } else if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())

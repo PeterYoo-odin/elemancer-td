@@ -28,6 +28,9 @@ import {
 } from '../src/game/ranked'
 import type { TowerKind } from '../src/game/towers'
 import type { SpellKey } from '../src/game/spells'
+import {
+  PF_COLS, PF_ROWS, pfKey, validateMaze, pathforgeLevel, type PFCell,
+} from '../src/game/pathforge'
 
 // Stress runs are DECOUPLED from the campaign ladder: we build a bespoke max-size
 // level (6-lane serpentine) so regenerating LEVELS can never starve the ≥200
@@ -777,6 +780,103 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
   if (logHash(run.rec) === logHash(trimmed)) fail('logHash collides across different logs')
 
   console.log(`  ranked replay ✓ — recorded ${run.rec.log.c.length} cmds + ${run.rec.log.d.length} drafts, re-ran to score ${run.score}/wave ${run.wave}; tamper + version + drop all rejected`)
+}
+
+// ---------------------------------------------------------------------------
+// PATHFORGE — the player-built maze mode. Proves: (1) the anti-trap HARD RULE
+// (a maze without a completable Portal→Wellspring route is REJECTED — you can
+// never wall the enemies off); (2) openBuild (every non-road tile is a tower
+// slot); (3) determinism (same seed + same maze + same scripted play → identical);
+// (4) beatability (a competent bot survives real waves on a built maze — no NaN /
+// out-of-range along the way).
+// ---------------------------------------------------------------------------
+console.log('\npathforge — player-built maze: anti-trap rule, open-grid building, determinism, beatability…')
+{
+  const spawn: PFCell = [0, 0]
+  const base: PFCell = [PF_COLS - 1, PF_ROWS - 1]
+
+  // (1) ANTI-TRAP — endpoints only, not connected → REJECTED.
+  const walled = new Set<number>([pfKey(spawn[0], spawn[1]), pfKey(base[0], base[1])])
+  if (validateMaze(walled, spawn, base).ok) fail('pathforge: a disconnected maze was ACCEPTED (anti-trap rule broken)')
+
+  // an L-corridor down the left edge then across the bottom → connected + valid.
+  const corridor = new Set<number>()
+  for (let r = 0; r < PF_ROWS; r++) corridor.add(pfKey(0, r))
+  for (let c = 0; c < PF_COLS; c++) corridor.add(pfKey(c, PF_ROWS - 1))
+  if (!validateMaze(corridor, spawn, base).ok) fail('pathforge: a connected corridor was REJECTED')
+
+  // sever one interior tile → the maze must re-validate to INVALID (no mid-run trap).
+  const broken = new Set(corridor); broken.delete(pfKey(0, 5))
+  if (validateMaze(broken, spawn, base).ok) fail('pathforge: severing the corridor did NOT invalidate the maze')
+
+  // A long single-corridor serpentine — BFS has no shortcut, so the committed route
+  // traverses the WHOLE snake (the "longer maze = more fire" lever, proven long).
+  const snake = new Set<number>()
+  for (let r = 0; r < PF_ROWS; r++) {
+    if (r % 2 === 0) { for (let c = 0; c < PF_COLS; c++) snake.add(pfKey(c, r)) }
+    else snake.add(pfKey(((r - 1) / 2) % 2 === 0 ? PF_COLS - 1 : 0, r))
+  }
+  const vSnake = validateMaze(snake, spawn, base)
+  if (!vSnake.ok || !vSnake.route) {
+    fail('pathforge: the serpentine maze was REJECTED')
+  } else {
+    const route = vSnake.route
+    if (route.length < PF_COLS * 4) fail(`pathforge: serpentine route unexpectedly short (${route.length})`)
+
+    // (2) OPEN-GRID BUILDING — every non-road tile is buildable (openBuild).
+    const probe = new Sim({
+      level: pathforgeLevel(route), mods: { ...NEUTRAL }, seed: 0xF0, endless: true,
+      startGold: 300, startLives: 20, party: BOT_PARTY,
+    })
+    const expectBuild = PF_COLS * PF_ROWS - route.length
+    if (probe.buildCells().length !== expectBuild) {
+      fail(`pathforge: openBuild wrong — ${probe.buildCells().length} build cells, expected ${expectBuild}`)
+    }
+
+    // (3) + (4) — scripted deterministic play; god-lives run for a fixed budget →
+    // fingerprint must match byte-for-byte across two identical runs.
+    const playPathforge = (seed: number, godMode: boolean, budget: number): { fp: string; wave: number; peak: number } => {
+      const sim = new Sim({
+        level: pathforgeLevel(route), mods: { ...NEUTRAL }, seed, endless: true,
+        // godMode = stress/determinism coverage; else the REAL Pathforge economy
+        // (ENDLESS_START_GOLD 300 / 20 lives) so beatability is a fair lower bound.
+        startGold: godMode ? 5_000_000 : 300, startLives: godMode ? 10_000_000 : 20, party: BOT_PARTY,
+      })
+      deployParty(sim)
+      const placeRef = { i: 0 }
+      let peak = 0
+      let h = 2166136261 >>> 0
+      const mix = (n: number): void => { h = Math.imul(h ^ (n | 0), 16777619) >>> 0 }
+      for (let t = 0; t < budget; t++) {
+        if (sim.state === 'lost' || sim.state === 'won') break
+        if (sim.state === 'draft') { sim.chooseDraft(0); continue } // endless between-wave draft
+        if (sim.state === 'prep') { botSpend(sim, placeRef, TOWER_ORDER as unknown as string[]); sim.startWave() }
+        sim.step()
+        validate(sim, t)
+        let live = 0
+        for (const e of sim.enemies) if (e.active) live++
+        if (live > peak) peak = live
+        if (t % 30 === 0) {
+          mix(Math.round(sim.lives * 100)); mix(sim.waveIndex); mix(Math.round(sim.gold))
+          for (const e of sim.enemies) if (e.active) { mix(Math.round(e.x)); mix(Math.round(e.y)); mix(Math.round(e.hp)) }
+        }
+      }
+      return { fp: (h >>> 0).toString(16), wave: sim.waveIndex + 1, peak }
+    }
+
+    const seed = 0x9A2E
+    const a = playPathforge(seed, true, 60 * 60)
+    const b = playPathforge(seed, true, 60 * 60)
+    if (a.fp !== b.fp) fail(`pathforge: NON-DETERMINISTIC — ${a.fp} vs ${b.fp} (same seed + maze + play)`)
+
+    // (4) BEATABILITY — with the REAL Pathforge economy (300 gold / 20 lives), a
+    // competent bot on a built maze survives real waves. A bot clear is a valid lower
+    // bound (a human does better), mirroring the campaign autoPlay proof.
+    const fair = playPathforge(seed, false, 60 * 60 * 12)
+    if (fair.wave < 8) fail(`pathforge: a built maze was NOT beatable at fair economy — bot fell at wave ${fair.wave}`)
+
+    console.log(`  pathforge ✓ — anti-trap enforced, ${expectBuild} open build tiles, route ${route.length} tiles, deterministic (${a.fp}), fair-economy bot reached wave ${fair.wave}, peak ${Math.max(a.peak, fair.peak)} live`)
+  }
 }
 
 if (failures > 0) {

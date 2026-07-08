@@ -513,10 +513,14 @@ export class Sim {
         onPath.add(`${c},${r}`)
       }
     }
+    // PATHFORGE open-grid mode: EVERY non-road tile is buildable (the player's maze
+    // leaves the whole rest of the field for towers). Campaign/ranked leave it unset,
+    // so the road-adjacent rule below is byte-identical to before.
+    const openBuild = !!this.config.level.openBuild
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         if (this.grid[r][c] === 'path') continue
-        let near = false
+        let near = openBuild
         for (let dr = -1; dr <= 1 && !near; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
             if (onPath.has(`${c + dc},${r + dr}`)) {

@@ -49,6 +49,9 @@ export interface LevelDef {
   path?: Array<[number, number]>
   /** sim-readable terrain flags on build tiles (lava/high-ground/fog/…) */
   terrain?: TerrainCell[]
+  /** PATHFORGE: open-grid building — EVERY non-road tile is buildable (not just
+   * road-adjacent). Additive + opt-in; campaign/ranked levels leave it unset. */
+  openBuild?: boolean
   /** landmark levels are hand-tuned spectacle stops: mini-boss or realm finale */
   landmark?: 'landmark' | 'finale'
   /** per-level challenge: max heroes that may be deployed (0 = no-hero) */

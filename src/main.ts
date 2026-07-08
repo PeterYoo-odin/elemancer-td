@@ -8,6 +8,7 @@ import { ShopScene } from './scenes/ShopScene'
 import { HeroesScene } from './scenes/HeroesScene'
 import { DailyScene } from './scenes/DailyScene'
 import { RankedScene } from './scenes/RankedScene'
+import { PathforgeScene } from './scenes/PathforgeScene'
 import { showOdinSplash } from './ui/OdinSplash'
 import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
@@ -73,7 +74,7 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 1280,
   },
   render: { antialias: true, pixelArt: false },
-  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene],
+  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene, PathforgeScene],
 }
 
 new Phaser.Game(config)
