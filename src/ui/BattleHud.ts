@@ -30,6 +30,10 @@ export interface HudCallbacks {
   onSpellButton(key: SpellKey): void
   onHeroButton(heroId: string): void // deploy a party hero, or cast its spell if fielded
   onSelectDeselect(): void // tap the "close panel" affordance
+  // A tap on the upgrade sheet's dead-space (not a button): the sheet floats over
+  // the board, so forward the screen point so a tower underneath can be selected
+  // directly — swap on the first tap instead of "close panel, then tap tower".
+  onBoardTapThrough(clientX: number, clientY: number): void
   onUpgrade(id: number): void
   onBranch(id: number, idx: number): void
   onFuse(id: number, partnerId: number): void // forge a fusion tower with an adjacent max tower
@@ -1338,6 +1342,14 @@ export class BattleHud {
     }
 
     wrap.append(close, row1, stat, evs, ctl)
+    // Board-tap passthrough: a click on the sheet that ISN'T a control forwards to
+    // the board, so a tower hidden under the open sheet swaps in on one tap. Buttons
+    // handle their own clicks (skip them); a long-press for a tooltip suppresses the
+    // click, so tips never misfire a passthrough. Scroll drags fire no click.
+    wrap.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return
+      this.cb.onBoardTapThrough(e.clientX, e.clientY)
+    })
     this.root.append(wrap)
     this.upgradeEl = wrap
   }

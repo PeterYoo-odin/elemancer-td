@@ -271,6 +271,7 @@ export class BattleScene extends Phaser.Scene {
       onSpellButton: (k) => this.onSpellButton(k),
       onHeroButton: (id) => this.onHeroButton(id),
       onSelectDeselect: () => this.deselect(),
+      onBoardTapThrough: (x, y) => this.handlePanelTapThrough(x, y),
       onUpgrade: (id) => { if (this.sim.upgradeTower(id)) this.hud.showUpgrade(this.sim, id) },
       onBranch: (id, idx) => { if (this.sim.chooseBranch(id, idx)) this.hud.showUpgrade(this.sim, id) },
       onFuse: (id, partnerId) => { if (this.sim.fuseTowers(id, partnerId)) this.hud.showUpgrade(this.sim, id) },
@@ -704,12 +705,34 @@ export class BattleScene extends Phaser.Scene {
     const cell = this.view.pickCell(x, y)
     if (!cell) { if (this.mode === 'idle') this.deselect(); return }
 
-    if (this.mode === 'building') { this.tryPlace(cell.col, cell.row); return }
-    if (this.mode === 'deploying') { this.tryDeploy(cell.col, cell.row); return }
-
     const t = this.sim.towerAt(cell.col, cell.row)
-    if (t) this.selectTower(t.id)
+
+    // An armed option (build/deploy) is superseded the instant you tap an existing
+    // tower — the new selection wins on the FIRST tap, no exit-mode click first.
+    if (this.mode === 'building') {
+      if (t) { this.exitBuild(); this.selectTower(t.id); return }
+      this.tryPlace(cell.col, cell.row); return
+    }
+    if (this.mode === 'deploying') {
+      if (t) { this.exitDeploy(); this.selectTower(t.id); return }
+      this.tryDeploy(cell.col, cell.row); return
+    }
+
+    if (t) this.selectTower(t.id) // swaps directly if a different tower's panel was open
     else this.deselect() // tap on empty board: deselect + close panels
+  }
+
+  // A tap that landed on the OPEN upgrade sheet's dead-space (not a button): the
+  // sheet floats over the board's lower rows, so a tower underneath would be
+  // unreachable without first closing the panel. Route the tap to the board so a
+  // different tower swaps in on the FIRST tap — but never DESELECT from here, or
+  // tapping the panel's own chrome would close it.
+  private handlePanelTapThrough(x: number, y: number): void {
+    if (!this.sim || this.mode !== 'idle') return
+    const cell = this.view.pickCell(x, y)
+    if (!cell) return
+    const t = this.sim.towerAt(cell.col, cell.row)
+    if (t && t.id !== this.selectedId) this.selectTower(t.id)
   }
 
   private handleHover(x: number, y: number): void {
