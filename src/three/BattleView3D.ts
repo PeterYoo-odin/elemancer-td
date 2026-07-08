@@ -227,32 +227,37 @@ const KIND_PHASE: Record<TowerKind, number> = { cannon: 0, frost: 1.3, flame: 2.
 // (Clean seam for a later pass: swap the sq/bob/lean drive for AI-posed frames.)
 interface LocoProfile {
   cyc: number // stride phase advance (rad/s at animSpeed 1) — sets tempo
-  bob: number // vertical foot-plant hop amplitude (world units)
-  sq: number // squash-&-stretch amplitude (stomp depth on plant)
+  bob: number // vertical foot-plant hop amplitude, as a FRACTION of sprite height
+  sq: number // squash-&-stretch amplitude (stomp depth on plant, scale factor)
   lean: number // rhythmic forward/back rock (radians of sprite tilt)
   sway: number // slow weight-shift body sway (radians)
+  shift: number // horizontal weight-shift waddle (fraction of sprite height)
   wing: number // flyer wing-flap horizontal scale pulse (0 = grounded)
-  jitter: number // swarm skitter horizontal displacement (world units)
+  jitter: number // swarm skitter horizontal displacement (fraction of sprite height)
 }
+// AMPLITUDES ARE FRACTIONS OF SPRITE HEIGHT (bob/shift/jitter) so the motion reads
+// at the SAME screen-pixel size on a tiny runner and a towering boss — the tuning
+// pass that killed the "escalator" glide. Biased strong on purpose: the observed
+// failure was "too subtle", and overshoot is recoverable where a glide is not.
 const LOCO: Record<EnemyKind, LocoProfile> = {
-  // fast lean + bouncy stride — a sprinter with real air time
-  runner: { cyc: 22, bob: 0.13, sq: 0.15, lean: 0.11, sway: 0.03, wing: 0, jitter: 0 },
-  // steady infantry trudge
-  grunt: { cyc: 13, bob: 0.08, sq: 0.09, lean: 0.055, sway: 0.035, wing: 0, jitter: 0 },
-  // heavy slow trudge + deep stomp squash
-  brute: { cyc: 7.5, bob: 0.06, sq: 0.18, lean: 0.04, sway: 0.055, wing: 0, jitter: 0 },
-  // NO ground contact: hover sine + wing-flap oscillation
-  flyer: { cyc: 13, bob: 0.11, sq: 0.05, lean: 0.03, sway: 0.035, wing: 0.11, jitter: 0 },
+  // bouncy sprinter — big air time, hard forward lean, quick tempo
+  runner: { cyc: 22, bob: 0.26, sq: 0.22, lean: 0.16, sway: 0.03, shift: 0.10, wing: 0, jitter: 0 },
+  // steady infantry trudge — clear step bounce + waddle
+  grunt: { cyc: 13, bob: 0.18, sq: 0.16, lean: 0.09, sway: 0.04, shift: 0.08, wing: 0, jitter: 0 },
+  // heavy slow trudge + DEEP stomp squash and a big side-to-side lumber
+  brute: { cyc: 7.5, bob: 0.11, sq: 0.30, lean: 0.05, sway: 0.06, shift: 0.11, wing: 0, jitter: 0 },
+  // NO ground contact: hover sine + pronounced wing-flap oscillation
+  flyer: { cyc: 13, bob: 0.16, sq: 0.05, lean: 0.05, sway: 0.035, shift: 0, wing: 0.22, jitter: 0 },
   // braced shuffle — short choppy steps, minimal sway
-  shielded: { cyc: 10, bob: 0.05, sq: 0.07, lean: 0.03, sway: 0.02, wing: 0, jitter: 0 },
-  // smooth float + robe sway
-  healer: { cyc: 10.5, bob: 0.085, sq: 0.05, lean: 0.02, sway: 0.07, wing: 0, jitter: 0 },
+  shielded: { cyc: 10, bob: 0.11, sq: 0.15, lean: 0.05, sway: 0.02, shift: 0.06, wing: 0, jitter: 0 },
+  // smooth FLOAT (no foot-plant stomp) + wide robe sway
+  healer: { cyc: 10.5, bob: 0.13, sq: 0.05, lean: 0.03, sway: 0.10, shift: 0.03, wing: 0, jitter: 0 },
   // rapid skitter with per-member phase so the cluster crawls (not marches)
-  swarm: { cyc: 30, bob: 0.10, sq: 0.13, lean: 0.06, sway: 0.045, wing: 0, jitter: 0.05 },
-  // set-piece finale: ponderous, ground-shaking stomp
-  boss: { cyc: 6, bob: 0.05, sq: 0.15, lean: 0.03, sway: 0.045, wing: 0, jitter: 0 },
-  // Corrupted Keeper — a slow, imperious advance
-  keeper: { cyc: 7, bob: 0.06, sq: 0.14, lean: 0.035, sway: 0.05, wing: 0, jitter: 0 },
+  swarm: { cyc: 30, bob: 0.17, sq: 0.18, lean: 0.07, sway: 0.05, shift: 0.05, wing: 0, jitter: 0.06 },
+  // set-piece finale: ponderous, ground-shaking stomp + heavy lumber
+  boss: { cyc: 6, bob: 0.10, sq: 0.26, lean: 0.04, sway: 0.05, shift: 0.12, wing: 0, jitter: 0 },
+  // Corrupted Keeper — a slow, imperious advance with a deep stomp
+  keeper: { cyc: 7, bob: 0.11, sq: 0.24, lean: 0.045, sway: 0.06, shift: 0.11, wing: 0, jitter: 0 },
 }
 
 interface Transient {
@@ -3037,34 +3042,49 @@ export class BattleView3D {
       // mid-step (frozen) so status still reads. Reduce-motion → a minimal bob only.
       const loco = LOCO[s.kind]
       s.walkT += dt * loco.cyc * s.animSpeed
+      // scale reference: bob/shift/jitter are FRACTIONS of the sprite's height so
+      // the walk reads identically in screen pixels on a runner or a boss. Mesh
+      // fallback (art not yet loaded / missing) borrows a radius-derived height.
+      const hgt = s.artH || s.radius * 2.5
       const stride = Math.sin(s.walkT) // −1..1 gait phase (one full stride / 2π)
       const hop = Math.abs(stride) // 0 at foot-plant · 1 at mid-step (2 plants/stride)
       const plantC = hop - 0.5 // <0 near the plant (stomp) · >0 mid-air (stretch)
       const moving = this.motionOk ? s.animSpeed : 0
-      // squash & stretch: wide + short on the plant (stomp), tall + narrow mid-step
+      // squash & stretch: wide + short on the plant (stomp), tall + narrow mid-step.
+      // Screen-vertical, so it sells the step at ANY orbit yaw (unlike horizontal shift).
       const sqAmt = loco.sq * moving
       let sqX = 1 - sqAmt * plantC
       let sqY = 1 + sqAmt * plantC * 2
       let leanRot = 0 // sprite tilt: forward rock + slow sway (billboard, screen-space)
-      let jitterX = 0 // swarm skitter side-step
+      let offX = 0 // horizontal weight-shift waddle + swarm skitter (bonus cue)
       let bob: number
       if (s.isAir) {
         // flyer: NO ground contact — a smooth hover sine + a fast wing-flap that
         // pulses the silhouette wide/narrow. Wholly reduce-motion gated.
-        bob = this.motionOk ? loco.bob * Math.sin(this.clockT * 2.6 + s.phase) : 0
+        bob = this.motionOk ? loco.bob * hgt * Math.sin(this.clockT * 2.6 + s.phase) : 0
         if (this.motionOk) {
           const flap = loco.wing * Math.sin(this.clockT * 9 + s.phase)
           sqX += flap
           sqY -= flap * 0.4
           leanRot = loco.lean * Math.sin(this.clockT * 2.2 + s.phase)
         }
+      } else if (s.kind === 'healer') {
+        // healer: FLOATS — a smooth hover (no foot-plant stomp) with a wide robe
+        // sway, so it reads distinct from the trudging walkers around it.
+        bob = this.motionOk ? loco.bob * hgt * Math.sin(this.clockT * 2.4 + s.phase) : loco.bob * hgt * 0.12 * hop
+        if (this.motionOk) {
+          leanRot = loco.sway * Math.sin(this.clockT * 1.5 + s.phase)
+          offX = loco.shift * hgt * Math.sin(this.clockT * 1.5 + s.phase)
+        }
       } else {
-        // grounded: hop between plants; drag on slow, halt on frozen. A trace of
-        // bob survives reduce-motion so the unit still breathes (task: "minimal bob").
-        bob = this.motionOk ? loco.bob * hop * s.animSpeed : loco.bob * 0.16 * hop
+        // grounded WALK: body rises at mid-step, stomps/dips at the foot-plant; weight
+        // shifts side-to-side once per stride (waddle); forward lean rocks with the gait.
+        // Drag on slow, halt mid-step on frozen. A trace of bob survives reduce-motion
+        // so the unit still breathes (task: "minimal bob").
+        bob = this.motionOk ? loco.bob * hgt * hop * s.animSpeed : loco.bob * hgt * 0.12 * hop
         if (this.motionOk) {
           leanRot = loco.lean * stride * s.animSpeed + loco.sway * Math.sin(s.walkT * 0.5 + s.phase) * s.animSpeed
-          jitterX = loco.jitter * Math.sin(s.walkT * 1.7 + s.phase) * s.animSpeed
+          offX = (loco.shift * Math.sin(s.walkT) + loco.jitter * Math.sin(s.walkT * 1.7 + s.phase)) * hgt * s.animSpeed
         }
       }
       let hitK = 0
@@ -3082,13 +3102,13 @@ export class BattleView3D {
         s.art.scale.set(w * sqX, h * sqY, 1)
         const y0 = s.art.userData.y0 as number
         s.art.position.y = y0 + bob
-        s.art.position.x = jitterX
+        s.art.position.x = offX
         if (s.artMat) s.artMat.rotation = leanRot
         s.body.position.z = 0
         // accent glow: gentle breathing pulse, flares white on a hit — tracks the token
         if (s.accentGlow && s.accentGlowMat) {
           s.accentGlow.position.y = s.art.position.y
-          s.accentGlow.position.x = jitterX
+          s.accentGlow.position.x = offX
           // keeper telegraph → the accent glow flares as a readable "attack incoming"
           // tell; pulses when motion is on, else a static-but-brighter hold
           const tell = s.castWarned ? (this.motionOk ? 0.35 + 0.35 * Math.abs(Math.sin(this.clockT * 12)) : 0.5) : 0
@@ -3101,7 +3121,7 @@ export class BattleView3D {
         }
       } else {
         s.body.position.z = hitK > 0 ? -hitK * 0.09 : 0 // knockback nudge, opposite travel
-        s.body.position.x = jitterX
+        s.body.position.x = offX
         s.body.scale.set(sqX, sqY, sqX)
         s.body.position.y = bob
         s.body.rotation.z = leanRot
