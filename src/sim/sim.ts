@@ -736,16 +736,23 @@ export class Sim {
   }
 
   private endlessWave(n: number): Wave {
-    const hp = 1 + n * 0.18
+    // ENDLESS is the addictive "how deep can you go" hook — so its ramp ACCELERATES
+    // (quadratic term) rather than creeping linearly. A static or un-upgraded defence
+    // is out-scaled within a few dozen waves; only a fully-upgraded, reaction-driven
+    // board keeps pace, which is exactly the depth-chasing loop endless is meant to
+    // reward. Difficulty is HP/count/composition only (no immunities).
+    const hp = 1 + n * 0.22 + n * n * 0.006
     const entries: Wave['entries'] = []
-    entries.push({ kind: 'runner', count: 6 + Math.floor(n * 0.8), spacing: 0.3, hpMul: hp })
-    entries.push({ kind: 'grunt', count: 4 + Math.floor(n * 0.6), spacing: 0.5, hpMul: hp })
-    if (n >= 3) entries.push({ kind: 'flyer', count: 3 + Math.floor(n * 0.4), spacing: 0.6, hpMul: hp })
-    if (n >= 4) entries.push({ kind: 'shielded', count: 2 + Math.floor(n * 0.3), spacing: 0.7, hpMul: hp })
-    if (n >= 5 && n % 2 === 0) entries.push({ kind: 'healer', count: 1 + Math.floor(n * 0.15), spacing: 1.1, hpMul: hp })
+    entries.push({ kind: 'runner', count: 6 + Math.floor(n * 0.9), spacing: 0.3, hpMul: hp })
+    entries.push({ kind: 'grunt', count: 4 + Math.floor(n * 0.65), spacing: 0.5, hpMul: hp })
+    if (n >= 3) entries.push({ kind: 'flyer', count: 3 + Math.floor(n * 0.45), spacing: 0.6, hpMul: hp })
+    if (n >= 4) entries.push({ kind: 'shielded', count: 2 + Math.floor(n * 0.32), spacing: 0.7, hpMul: hp })
+    if (n >= 5 && n % 2 === 0) entries.push({ kind: 'healer', count: 1 + Math.floor(n * 0.16), spacing: 1.1, hpMul: hp })
     if (n >= 4) entries.push({ kind: 'swarm', count: 10 + n * 2, spacing: 0.12, hpMul: hp })
-    if (n >= 6) entries.push({ kind: 'brute', count: 1 + Math.floor(n * 0.25), spacing: 1.0, hpMul: hp })
-    if (n % 5 === 0) entries.push({ kind: 'boss', count: Math.floor(n / 5), spacing: 2.0, hpMul: 1 + n * 0.12 })
+    if (n >= 6) entries.push({ kind: 'brute', count: 1 + Math.floor(n * 0.28), spacing: 1.0, hpMul: hp })
+    // Bosses ride the same accelerating curve (×1.25) so they stay a real wall, not
+    // a speed-bump the ramp leaves behind.
+    if (n % 5 === 0) entries.push({ kind: 'boss', count: Math.floor(n / 5), spacing: 2.0, hpMul: hp * 1.25 })
     return { entries, clearBonus: 30 + n * 6 }
   }
 

@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "simcheck": "tsx scripts/simcheck.ts",
     "balance": "tsx scripts/balance.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "difficulty": "tsx scripts/difficulty.ts"
   },
   "dependencies": {
     "phaser": "^3.80.0",

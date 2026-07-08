@@ -29,7 +29,10 @@ import type { SpellKey } from './spells'
 // ---------------------------------------------------------------------------
 // v2: the Prism Wellspring — leak damage is now strength-scaled per archetype
 // (was flat 1 / boss 5), so run outcomes shift; bump to invalidate old replays.
-export const SIM_VERSION = 2
+// v3: difficulty overhaul (balance pass 19) — the endless ramp now ACCELERATES
+// (quadratic HP + tougher bosses) and the campaign curve was retuned, so endless
+// run outcomes shift; bump to invalidate old replays under the old ramp.
+export const SIM_VERSION = 3
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift

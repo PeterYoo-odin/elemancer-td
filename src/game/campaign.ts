@@ -234,17 +234,56 @@ const KIND_TUNE: Record<string, { base: number; per: number; spacing: number }> 
   swarm: { base: 14, per: 16, spacing: 0.14 },
 }
 
-// GLOBAL introduction gates (0..1 campaign depth). An enemy may appear only once
-// its gate is reached — and anti-air (storm) unlocks BEFORE the flyer gate, so a
-// flyer wave is never unfair. Realm roster only WEIGHTS the unlocked set.
-const INTRO_GATE: Partial<Record<EnemyKind, number>> = {
-  runner: 0, grunt: 0, brute: 0.03, swarm: 0.1, flyer: 0.17, shielded: 0.2, healer: 0.42,
+// ===========================================================================
+//  DIFFICULTY CURVE (harness-tuned — validated by `npm run difficulty` and the
+//  simcheck beatability gate). `prog` = realmOrder + localDepth, i.e. 0 at the
+//  very first stop … ~6 at the deepest Hollow stop. The old curve compressed each
+//  realm into 1/6 of a shallow [1, 2.3] band, so an un-upgraded mono/trio build
+//  cruised ~15 levels with "no problems" — all the depth (upgrades, branches,
+//  reactions, fusions) was optional. This curve is:
+//    · STEEP EARLY  — the sqrt term bites by the realm-0 midpoint (~L6-8), so a
+//      flat, un-upgraded defence can no longer out-DPS the wave.
+//    · SUSTAINED    — the linear term keeps demanding more DPS every realm, so
+//      the player must keep upgrading, branching and comboing to keep pace.
+//  No immunities are introduced anywhere — difficulty is HP / count / composition
+//  only; the combat model's 0.5× floor is untouched.
+// ===========================================================================
+// Two-term shape. The key insight: the beatability CEILING (the @16 upgraded-spread
+// bot must clear all 192) binds in the DEEP realms — the early realms have enormous
+// headroom. So we lift them independently:
+//   · EARLY BUMP  — a term that ramps across the first realm then SATURATES (flat
+//     thereafter), so Emberwaste stops being a coast (an un-upgraded 3-tower build
+//     can't keep pace by mid-realm-0) WITHOUT inflating the deep realms it can't
+//     afford to inflate. This is where the "played 15 levels, no problems" bug dies.
+//   · SUPERLINEAR — takes over past realm 0 and stays RELENTLESS through the deep
+//     realms (every realm out-demands the last — a ramp, not a wall-then-plateau).
+// Difficulty is HP/count/composition only — no immunities, the 0.5× floor is intact.
+const HP_E = 4.5      // early bump magnitude (fully applied by ~realm-0 exit)
+const HP_ESAT = 0.85  // prog at which the early bump saturates (~L20)
+const HP_K = 2.0      // late coefficient
+const HP_P = 1.15     // mild superlinear — relentless without exploding the deep realms
+const CNT_PER = 0.5   // extra enemies per prog unit — crowd pressure ramps into the late game
+const CNT_EARLY = 4.0 // early count kicker: denser waves stress a thin board's COVERAGE
+
+function difficultyHp(prog: number): number {
+  const p = Math.max(0, prog)
+  return 1 + HP_E * Math.min(1, p / HP_ESAT) + HP_K * Math.pow(p, HP_P)
 }
 
-function unlockedKinds(globalDepth: number): EnemyKind[] {
+// GLOBAL introduction gates, in `prog` units (realmOrder + localDepth ∈ [0,6]). An
+// enemy appears only once its gate is reached. Anti-air (Storm) is owned from L6,
+// so flyers gate at prog ≥ 0.55 (well after) — never unfair. Threats are pulled
+// EARLIER than before so the very first realm already interleaves types that no
+// single tower answers, forcing a varied defence. Realm roster only WEIGHTS the
+// unlocked set; the 0.5× no-immunity rule keeps ≥2 viable answers to each threat.
+const INTRO_GATE: Partial<Record<EnemyKind, number>> = {
+  runner: 0, grunt: 0, brute: 0.18, swarm: 0.35, flyer: 0.55, shielded: 0.7, healer: 1.15,
+}
+
+function unlockedKinds(prog: number): EnemyKind[] {
   const out: EnemyKind[] = []
   for (const kind of ['runner', 'grunt', 'brute', 'swarm', 'flyer', 'shielded', 'healer'] as EnemyKind[]) {
-    if (globalDepth >= (INTRO_GATE[kind] ?? 1)) out.push(kind)
+    if (prog >= (INTRO_GATE[kind] ?? 1e9)) out.push(kind)
   }
   return out
 }
@@ -259,9 +298,9 @@ function pickKind(rng: RNG, unlocked: EnemyKind[], roster: EnemyKind[]): EnemyKi
   return weighted.length ? rng.pick(weighted) : 'runner'
 }
 
-function entryCount(kind: EnemyKind, globalDepth: number, waveFrac: number): number {
+function entryCount(kind: EnemyKind, prog: number, waveFrac: number): number {
   const t = KIND_TUNE[kind] ?? KIND_TUNE.runner
-  const n = (t.base + globalDepth * t.per) * (0.7 + 0.55 * waveFrac)
+  const n = (t.base + prog * t.per * CNT_PER + prog * CNT_EARLY) * (0.7 + 0.55 * waveFrac)
   return Math.max(1, Math.round(n))
 }
 
@@ -292,33 +331,62 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
   const path = buildPath(archetype, () => rng.next())
   const terrain = genTerrain(rng, path, rg.terrain, localDepth)
 
-  const baseHp = 1 + globalDepth * 1.3
+  const prog = realmOrder + localDepth
+  const baseHp = difficultyHp(prog)
   const waveCount = Math.max(5, Math.min(9, 5 + Math.round(localDepth * 4)))
-  const unlocked = unlockedKinds(globalDepth)
+  const unlocked = unlockedKinds(prog)
   const waves: Wave[] = []
+  // Draw a DISTINCT kind, different from anything already in this wave, so the
+  // interleaved threats genuinely demand different answers (no two runner-clones).
+  const pickDistinct = (used: EnemyKind[]): EnemyKind => {
+    for (let tries = 0; tries < 6; tries++) {
+      const cand = pickKind(rng, unlocked, rg.roster)
+      if (!used.includes(cand)) return cand
+    }
+    const rest = unlocked.filter((u) => !used.includes(u))
+    return rest.length ? rng.pick(rest) : pickKind(rng, unlocked, rg.roster)
+  }
   for (let wi = 0; wi < waveCount; wi++) {
     const waveFrac = waveCount <= 1 ? 1 : wi / (waveCount - 1)
-    const hpMul = +(baseHp * (0.85 + 0.5 * waveFrac)).toFixed(3)
+    // Intra-level ramp with a DEPTH-DEPENDENT opener: early realms open punchy
+    // (0.85×) so the lazy build is pressured from wave 1, but deep realms — where
+    // baseHp is huge — open gentler (down to ~0.6×) so wave 1 is survivable before
+    // any defence is built (else a 25× opener is an unavoidable death, not a fair
+    // fight). The peak (last wave) stays ~1.35× baseHp at every realm.
+    const openFloor = Math.max(0.6, Math.min(0.85, 0.85 - 0.045 * prog))
+    const hpMul = +(baseHp * (openFloor + (1.35 - openFloor) * waveFrac)).toFixed(3)
     const entries: WaveEntry[] = []
+    const used: EnemyKind[] = []
     const primary = pickKind(rng, unlocked, rg.roster)
-    entries.push(e(primary, entryCount(primary, globalDepth, waveFrac), (KIND_TUNE[primary]?.spacing ?? 0.5), hpMul))
-    if (waveFrac > 0.35 && rng.chance(0.7)) {
-      let secondary = pickKind(rng, unlocked, rg.roster)
-      if (secondary === primary && unlocked.length > 1) secondary = rng.pick(unlocked)
-      entries.push(e(secondary, Math.round(entryCount(secondary, globalDepth, waveFrac) * 0.7), (KIND_TUNE[secondary]?.spacing ?? 0.5), +(hpMul * 0.98).toFixed(3)))
+    used.push(primary)
+    entries.push(e(primary, entryCount(primary, prog, waveFrac), (KIND_TUNE[primary]?.spacing ?? 0.5), hpMul))
+    // SECONDARY threat — from the level's midpoint on, and always in the back half.
+    // Interleaving two archetypes that no single tower answers is the core "you need
+    // a mix" pressure, pulled in far earlier than the old 0.35 / 70%-chance gate.
+    if (unlocked.length > 1 && (waveFrac >= 0.4 || (waveFrac > 0.15 && rng.chance(0.6)))) {
+      const secondary = pickDistinct(used)
+      used.push(secondary)
+      entries.push(e(secondary, Math.round(entryCount(secondary, prog, waveFrac) * 0.72), (KIND_TUNE[secondary]?.spacing ?? 0.5), +(hpMul * 0.98).toFixed(3)))
     }
-    const clearBonus = Math.round(20 + globalDepth * 60 + wi * 4)
+    // TERTIARY threat — deep runs (prog high) throw a third distinct type into the
+    // final waves, so late levels are a true mixed assault that punishes mono builds.
+    if (unlocked.length > 2 && prog >= 1.2 && waveFrac >= 0.7) {
+      const tertiary = pickDistinct(used)
+      used.push(tertiary)
+      entries.push(e(tertiary, Math.max(1, Math.round(entryCount(tertiary, prog, waveFrac) * 0.55)), (KIND_TUNE[tertiary]?.spacing ?? 0.5), +(hpMul * 0.96).toFixed(3)))
+    }
+    const clearBonus = Math.round(18 + prog * 16 + wi * 4)
     waves.push(w(entries, clearBonus))
   }
 
   // Mid-realm mini-boss: a keeper ECHO caps the landmark's penultimate wave.
   if (isLandmark) {
-    const echoHp = +(0.7 + globalDepth * 0.5).toFixed(3)
-    waves.splice(waves.length - 1, 0, w([k(rg.keeperId, echoHp, true), e('grunt', Math.round(8 + globalDepth * 8), 0.5, baseHp)], Math.round(80 + globalDepth * 60)))
+    const echoHp = +(0.7 + prog * 0.28).toFixed(3)
+    waves.splice(waves.length - 1, 0, w([k(rg.keeperId, echoHp, true), e('grunt', Math.round(8 + prog * 4), 0.5, baseHp)], Math.round(80 + prog * 22)))
   }
   // Emberwaste's generated finale — a full Kaelen fight.
   if (isFinale) {
-    waves.push(w([k(rg.keeperId), e('brute', Math.round(4 + globalDepth * 4), 0.9, baseHp), e('runner', 12, 0.4, baseHp)], Math.round(140 + globalDepth * 80)))
+    waves.push(w([k(rg.keeperId), e('brute', Math.round(4 + prog * 1.5), 0.9, baseHp), e('runner', 12, 0.4, baseHp)], Math.round(140 + prog * 28)))
   }
 
   const nameBase = isFinale
@@ -328,7 +396,14 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
       : rg.names[j % (rg.names.length - 1)]
   const name = isFinale ? nameBase : `${nameBase} ${rg.suffixes[j % rg.suffixes.length]}`
 
-  const startGold = Math.round(240 + globalDepth * 150 + (isLandmark || isFinale ? 30 : 0))
+  // Opening gold rises with depth so a deep-realm player can actually establish a
+  // defence before the (now much tankier) wave 1 lands — without being so rich that
+  // cheap-spam works (the steep HP curve out-scales an un-upgraded board regardless).
+  // A REALM-OPENER cushion softens the roster shift each realm opens on (the first
+  // stops have few waves to bank gold yet already face the realm's harsh new mix) —
+  // so the boundary is a fair step-up, not a spike only one build survives.
+  const opener = localDepth < 0.25 ? Math.round((0.25 - localDepth) * 180) : 0
+  const startGold = Math.round(240 + prog * 45 + opener + (isLandmark || isFinale ? 40 : 0))
   const startLives = Math.max(12, Math.round(20 - globalDepth * 6))
   const baseCoins = Math.round(30 + globalDepth * 130 + (isLandmark ? 20 : 0) + (isFinale ? 40 : 0))
 
@@ -344,13 +419,27 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
   }
 }
 
-// Wrap a hand-authored finale table into a LevelDef.
-function finaleLevel(id: string, rg: RealmGen): LevelDef {
+// Wrap a hand-authored finale table into a LevelDef. The loved finale wave TABLES
+// were tuned to the OLD shallow curve (hpMul ~1.1-1.9); on the new steep curve the
+// generated levels leading up to them out-scale them, which would leave each realm
+// ENDING in a difficulty crater at its boss. We lift every entry's hpMul onto the
+// new curve by the same factor the generator gained at this prog, so the finale
+// stays the realm's hardest stop — its authored SHAPE (which wave is spiky, the
+// keeper beats) preserved, only the magnitude re-based. Beatability is re-proven by
+// the simcheck gate on every one of these levels.
+function finaleLevel(id: string, rg: RealmGen, realmOrder: number): LevelDef {
   const f = FINALE_WAVES[id]
+  const prog = realmOrder + 1 // a finale sits at the realm's deepest prog
+  const oldBase = 1 + (prog / REALM_GEN.length) * 1.3 // the curve the tables were tuned to
+  const scale = +(difficultyHp(prog) / oldBase).toFixed(3)
+  const waves: Wave[] = f.waves.map((wave) => ({
+    clearBonus: wave.clearBonus,
+    entries: wave.entries.map((en) => ({ ...en, hpMul: +(((en.hpMul ?? 1) * scale)).toFixed(3) })),
+  }))
   return {
     id, index: 0, name: f.name, blurb: f.blurb, lanes: f.lanes,
     landmark: 'finale', startGold: f.startGold, startLives: f.startLives, baseCoins: f.baseCoins,
-    palette: f.palette, waves: f.waves,
+    palette: f.palette, waves,
   }
 }
 
@@ -377,7 +466,7 @@ export function buildCampaign(perWorld = LEVELS_PER_WORLD): BuiltCampaign {
       if (j === 0 && rg.id === 'emberwaste') {
         lvl = { ...L1_TUTORIAL } // the tutorial opener keeps id 'l1'
       } else if (isFinale && rg.finaleId !== 'w0_finale' && FINALE_WAVES[rg.finaleId]) {
-        lvl = finaleLevel(rg.finaleId, rg) // reuse the hand-authored keeper level
+        lvl = finaleLevel(rg.finaleId, rg, realmOrder) // reuse the hand-authored keeper level
       } else {
         const id = isFinale ? rg.finaleId : `w${realmOrder}_${j}`
         const unlock = UNLOCK_AT[rg.id]?.j === j ? UNLOCK_AT[rg.id].tower : undefined
