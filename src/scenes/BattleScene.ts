@@ -154,9 +154,10 @@ export class BattleScene extends Phaser.Scene {
   // the game is playable without a pointer. Bindings live in appSettings.keybinds.
   private onKeyDown = (e: KeyboardEvent) => this.handleKey(e)
   private lastTime = 0
-  private hitstopT = 0 // brief slow-mo on big kills (view pacing only)
+  private hitstopT = 0 // active freeze-frame timer (view + sim pacing only)
   private lastSimState = ''
   private reactCalloutCd = 0 // throttles the big reaction slam (bursts still always fire)
+  private killStopCd = 0 // throttles elite-kill hitstop so a dense elite cull can't chain-freeze the sim
 
   // THE GREYING as rendering: the battlefield starts drained and colour returns
   // as the player clears it (CSS saturate filter on the 3D canvas — cheap, GPU-composited).
@@ -318,6 +319,7 @@ export class BattleScene extends Phaser.Scene {
     this.hitstopT = 0
     this.lastSimState = ''
     this.reactCalloutCd = 0
+    this.killStopCd = 0
     this.greySat = -1
     this.greyBloomT = 0
     this.partyIds = party.map((p) => p.heroId)
@@ -475,10 +477,19 @@ export class BattleScene extends Phaser.Scene {
     if (!this.sim) return
     const dt = Math.min(0.05, delta / 1000)
     let simDt = this.paused ? 0 : dt * this.gameSpeed
-    // hitstop: big kills bite for a beat (render keeps animating at full rate)
+    // HITSTOP — a true freeze-frame (40–70ms) on reaction detonations + boss/elite
+    // kills: the single best "weight" trick. We halt BOTH the sim step (enemy screen
+    // positions are direct reads of sim x/y, so a zero step holds them) AND the view
+    // clock (viewDt→0 freezes the walk-cycle, camera, bloom surge and the burst
+    // particles mid-flight). Nothing moves during the freeze, so there is ZERO
+    // resume-snap — the whole board locks for a beat, then punches back to life.
+    // Freezes are capped (see the Math.max sites) so it always reads as a bite,
+    // never a drag. Wall-clock timers below still use real dt.
+    let viewDt = dt
     if (this.hitstopT > 0) {
       this.hitstopT -= dt
-      simDt *= 0.12
+      simDt = 0
+      viewDt = 0
     }
     // Scripted input (attract reel) is injected on exact fixed-step boundaries
     // so the showcase run replays identically at any frame rate or ?speed=.
@@ -529,6 +540,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (this.reactCalloutCd > 0) this.reactCalloutCd -= dt
+    if (this.killStopCd > 0) this.killStopCd -= dt
     this.updateGreying(dt)
     this.updateAudioBed(dt)
     this.battleT += dt
@@ -546,7 +558,7 @@ export class BattleScene extends Phaser.Scene {
     this.view.setBaseIntegrity(this.sim.baseIntegrity)
 
     this.view.syncFrom(this.selectedId)
-    this.view.render(dt)
+    this.view.render(viewDt) // viewDt=0 during hitstop → a frozen frame (see update())
     this.hud.update(this.sim, this.hudCtx())
 
     // state-driven overlays
@@ -1770,9 +1782,10 @@ export class BattleScene extends Phaser.Scene {
         break
       }
       case 'death':
-        this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind)
+        this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind, ev.elite)
         battleSfx.kill(this.sim.comboCount, ev.boss, panFor(ev.x))
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = 0.22; this.view.bloomPulse(0.3); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = Math.max(this.hitstopT, 0.07); this.view.bloomPulse(0.4); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
+        else if (ev.elite && this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.055); this.killStopCd = 0.45; this.view.bloomPulse(0.18); duckPunch(0.35); if (!this.attract) haptic(HAPTIC.reaction) }
         // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
         if (ev.kind !== 'keeper' && unlockEnemyCodex(ev.kind)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         break
@@ -1809,7 +1822,7 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
         // (renamed from SHATTER — that name now belongs to the Water+Storm reaction)
         if (ev.supercharged) {
-          this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.12); duckPunch(0.4)
+          this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.06); duckPunch(0.4)
           const tip = ev.points[ev.points.length - 1]
           battleSfx.reaction(undefined, tip ? panFor(tip[0]) : 0)
         }
@@ -1821,11 +1834,27 @@ export class BattleScene extends Phaser.Scene {
       case 'aoe':
         this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, ev.alpha)
         break
-      case 'combo':
+      case 'combo': {
+        // The streak should feel EUPHORIC. Every 5th kill pitches the sting up the
+        // ladder (battleSfx.combo climbs with count); the big milestones (x10 / x25 /
+        // x50 and every x25 after) earn a celebratory slam — a named callout, a
+        // colour flash, a bloom surge and a fat pitched sting — the peak beat.
+        const big = ev.count === 10 || ev.count === 25 || (ev.count >= 50 && ev.count % 25 === 0)
         this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), 'combo', 1.1)
-        if (ev.milestone) { this.hud.flash(comboHue(ev.count), 0.25); battleSfx.combo(ev.count) }
-        if (ev.milestone && ev.count >= 10) this.tryBark('kill')
+        if (big) {
+          this.hud.reactionCallout(`COMBO ×${ev.count}`, comboHue(ev.count), 'KILL STREAK')
+          this.hud.flash(comboHue(ev.count), 0.3, 240)
+          if (!appSettings.reducedMotion()) this.view.bloomPulse(0.3)
+          battleSfx.combo(ev.count)
+          duckPunch(0.4)
+          if (!this.attract) haptic(HAPTIC.reaction)
+          this.tryBark('kill')
+        } else if (ev.milestone) {
+          this.hud.flash(comboHue(ev.count), 0.18, 220)
+          battleSfx.combo(ev.count)
+        }
         break
+      }
       case 'heal':
         if (ev.radius > 0) this.view.fxAoe(ev.x, ev.y, ev.radius, 0x6bffb0, 0.5)
         else this.floatAt(ev.x, ev.y, `+${ev.amount}`, 0x6bffb0, 18)
@@ -1898,15 +1927,18 @@ export class BattleScene extends Phaser.Scene {
           this.view.fxAoe(ev.x, ev.y, ev.radius, ev.color, 0.5)
         }
         break
-      case 'reaction':
-        // FRAME-LOCK: the distinct reaction SFX, the flash, the shake and the
-        // music-duck all fire off THIS one event so the hit lands as a single
-        // A/V punch (banners below are deferred cosmetics, not the hit).
-        this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2, ev.key)
-        this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24, 'combo', 1.1)
-        this.view.shake(0.05)
+      case 'reaction': {
+        // FRAME-LOCK: the distinct reaction SFX, the burst, the shake, the haptic
+        // and the music-duck all fire off THIS one event so the detonation lands as
+        // a single A/V punch. `mag` scales it so a big AoE reaction hits harder than
+        // a light mark ("bigger reactions = bigger hit"). The LOUD beat (callout +
+        // screen-flash + bloom surge + hitstop) is throttled below so a peak-density
+        // burst never strobes or over-freezes the board.
+        const mag = REACTION_MAG[ev.key] ?? 0.75
+        this.view.fxReaction(ev.x, ev.y, ev.radius, ev.color, ev.color2, ev.key, mag)
+        this.floatAt(ev.x, ev.y, ev.name + '!', ev.color, 24 + Math.round(mag * 8), 'combo', 1.1)
         if (!this.attract) haptic(HAPTIC.reaction) // sharp single bump on detonation
-        duckPunch(0.45)
+        duckPunch(0.4 + mag * 0.2)
         battleSfx.reaction(ev.key, panFor(ev.x))
         // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
         if (this.demoMode && ev.key === 'shatter' && !this.shatterBloomDone) {
@@ -1925,9 +1957,15 @@ export class BattleScene extends Phaser.Scene {
           window.setTimeout(() => this.hud.banner('THE COLOUR RETURNS', 0x9fdcff), 500)
         }
         if (this.reactCalloutCd <= 0) {
+          // the throttled LOUD beat: the named slam + a brief element-flash + a bloom
+          // surge + the freeze-frame — gated so a burst of reactions can't strobe.
           this.hud.reactionCallout(ev.name, ev.color)
           this.reactCalloutCd = 0.55
-          this.hitstopT = Math.max(this.hitstopT, 0.06)
+          this.hitstopT = Math.max(this.hitstopT, 0.045 + mag * 0.025) // 40–70ms, scaled
+          if (!appSettings.reducedMotion()) {
+            this.hud.flash(ev.color, 0.1 + mag * 0.12, 200) // brief element-colored surge (opacity-damped under reduce-motion)
+            this.view.bloomPulse(0.14 + mag * 0.2)
+          }
         }
         if (unlockCodex('field-reactions')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         // CROWN-JEWEL depth, made legible: log this reaction to the discovery
@@ -1937,6 +1975,7 @@ export class BattleScene extends Phaser.Scene {
         }
         this.tryBark('reaction')
         break
+      }
       case 'fuse':
         // FUSION FORGED — an earned spectacle: the partner flares out, the host
         // erupts in both colours, and the new tower's name slams on screen.
@@ -1945,7 +1984,7 @@ export class BattleScene extends Phaser.Scene {
         this.view.bloomPulse(0.35)
         this.hud.flash(ev.color, 0.3)
         this.hud.reactionCallout(`⚛ ${ev.name}`, ev.color)
-        this.hitstopT = Math.max(this.hitstopT, 0.1)
+        this.hitstopT = Math.max(this.hitstopT, 0.07)
         battleSfx.fusion()
         if (unlockCodex('field-fusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         this.tryBark('fusion')
@@ -2058,6 +2097,21 @@ export class BattleScene extends Phaser.Scene {
     this.hud?.dispose()
     this.view?.dispose()
   }
+}
+
+// Detonation "weight" per reaction — drives burst size, camera bite, flash + freeze
+// so the nine read on a scale: a wide AoE boom SLAMS, a single-target mark taps.
+// (View/FX only — never touches the sim's damage/effect math.)
+const REACTION_MAG: Record<string, number> = {
+  flashover: 1, // Fire+Storm — big AoE explosion
+  shatter: 1, // Water+Storm — heavy burst (doubled vs armor)
+  eclipse: 0.95, // Light+Dark — area stun
+  conduct: 0.85, // Storm+Light — chain arc
+  thermal: 0.8, // Fire+Water — armor break + burst
+  wildfire: 0.8, // Fire+Nature — spreading burn
+  overgrow: 0.75, // Water+Nature — area root/slow
+  blight: 0.7, // Nature+Dark — poison field
+  amplify: 0.55, // Arcane — a vulnerability MARK, not a blast
 }
 
 function comboHue(count: number): number {

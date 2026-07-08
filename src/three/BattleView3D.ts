@@ -1204,7 +1204,10 @@ export class BattleView3D {
     geo.setAttribute('position', new THREE.BufferAttribute(this.pPos, 3))
     geo.setAttribute('color', new THREE.BufferAttribute(this.pCol, 3))
     this.disposables.push(geo)
-    const mat = new THREE.PointsMaterial({ size: 0.22, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true })
+    // toneMapped:false — these are ADDITIVE gameplay bursts (kills, reactions, hero
+    // FX), not lit surfaces; letting ACES compress them washed the element colours
+    // toward white. Exempting them keeps every spark vivid + saturated ("units pop").
+    const mat = new THREE.PointsMaterial({ size: 0.22, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false })
     this.disposables.push(mat)
     this.particles = new THREE.Points(geo, mat)
     this.particles.frustumCulled = false
@@ -1230,7 +1233,7 @@ export class BattleView3D {
     geo.setAttribute('position', new THREE.BufferAttribute(this.motePos, 3))
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
     this.disposables.push(geo)
-    const mat = new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true })
+    const mat = new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false })
     this.disposables.push(mat)
     this.motes = new THREE.Points(geo, mat)
     this.motes.frustumCulled = false
@@ -2585,7 +2588,7 @@ export class BattleView3D {
   // ---------------------------------------------------------------- transient FX
   private pushRing(simX: number, simY: number, radiusPx: number, color: number, alpha: number): void {
     const geo = new THREE.RingGeometry(0.6, 0.72, 32)
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: alpha, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: alpha, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.rotation.x = -Math.PI / 2
     mesh.position.set(wx(simX), 0.3, wz(simY))
@@ -2640,12 +2643,15 @@ export class BattleView3D {
     this.transients.push({ obj: ghost, mat: gm, t: 0, life: boss ? 0.5 : 0.4, kind: 'strike', fade: false })
   }
 
-  fxDeath(simX: number, simY: number, color: number, boss: boolean, kind?: EnemyKind): void {
-    this.emitParticles(wx(simX), 0.7, wz(simY), color, boss ? 40 : 14, boss ? 4 : 3)
-    this.emitParticles(wx(simX), 0.7, wz(simY), 0xffffff, boss ? 14 : 4, boss ? 3 : 2.2)
+  fxDeath(simX: number, simY: number, color: number, boss: boolean, kind?: EnemyKind, elite = false): void {
+    // Three kill tiers so the burst reads the target's weight: a grunt pops, an
+    // affixed ELITE gets a fatter soul-burst + its own shockwave ring, the Titan
+    // gets the screen-filling finale below.
+    this.emitParticles(wx(simX), 0.7, wz(simY), color, boss ? 40 : elite ? 24 : 14, boss ? 4 : elite ? 3.4 : 3)
+    this.emitParticles(wx(simX), 0.7, wz(simY), 0xffffff, boss ? 14 : elite ? 8 : 4, boss ? 3 : elite ? 2.6 : 2.2)
     // white flash sphere
     const geo = new THREE.SphereGeometry(0.3, 10, 8)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(wx(simX), 0.7, wz(simY))
     this.scene.add(mesh)
@@ -2675,7 +2681,13 @@ export class BattleView3D {
       }
     }
     // ground shockwave on every kill; the Titan gets a screen-filling finale.
-    this.pushRing(simX, simY, boss ? 120 : 55, color, boss ? 0.9 : 0.5)
+    this.pushRing(simX, simY, boss ? 120 : elite ? 82 : 55, color, boss ? 0.9 : elite ? 0.7 : 0.5)
+    if (!boss && elite) {
+      // elite pop: a bright soul-flare + a firmer camera bite (short of the boss set-piece)
+      this.spellFlash(simX, simY, 90, 0xfff2ff, 1.6)
+      this.shake(0.09)
+      this.pushIn(0.4)
+    }
     if (boss) {
       // stacked shock rings + a bright flare + a hard camera bite — a set-piece end
       this.pushRing(simX, simY, 210, 0xffffff, 0.85)
@@ -2838,25 +2850,31 @@ export class BattleView3D {
   // ELEMENTAL REACTION detonation: two-tone burst + shock ring + flash + camera bite.
   // The `key` (optional) picks a lingering ground-decal flavour; the reaction's own
   // two colours drive a richer 4-stop particle ramp so each of the nine reads chromatic.
-  fxReaction(simX: number, simY: number, radiusPx: number, color: number, color2: number, key?: string): void {
+  // `mag` (~0.5 light · 0.75 med · 1.0 big) scales the whole detonation so a big AoE
+  // reaction (FLASHOVER / SHATTER / ECLIPSE) lands harder than a light mark (AMPLIFY):
+  // more sparks, a second shock ring, a stronger flash + camera bite. Defaults to 1
+  // so fusion / wyrm-ult calls stay full-force.
+  fxReaction(simX: number, simY: number, radiusPx: number, color: number, color2: number, key?: string, mag = 1): void {
     const r = Math.max(60, radiusPx || 70)
+    const m = Math.max(0.4, mag)
     this.pushRing(simX, simY, r + 30, color, 0.95)
-    this.spellFlash(simX, simY, r, color2, 1.6)
-    this.spellFlash(simX, simY, r * 0.62, color, 1.05) // inner element-keyed bloom core
+    if (m >= 0.85) this.pushRing(simX, simY, r + 74, color2, 0.55) // big reactions: a second, wider shock ring
+    this.spellFlash(simX, simY, r, color2, 1.6 * (0.82 + 0.28 * m))
+    this.spellFlash(simX, simY, r * 0.62, color, 1.05 * (0.82 + 0.28 * m)) // inner element-keyed bloom core
     const x = wx(simX)
     const z = wz(simY)
     // 4-stop ramp: primary → blended mid → secondary → white spark core
     _reactA.setHex(color); _reactB.setHex(color2)
     const mid = _reactA.lerp(_reactB, 0.5).getHex() // _reactA now holds the blend
-    this.emitParticles(x, 0.8, z, color, 20, 4.4)
-    this.emitParticles(x, 0.86, z, mid, 12, 3.7)
-    this.emitParticles(x, 0.8, z, color2, 14, 3.3)
-    this.emitParticles(x, 0.92, z, 0xffffff, 8, 2.6)
+    this.emitParticles(x, 0.8, z, color, Math.round(14 + 14 * m), 4.4)
+    this.emitParticles(x, 0.86, z, mid, Math.round(8 + 8 * m), 3.7)
+    this.emitParticles(x, 0.8, z, color2, Math.round(9 + 9 * m), 3.3)
+    this.emitParticles(x, 0.92, z, 0xffffff, Math.round(5 + 5 * m), 2.6)
     // lingering colored ground decal — the "colour + action" beat, and safe against
     // the recessive-land discipline because it always fades back out.
     this.fxGroundDecal(simX, simY, r, color, color2, key)
-    this.shake(0.085)
-    this.pushIn(0.35)
+    this.shake(0.055 + 0.055 * m)
+    this.pushIn(0.22 + 0.26 * m)
     // big reaction burst → briefly fade the backdrop's OWN ambient particles so the
     // gameplay FX own the frame (dynamic particle budget, not a fixed one)
     this.atmoReactFade = 1
@@ -2913,7 +2931,7 @@ export class BattleView3D {
       this.emitParticles(wx(simX), 0.8, wz(simY), 0xffb15c, 60, 5)
       this.emitParticles(wx(simX), 0.8, wz(simY), 0xffd54a, 30, 4)
       const geo = new THREE.SphereGeometry(wr(radiusPx) * 0.6, 12, 10)
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.position.set(wx(simX), 0.8, wz(simY))
       this.scene.add(mesh)
@@ -2973,7 +2991,7 @@ export class BattleView3D {
 
   private spellFlash(simX: number, simY: number, radiusPx: number, color: number, scale: number): void {
     const geo = new THREE.SphereGeometry(Math.max(0.2, wr(radiusPx) * 0.5), 12, 10)
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(wx(simX), 0.8, wz(simY))
     this.scene.add(mesh)

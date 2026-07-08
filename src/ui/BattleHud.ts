@@ -61,6 +61,9 @@ export interface HudContext {
 function hex(c: number): string {
   return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
 }
+function hexA(c: number, a: number): string {
+  return `rgba(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255},${a})`
+}
 
 // Center-banner priority tiers. Boss beats wave / notifications so a boss moment is
 // never overwritten by an incidental banner during the same wave. Reaction callouts
@@ -140,7 +143,11 @@ const CSS = `
    the boss bar / telegraph / anything floating over the board */
 .eld-combo { display:none; align-items:center; background:linear-gradient(180deg,var(--panel2),var(--panel));
   border:1px solid var(--stroke); border-radius:16px; padding:8px 12px; font-weight:900; font-size:15px;
-  line-height:1; white-space:nowrap; box-shadow:0 4px 14px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
+  line-height:1; white-space:nowrap; box-shadow:0 4px 14px rgba(0,0,0,.35); font-variant-numeric:tabular-nums;
+  /* GROW + GLOW with the multiplier (scale/glow set inline, capped so it never
+     overruns the top bar); transition makes the climb read as a living swell */
+  transform:scale(var(--cs,1)); transform-origin:center;
+  transition:transform .22s cubic-bezier(.2,1.5,.35,1), box-shadow .3s ease, border-color .3s ease; }
 .eld-combo.show { display:flex; }
 /* milestone pop: a quick punch on the chip every 10 kills, then it settles back —
    the "juice" without a giant repeating center banner */
@@ -930,12 +937,21 @@ export class BattleHud {
     // combo readout — a compact persistent chip in the top bar, with a brief pop
     // on each 10-kill milestone (never a repeating center banner)
     if (sim.comboCount >= 2) {
-      this.comboEl.textContent = `COMBO ×${sim.comboCount}  ·  ${sim.comboMult.toFixed(2)}×`
-      this.comboEl.style.color = hex(comboColor(sim.comboCount))
+      const cc = sim.comboCount
+      const col = comboColor(cc)
+      this.comboEl.textContent = `COMBO ×${cc}  ·  ${sim.comboMult.toFixed(2)}×`
+      this.comboEl.style.color = hex(col)
+      // grow + glow with the streak — capped so the chip never overruns the bar
+      this.comboEl.style.setProperty('--cs', (1 + Math.min(0.2, cc * 0.006)).toFixed(3))
+      this.comboEl.style.boxShadow = `0 4px 14px rgba(0,0,0,.35), 0 0 ${Math.round(6 + Math.min(30, cc) * 0.8)}px ${hexA(col, Math.min(0.8, 0.14 + cc * 0.028))}`
+      this.comboEl.style.borderColor = hexA(col, Math.min(0.9, 0.3 + cc * 0.028))
       this.comboEl.classList.add('show')
-      if (Math.floor(sim.comboCount / 10) > Math.floor(this.lastComboCount / 10)) this.popClass(this.comboEl, 'pop', 360)
+      if (Math.floor(cc / 10) > Math.floor(this.lastComboCount / 10)) this.popClass(this.comboEl, 'pop', 360)
     } else {
       this.comboEl.classList.remove('show')
+      this.comboEl.style.setProperty('--cs', '1')
+      this.comboEl.style.boxShadow = ''
+      this.comboEl.style.borderColor = ''
     }
     this.lastComboCount = sim.comboCount
 
@@ -1940,12 +1956,12 @@ export class BattleHud {
   // up ~8% so a boss-wave combo can slam two reactions ~0.4s apart without one
   // erasing the other; a third rolls the oldest off.
   private reactEls: HTMLElement[] = []
-  reactionCallout(name: string, color: number): void {
+  reactionCallout(name: string, color: number, sub = 'ELEMENTAL REACTION'): void {
     if (this.reactEls.length >= 2) this.reactEls.shift()?.remove()
     const d = el('div', 'eld-react', name)
     d.style.color = hex(color)
     if (this.reactEls.length === 1) d.style.top = '19%' // second slot sits above the first
-    d.append(el('span', 'rx-sub', 'ELEMENTAL REACTION'))
+    d.append(el('span', 'rx-sub', sub))
     this.fxLayer.append(d)
     this.reactEls.push(d)
     window.setTimeout(() => {

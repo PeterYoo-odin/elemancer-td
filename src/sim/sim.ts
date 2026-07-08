@@ -263,7 +263,7 @@ export interface SimProjectile {
 // Semantic events — the VIEW decides the juice (shake/flash/particles) from these.
 export type SimEvent =
   | { t: 'damage'; x: number; y: number; amount: number; eff: Effectiveness; combo: number }
-  | { t: 'death'; x: number; y: number; kind: EnemyKind; color: number; boss: boolean }
+  | { t: 'death'; x: number; y: number; kind: EnemyKind; color: number; boss: boolean; elite: boolean }
   | { t: 'shieldBreak'; x: number; y: number; radius: number }
   | { t: 'leak'; x: number; y: number; kind: EnemyKind; boss: boolean; dmg: number }
   | { t: 'towerFire'; x: number; y: number; tx: number; ty: number; color: number; kind: TowerKind }
@@ -2186,7 +2186,7 @@ export class Sim {
     const reward = Math.max(0, Math.round(rewardRaw))
     this.addGold(reward)
     this.emit({ t: 'gold', x: e.x, y: e.y, amount: reward })
-    this.emit({ t: 'death', x: e.x, y: e.y, kind: e.kind, color: e.def.color, boss: !!e.def.boss })
+    this.emit({ t: 'death', x: e.x, y: e.y, kind: e.kind, color: e.def.color, boss: !!e.def.boss, elite: e.elite })
     // A Keeper is never slain — the grey breaks and the colour comes home.
     if (e.keeperId !== '') {
       const k = KEEPER_BY_ID[e.keeperId]

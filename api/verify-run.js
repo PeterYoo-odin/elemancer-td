@@ -4732,7 +4732,7 @@ var Sim = class {
     const reward = Math.max(0, Math.round(rewardRaw));
     this.addGold(reward);
     this.emit({ t: "gold", x: e3.x, y: e3.y, amount: reward });
-    this.emit({ t: "death", x: e3.x, y: e3.y, kind: e3.kind, color: e3.def.color, boss: !!e3.def.boss });
+    this.emit({ t: "death", x: e3.x, y: e3.y, kind: e3.kind, color: e3.def.color, boss: !!e3.def.boss, elite: e3.elite });
     if (e3.keeperId !== "") {
       const k2 = KEEPER_BY_ID[e3.keeperId];
       if (k2) this.emitKeeper("redeemed", e3, k2, TILE * 3);
