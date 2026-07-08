@@ -157,7 +157,7 @@ export class BattleScene extends Phaser.Scene {
   private hitstopT = 0 // active freeze-frame timer (view + sim pacing only)
   private lastSimState = ''
   private reactCalloutCd = 0 // throttles the big reaction slam (bursts still always fire)
-  private killStopCd = 0 // throttles elite-kill hitstop so a dense elite cull can't chain-freeze the sim
+  private killStopCd = 0 // throttles the frequent minor freezes (elite kills, shield breaks) so a dense cull / pack-break can't chain-freeze the sim into a stutter
 
   // THE GREYING as rendering: the battlefield starts drained and colour returns
   // as the player clears it (CSS saturate filter on the 3D canvas — cheap, GPU-composited).
@@ -1793,7 +1793,9 @@ export class BattleScene extends Phaser.Scene {
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
         this.view.fxAoe(ev.x, ev.y, ev.radius + 20, 0x9fdcff, 0.9)
         this.view.shake(0.05)
-        this.hitstopT = Math.max(this.hitstopT, 0.04)
+        // a small satisfying freeze, but THROTTLED — a shielded pack breaking across
+        // consecutive frames must not chain hard-freezes into a stutter.
+        if (this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.04); this.killStopCd = 0.4 }
         battleSfx.shieldBreak(panFor(ev.x))
         break
       case 'leak': {
@@ -1805,7 +1807,9 @@ export class BattleScene extends Phaser.Scene {
         this.view.enemyStrike(ev.x, ev.y, ev.kind, ev.boss) // wind-up → lunge → strike the base
         this.floatAt(ev.x, ev.y - 30, `−${ev.dmg}`, heavy ? 0xff3b6b : 0xff8a9a, heavy ? 32 : 24, 'crit')
         this.view.heroHurtAll() // the line broke — every fielded hero flinches
-        if (heavy) this.hitstopT = Math.max(this.hitstopT, 0.06)
+        // NB: no hitstop on a breach — freezing the frame while you're LOSING lives
+        // reads as a hitch, and breaches cluster; the edge-flash + shake + strike
+        // already sell the dread. Freezes are reserved for the player's WINS.
         battleSfx.leak(ev.boss, panFor(ev.x))
         this.leakKinds[ev.kind] = (this.leakKinds[ev.kind] ?? 0) + 1 // death teaches
         break
@@ -1841,16 +1845,16 @@ export class BattleScene extends Phaser.Scene {
         // colour flash, a bloom surge and a fat pitched sting — the peak beat.
         const big = ev.count === 10 || ev.count === 25 || (ev.count >= 50 && ev.count % 25 === 0)
         this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), 'combo', 1.1)
+        const reduced = appSettings.reducedMotion()
         if (big) {
           this.hud.reactionCallout(`COMBO ×${ev.count}`, comboHue(ev.count), 'KILL STREAK')
-          this.hud.flash(comboHue(ev.count), 0.3, 240)
-          if (!appSettings.reducedMotion()) this.view.bloomPulse(0.3)
+          if (!reduced) { this.hud.flash(comboHue(ev.count), 0.3, 240); this.view.bloomPulse(0.3) }
           battleSfx.combo(ev.count)
           duckPunch(0.4)
           if (!this.attract) haptic(HAPTIC.reaction)
           this.tryBark('kill')
         } else if (ev.milestone) {
-          this.hud.flash(comboHue(ev.count), 0.18, 220)
+          if (!reduced) this.hud.flash(comboHue(ev.count), 0.18, 220)
           battleSfx.combo(ev.count)
         }
         break

@@ -1233,7 +1233,7 @@ export class BattleView3D {
     geo.setAttribute('position', new THREE.BufferAttribute(this.motePos, 3))
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
     this.disposables.push(geo)
-    const mat = new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false })
+    const mat = new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true })
     this.disposables.push(mat)
     this.motes = new THREE.Points(geo, mat)
     this.motes.frustumCulled = false
