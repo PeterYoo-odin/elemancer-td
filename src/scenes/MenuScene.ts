@@ -4,6 +4,7 @@ import { FrontPage } from '../ui/FrontPage'
 import { showOdinSplash } from '../ui/OdinSplash'
 import { music } from '../ui/music'
 import { playCutsceneOnce } from '../ui/Cutscene'
+import { scheduleCloudPush } from '../game/cloudSave'
 
 // Main menu / hub. The visuals live in FrontPage (an HTML/CSS overlay, like
 // BattleHud); this scene owns its lifecycle, routes navigation to the other
@@ -20,6 +21,9 @@ export class MenuScene extends Phaser.Scene {
     // Solid backdrop behind the DOM overlay (visible for a frame on scene swaps).
     this.add.rectangle(width / 2, height / 2, width, height, 0x0a0716)
     music.setTrack('map')
+    // Mirror the (possibly just-updated) save up to the ranked account. Debounced
+    // + a no-op when unwired; every return to the hub keeps the cloud in sync.
+    scheduleCloudPush()
 
     this.front = new FrontPage({
       // FIRST SESSION: nothing cleared yet → skip the map and drop straight into
@@ -37,6 +41,7 @@ export class MenuScene extends Phaser.Scene {
       onEndless: () => this.scene.start('Battle', { endless: true }),
       onRoguelike: () => this.scene.start('Battle', { roguelike: true }),
       onDaily: () => this.scene.start('Daily'),
+      onRanked: () => this.scene.start('Ranked'),
       // Replay from settings: the user has interacted, so no tap gate needed.
       onReplayIntro: () => showOdinSplash({ gate: false }),
     })

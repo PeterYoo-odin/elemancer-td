@@ -7,6 +7,7 @@ import { WorkshopScene } from './scenes/WorkshopScene'
 import { ShopScene } from './scenes/ShopScene'
 import { HeroesScene } from './scenes/HeroesScene'
 import { DailyScene } from './scenes/DailyScene'
+import { RankedScene } from './scenes/RankedScene'
 import { showOdinSplash } from './ui/OdinSplash'
 import { markSplashDone } from './ui/bootGate'
 import { music } from './ui/music'
@@ -14,6 +15,7 @@ import { readLaunchParams } from './game/seedcode'
 import { playCutscene } from './ui/Cutscene'
 import { captureAttribution, reportAttribution, getReferrer } from './game/attribution'
 import { economy } from './game/economy'
+import { reconcileCloudSave } from './game/cloudSave'
 import { registerServiceWorker } from './ui/pwa'
 import { analytics } from './game/analytics'
 import { applyAccessibility } from './ui/a11y'
@@ -27,6 +29,11 @@ captureAttribution()
 economy.setReferredBy(getReferrer())
 reportAttribution()
 registerServiceWorker()
+
+// CLOUD SAVE reconcile — if this device's save is fresh/empty but the ranked
+// account holds progress (browser cleared / new device), pull it back down.
+// Fire-and-forget; a no-op when the ranked backend is unwired.
+void reconcileCloudSave()
 
 // Apply the saved accessibility preferences (colorblind palette + glyphs, text
 // scale, high contrast) to the document root BEFORE the first frame paints.
@@ -66,7 +73,7 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 1280,
   },
   render: { antialias: true, pixelArt: false },
-  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene],
+  scene: [BootScene, MenuScene, MapScene, BattleScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene],
 }
 
 new Phaser.Game(config)

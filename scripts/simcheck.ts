@@ -22,6 +22,12 @@ import { TOWER_ORDER } from '../src/game/towers'
 import { runScriptedDemo } from '../src/game/attractScript'
 import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
 import { resolveBond, RANKED_WYRM_LEVEL, WYRM_MAX_LEVEL } from '../src/game/wyrms'
+import {
+  rankedConfig, RunRecorder, replayRun, verifyRun, SIM_VERSION, logHash,
+  type DeclaredHero, type RankedRunRecord,
+} from '../src/game/ranked'
+import type { TowerKind } from '../src/game/towers'
+import type { SpellKey } from '../src/game/spells'
 
 // Stress runs are DECOUPLED from the campaign ladder: we build a bespoke max-size
 // level (6-lane serpentine) so regenerating LEVELS can never starve the ≥200
@@ -634,6 +640,135 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
   if (!p1.rogue.mutators.includes(weeklyMutator(weekIndex(inWindow)))) fail('weeklyPlan dropped the weekly headline mutator')
   if (!MUTATORS[p1.headline]) fail('weekly headline mutator id is not a real mutator')
   console.log(`  events ✓ — Emberwaste live in-window, weekly seed deterministic, headline+event mutators folded`)
+}
+
+// (6) RANKED REPLAY VERIFICATION — THE MOAT. Drive a canonical ranked run while
+// recording its input log, then RE-RUN that log through the SAME pure sim the
+// server uses and assert the replay reproduces the claimed score+wave exactly.
+// Then prove the gate rejects a tampered score and a version mismatch. This is
+// "the tower defense that literally cannot cheat", asserted headlessly.
+{
+  const KINDS: TowerKind[] = ['cannon', 'frost', 'flame', 'storm', 'arcane']
+  const HERO_IDS = ['ember', 'glacia', 'sylvan']
+  const REPLAY_CAP = 60 * 60 * 40 // matches ranked.ts REPLAY_TICK_CAP
+
+  // A deterministic bot that plays a ranked endless run to its natural DEATH
+  // (a deliberately capped, ~8-tower build always drowns), recording every
+  // successful command exactly as the live game would (stamped with sim.clock).
+  function driveRanked(seed: number): { rec: RankedRunRecord; score: number; wave: number; ops: Record<string, number> } {
+    const party: DeclaredHero[] = [{ heroId: 'ember' }, { heroId: 'glacia' }, { heroId: 'sylvan' }]
+    const sim = new Sim(rankedConfig('endless', seed, party))
+    const rec = new RunRecorder()
+    const ops: Record<string, number> = {}
+    const bump = (k: string) => { ops[k] = (ops[k] ?? 0) + 1 }
+    const cells = sim.buildCells()
+    const towerIds: number[] = []
+    let deployed = 0
+    const TOWER_CAP = 5
+    let tick = 0
+    while (sim.state !== 'won' && sim.state !== 'lost' && tick <= REPLAY_CAP) {
+      if (sim.state === 'draft') {
+        const idx = sim.draftsTaken % Math.max(1, sim.draftOffer.length)
+        if (sim.chooseDraft(idx)) { rec.draft(idx); bump('draft') }
+        else sim.chooseDraft(0)
+        continue
+      }
+      const clock = sim.clock
+      // deploy the 3-hero party onto the back build cells, one per prep window
+      if (sim.state === 'prep' && deployed < 3 && tick > 30 && tick % 20 === 0) {
+        const cell = cells[cells.length - 1 - deployed]
+        if (sim.deployHero(HERO_IDS[deployed], cell.col, cell.row)) {
+          rec.deploy(clock, HERO_IDS[deployed], cell.col, cell.row); bump('deploy'); deployed++
+        }
+      }
+      // build out to the cap on the front cells, cycling elements
+      if (tick % 24 === 12 && towerIds.length < TOWER_CAP && towerIds.length < cells.length - 3) {
+        const cell = cells[towerIds.length]
+        const kind = KINDS[towerIds.length % KINDS.length]
+        const t = sim.placeTower(kind, cell.col, cell.row)
+        if (t) { rec.place(clock, kind, cell.col, cell.row); bump('place'); towerIds.push(t.id) }
+      }
+      // pour every upgrade into tower #0 so it reaches a branch, then branch it
+      if (tick % 30 === 0 && towerIds.length > 0) {
+        if (sim.upgradeTower(towerIds[0])) { rec.upgrade(clock, towerIds[0]); bump('upgrade') }
+      }
+      if (tick % 90 === 40 && towerIds.length > 0) {
+        if (sim.chooseBranch(towerIds[0], (tick / 90) % 2 | 0)) { rec.branch(clock, towerIds[0], (tick / 90) % 2 | 0); bump('branch') }
+      }
+      // set targeting on the newest tower
+      if (tick % 55 === 5 && towerIds.length > 1) {
+        const id = towerIds[towerIds.length - 1]
+        sim.setTargeting(id, 'Strong'); rec.target(clock, id, 'Strong'); bump('target')
+      }
+      // fuse the first two towers once they exist
+      if (tick === 260 && towerIds.length >= 2) {
+        if (sim.fuseTowers(towerIds[0], towerIds[1])) { rec.fuse(clock, towerIds[0], towerIds[1]); bump('fuse') }
+      }
+      // global spell + hero spell on cooldown
+      if (tick % 70 === 20 && sim.spellCd.meteor <= 0) {
+        if (sim.castSpell('meteor' as SpellKey, 360, 500)) { rec.spell(clock, 'meteor', 360, 500); bump('spell') }
+      }
+      if (tick % 65 === 25) {
+        for (const h of sim.deployedHeroes()) {
+          if (h.spellCd <= 0 && sim.castHeroSpell(h.id, h.x, h.y)) { rec.heroSpell(clock, h.id, h.x, h.y); bump('heroSpell'); break }
+        }
+      }
+      // start some waves early (manual), let the rest auto-start on the prep timer
+      if (sim.state === 'prep' && tick % 41 === 7) {
+        sim.startWave(); rec.startWave(clock); bump('startWave')
+      }
+      sim.step()
+      tick++
+    }
+    return { rec: rec.record('endless', seed, 0, party, sim.score(), sim.waveIndex + 1), score: sim.score(), wave: sim.waveIndex + 1, ops }
+  }
+
+  const seed = codeToSeed('AZURE-KOI-07') ?? 12345
+  const run = driveRanked(seed)
+  if (run.rec.log.c.length < 20) fail(`ranked driver recorded too few commands (${run.rec.log.c.length}) — bot may not be building`)
+
+  // opcode coverage — every command KIND must round-trip through the replay
+  for (const need of ['place', 'upgrade', 'deploy', 'target', 'spell', 'heroSpell', 'startWave']) {
+    if (!run.ops[need]) fail(`ranked replay self-test never exercised the '${need}' command opcode`)
+  }
+
+  // POSITIVE: replay reproduces the claimed score + wave EXACTLY
+  const r1 = replayRun(run.rec)
+  if (r1.score !== run.score) fail(`ranked replay score mismatch: replay ${r1.score} vs live ${run.score}`)
+  if (r1.wave !== run.wave) fail(`ranked replay wave mismatch: replay ${r1.wave} vs live ${run.wave}`)
+
+  // DETERMINISM: two replays of the same record are byte-identical
+  const r2 = replayRun(run.rec)
+  if (r1.fingerprint !== r2.fingerprint) fail(`ranked replay non-deterministic: ${r1.fingerprint} vs ${r2.fingerprint}`)
+
+  // GATE: an honest record is ACCEPTED
+  const vOk = verifyRun(run.rec)
+  if (!vOk.ok || vOk.reason !== '') fail(`verifyRun rejected an HONEST run (reason '${vOk.reason}')`)
+
+  // NEGATIVE: a tampered CLAIMED score is REJECTED (this is the whole point)
+  const vHi = verifyRun({ ...run.rec, score: run.rec.score + 1000000 })
+  if (vHi.ok || vHi.reason !== 'mismatch') fail(`verifyRun ACCEPTED a tampered score (reason '${vHi.reason}')`)
+  const vWave = verifyRun({ ...run.rec, wave: run.rec.wave + 50 })
+  if (vWave.ok || vWave.reason !== 'mismatch') fail(`verifyRun ACCEPTED a tampered wave (reason '${vWave.reason}')`)
+
+  // VERSION GATE: a log recorded under a different sim version is REJECTED
+  const vVer = verifyRun({ ...run.rec, v: SIM_VERSION + 1 })
+  if (vVer.ok || vVer.reason !== 'version') fail(`verifyRun ACCEPTED a stale sim_version (reason '${vVer.reason}')`)
+
+  // A DROPPED command must change the outcome (proves the log actually DRIVES the
+  // sim — an inert log that verified regardless would be a broken moat). Strip the
+  // opening tower placements: a run with no early towers dies far sooner.
+  const trimmed: RankedRunRecord = { ...run.rec, log: { c: run.rec.log.c.filter((cmd) => cmd[0] !== 0), d: run.rec.log.d } }
+  const rTrim = replayRun(trimmed)
+  if (rTrim.score === run.score && rTrim.wave === run.wave) {
+    fail('dropping ALL placement commands did NOT change the replay — the log may be inert')
+  }
+
+  // hash is stable + differs when the log differs
+  if (logHash(run.rec) !== logHash(run.rec)) fail('logHash is non-deterministic')
+  if (logHash(run.rec) === logHash(trimmed)) fail('logHash collides across different logs')
+
+  console.log(`  ranked replay ✓ — recorded ${run.rec.log.c.length} cmds + ${run.rec.log.d.length} drafts, re-ran to score ${run.score}/wave ${run.wave}; tamper + version + drop all rejected`)
 }
 
 if (failures > 0) {

@@ -104,8 +104,11 @@ const LOGIN_CYCLE: StreakReward[] = [
 ]
 
 // RANKED NORMALIZATION: endless ignores hero progression — every fielded hero
-// plays at this fixed level, so no purchase OR grind buys ranked power.
-export const RANKED_HERO_LEVEL = 5
+// plays at this fixed level, so no purchase OR grind buys ranked power. The
+// constant lives in ranked.ts (the pure, server-shared source of truth) and is
+// re-exported here for the many callers that already import it from economy.
+export { RANKED_HERO_LEVEL } from './ranked'
+import { RANKED_HERO_LEVEL } from './ranked'
 
 export interface CampaignResult {
   levelId: string

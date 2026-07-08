@@ -30,6 +30,9 @@ import { battleSfx, panFor } from '../ui/battleSfx'
 import { heroVo } from '../ui/vo'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
 import { recordDailyResult } from '../game/daily'
+import { rankedConfig, RunRecorder, rankedPeriod, GhostRunner, type RankedMode, type DeclaredHero } from '../game/ranked'
+import { submitRun, fetchGhost } from '../game/rankedNet'
+import { recordRankedLocal } from '../game/rankedLocal'
 import { weeklyPlan, planHeadline, recordWeeklyBest, type WeeklyPlan } from '../game/events'
 import { MUTATORS } from '../sim'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
@@ -74,6 +77,8 @@ export interface BattleLaunchData {
   captions?: boolean // ?captions=0 disables the reel captions
   loop?: boolean // ?loop=1 restarts the reel after the end card
   daily?: boolean // launched from the in-game Daily screen — log the result locally
+  weekly?: boolean // launched from the Ranked screen's Weekly board (shared weekly seed)
+  ghostRunId?: string // race a downloaded top run's replay ghost alongside this run
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -90,6 +95,20 @@ export class BattleScene extends Phaser.Scene {
   private loopReel = false
   private seed = 0
   private seedCode = ''
+  // RANKED (provably-fair) run recording. `ranked` is true only for the pure,
+  // normalized modes (daily / weekly / endless) — never demo/attract/campaign/
+  // roguelike. When set, every player command is logged to `recorder` so the run
+  // can be RE-RUN server-side and verified before it touches the leaderboard.
+  private ranked = false
+  private rankedMode: RankedMode = 'endless'
+  private boardPeriod = 0
+  private recorder: RunRecorder | null = null
+  private rankedSubmitted = false
+  private declaredParty: DeclaredHero[] = []
+  // GHOST RACE — an async-downloaded top run replayed in lockstep alongside yours.
+  private ghostRunId: string | undefined
+  private ghost: GhostRunner | null = null
+  private ghostEl: HTMLDivElement | null = null
   private level!: LevelDef
   private sim!: Sim
   private view!: BattleView3D
@@ -171,6 +190,16 @@ export class BattleScene extends Phaser.Scene {
       : { difficulty: data?.difficulty ?? 'normal', challenge: data?.challenge ?? '' }
     this.seedOverride = data?.seedOverride
     this.isDaily = !!data?.daily
+    // RANKED (provably-fair) = the pure normalized modes only. Roguelike is endless
+    // but carries mutators/relics, so it rides its OWN weekly board, not this one.
+    this.ranked = this.endless && !this.roguelike && !this.attract && !this.demoMode
+    this.rankedMode = this.isDaily ? 'daily' : data?.weekly ? 'weekly' : 'endless'
+    this.ghostRunId = data?.ghostRunId
+    // reset per-run ranked state (the scene instance is reused across restarts)
+    this.recorder = null
+    this.ghost = null
+    this.rankedSubmitted = false
+    this.declaredParty = []
     this.gameSpeed = this.attract ? Math.min(8, Math.max(0.25, data?.speed ?? 1)) : 1
     this.captionsOn = data?.captions !== false
     this.loopReel = !!data?.loop
@@ -228,7 +257,18 @@ export class BattleScene extends Phaser.Scene {
         : partyAllowedForMode(this.runMode) // No-Hero challenge: leave the champions home
           ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level, wyrm: economy.bondEntry(id) }))
           : []
-    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, rogue: this.roguePlan?.rogue, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
+    if (this.ranked) {
+      // Route the ranked Sim through the SAME canonical builder the SERVER uses,
+      // so the config the player runs is byte-identical to the one we re-run to
+      // verify — zero drift, zero chance of an honest run failing verification.
+      this.declaredParty = party.map((p) => ({ heroId: p.heroId, wyrmId: (p as { wyrm?: { wyrmId: string } }).wyrm?.wyrmId }))
+      this.boardPeriod = rankedPeriod(this.rankedMode)
+      this.recorder = new RunRecorder()
+      this.sim = new Sim(rankedConfig(this.rankedMode, this.seed, this.declaredParty))
+      if (this.ghostRunId) void this.loadGhost(this.ghostRunId)
+    } else {
+      this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, rogue: this.roguePlan?.rogue, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
+    }
 
     // LIVE demo: Maddervane pre-places the Frost tower (the guaranteed-SHATTER
     // setup — the player adds Storm). Placement is refunded: a gift, not a cost.
@@ -275,6 +315,8 @@ export class BattleScene extends Phaser.Scene {
     this.captionEl = null
     this.attractEndEl?.remove()
     this.attractEndEl = null
+    this.ghostEl?.remove()
+    this.ghostEl = null
     this.coach?.dispose()
     this.coach = null
     this.coachStep = 'off'
@@ -297,7 +339,7 @@ export class BattleScene extends Phaser.Scene {
 
     // ---- DOM HUD ----
     this.hud = new BattleHud({
-      onStart: () => { if (this.sim.state === 'prep') this.sim.startWave() },
+      onStart: () => { if (this.sim.state === 'prep') { const c = this.sim.clock; this.sim.startWave(); this.recorder?.startWave(c) } },
       onPause: () => this.togglePause(),
       onSpeed: () => this.toggleSpeed(),
       onResetView: () => this.view.resetView(),
@@ -306,9 +348,9 @@ export class BattleScene extends Phaser.Scene {
       onHeroButton: (id) => this.onHeroButton(id),
       onSelectDeselect: () => this.deselect(),
       onBoardTapThrough: (x, y) => this.handlePanelTapThrough(x, y),
-      onUpgrade: (id) => { if (this.sim.upgradeTower(id)) this.hud.showUpgrade(this.sim, id) },
-      onBranch: (id, idx) => { if (this.sim.chooseBranch(id, idx)) this.hud.showUpgrade(this.sim, id) },
-      onFuse: (id, partnerId) => { if (this.sim.fuseTowers(id, partnerId)) this.hud.showUpgrade(this.sim, id) },
+      onUpgrade: (id) => { const c = this.sim.clock; if (this.sim.upgradeTower(id)) { this.hud.showUpgrade(this.sim, id); this.recorder?.upgrade(c, id) } },
+      onBranch: (id, idx) => { const c = this.sim.clock; if (this.sim.chooseBranch(id, idx)) { this.hud.showUpgrade(this.sim, id); this.recorder?.branch(c, id, idx) } },
+      onFuse: (id, partnerId) => { const c = this.sim.clock; if (this.sim.fuseTowers(id, partnerId)) { this.hud.showUpgrade(this.sim, id); this.recorder?.fuse(c, id, partnerId) } },
       onTargeting: (id) => this.cycleTargeting(id),
       onDraft: (i) => this.pickDraft(i),
       onQuit: () => this.quitBattle(),
@@ -410,6 +452,10 @@ export class BattleScene extends Phaser.Scene {
     const allowPick = !this.script || this.draftHoldT <= 0
     const runner = this.script
     this.sim.advance(simDt, runner ? () => runner.update(this.sim, allowPick) : undefined)
+
+    // GHOST RACE: advance the downloaded replay by the same sim-time and update
+    // the ahead/behind pill (it races the same seed on the same clock as you).
+    if (this.ghost) { this.ghost.advance(simDt); this.updateGhostPill() }
 
     for (const ev of this.sim.drainEvents()) this.handleEvent(ev)
 
@@ -784,11 +830,13 @@ export class BattleScene extends Phaser.Scene {
       if (p && this.inMap(p.x, p.y)) {
         if (this.aimingHeroSlot != null) {
           const hero = this.sim.heroBySlot(this.aimingHeroSlot)
+          const c = this.sim.clock
           if (this.sim.castHeroSpell(this.aimingHeroSlot, p.x, p.y)) {
             this.view.heroCastPose(this.aimingHeroSlot)
             if (hero) this.bumpArc(hero.heroId, 'spell')
+            this.recorder?.heroSpell(c, this.aimingHeroSlot, p.x, p.y)
           }
-        } else if (this.aimingSpell) this.sim.castSpell(this.aimingSpell, p.x, p.y)
+        } else if (this.aimingSpell) { const c = this.sim.clock; if (this.sim.castSpell(this.aimingSpell, p.x, p.y)) this.recorder?.spell(c, this.aimingSpell, p.x, p.y) }
       }
       this.exitAiming()
       return
@@ -876,9 +924,11 @@ export class BattleScene extends Phaser.Scene {
         this.aimingSpell = null
         this.aimingHeroSlot = deployed.id
       } else {
+        const c = this.sim.clock
         if (this.sim.castHeroSpell(deployed.id, deployed.x, deployed.y)) {
           this.view.heroCastPose(deployed.id)
           this.bumpArc(deployed.heroId, 'spell')
+          this.recorder?.heroSpell(c, deployed.id, deployed.x, deployed.y)
         }
       }
       return
@@ -908,8 +958,11 @@ export class BattleScene extends Phaser.Scene {
     if (!this.sim.canPlace(col, row)) { this.floatAt(cc.x, cc.y, 'CANT DEPLOY', 0xff5b7a, 22); return }
     const cost = this.sim.heroDeployCost(this.buildHeroId)
     if (this.sim.gold < cost) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
+    const c = this.sim.clock
+    const heroId = this.buildHeroId
     const h = this.sim.deployHero(this.buildHeroId, col, row)
     if (h) {
+      this.recorder?.deploy(c, heroId, col, row)
       this.exitDeploy() // one deploy per hero → drop out of deploy mode
       if (unlockCodex('hero-' + h.heroId)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
       if (h.sigAwake && unlockCodex('field-signature')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
@@ -1003,7 +1056,8 @@ export class BattleScene extends Phaser.Scene {
       this.aimingSpell = key
       this.aimingHeroSlot = null
     } else {
-      this.sim.castSpell(key, 360, MAP_Y + MAP_H / 2)
+      const c = this.sim.clock
+      if (this.sim.castSpell(key, 360, MAP_Y + MAP_H / 2)) this.recorder?.spell(c, key, 360, MAP_Y + MAP_H / 2)
     }
   }
 
@@ -1019,8 +1073,11 @@ export class BattleScene extends Phaser.Scene {
     const cc = cellCenter(col, row)
     if (!this.sim.canPlace(col, row)) { this.floatAt(cc.x, cc.y, 'CANT BUILD', 0xff5b7a, 22); return }
     if (this.sim.gold < this.sim.placeCost(this.buildKind)) { this.floatAt(cc.x, cc.y, 'NEED GOLD', 0xff5b7a, 22); return }
+    const c = this.sim.clock
+    const kind = this.buildKind
     const placed = this.sim.placeTower(this.buildKind, col, row)
     if (placed) {
+      this.recorder?.place(c, kind, col, row)
       this.towersBuilt++
       // KPI instrumentation: time-to-first-tower (first-ever only; guards inside)
       if (!this.firstTowerRecorded && !this.attract) {
@@ -1046,7 +1103,9 @@ export class BattleScene extends Phaser.Scene {
     const t = this.sim.towerById(id)
     if (!t) return
     const next = TARGET_MODES[(TARGET_MODES.indexOf(t.targeting) + 1) % TARGET_MODES.length]
+    const c = this.sim.clock
     this.sim.setTargeting(id, next)
+    this.recorder?.target(c, id, next)
     this.hud.showUpgrade(this.sim, id)
   }
 
@@ -1068,7 +1127,7 @@ export class BattleScene extends Phaser.Scene {
     if (this.sim.state !== 'draft') return
     const card = this.sim.draftOffer[i]
     if (card) { this.hud.flash(card.color, 0.4); battleSfx.draftPick() }
-    this.sim.chooseDraft(i)
+    if (this.sim.chooseDraft(i)) this.recorder?.draft(i)
     this.hud.hideDraft()
     this.draftShown = false
   }
@@ -1102,7 +1161,7 @@ export class BattleScene extends Phaser.Scene {
     const k = appSettings.data.keybinds
     const code = e.code
     if (code === k.startWave) {
-      if (this.sim.state === 'prep' && !this.paused) { e.preventDefault(); this.sim.startWave() }
+      if (this.sim.state === 'prep' && !this.paused) { e.preventDefault(); const c = this.sim.clock; this.sim.startWave(); this.recorder?.startWave(c) }
       return
     }
     if (code === k.pause) { e.preventDefault(); this.togglePause(); return }
@@ -1278,6 +1337,9 @@ export class BattleScene extends Phaser.Scene {
         if (this.isDaily) dailyPb = recordDailyResult(utcDayIndex(), this.sim.waveIndex + 1)
         const bestTag = res.best ? ' · NEW BEST!' : dailyPb ? ' · DAILY PB!' : ''
         this.hud.showResult({ win: false, title: 'DEFEAT', color: 0xff5b7a, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${bestTag}`, endless: true, share: this.buildShare(false) })
+        // RANKED: record the local PB and submit the seed + replay log for
+        // server-side re-run verification (degrades to local-only if unwired).
+        this.submitRankedRun()
       } else {
         // DEATH TEACHES: diagnose the loss into one actionable lesson, and the
         // retry button replays the SAME seed — the player knows the whole plan.
@@ -1286,6 +1348,64 @@ export class BattleScene extends Phaser.Scene {
         this.tryBark('defeat') // Morose condoles — he always does
       }
     }
+  }
+
+  // RANKED SUBMIT — the moat, from the client's side. Record the local PB, then
+  // ship the seed + deterministic input log to the server, which RE-RUNS the pure
+  // sim and confirms the score before it touches the board. Fire-and-forget and
+  // fully degrading: if the backend is unwired/offline the run still counts
+  // locally and the player never notices a hitch.
+  private submitRankedRun(): void {
+    if (!this.ranked || !this.recorder || this.rankedSubmitted) return
+    this.rankedSubmitted = true
+    const score = this.sim.score()
+    const wave = this.sim.waveIndex + 1
+    recordRankedLocal(this.rankedMode, this.boardPeriod, score, wave, this.seed)
+    const rec = this.recorder.record(this.rankedMode, this.seed, this.boardPeriod, this.declaredParty, score, wave)
+    void submitRun(rec).then((r) => {
+      if (!r) return // offline / unwired — local PB already banked
+      if (r.ok && typeof r.rank === 'number') {
+        this.hud.banner(`✔ VERIFIED · RANKED #${r.rank}`, 0x8dff4a)
+      } else if (!r.ok && r.reason === 'version') {
+        this.hud.banner('Ranked client outdated — update to submit', 0xffd54a)
+      } else if (!r.ok) {
+        this.hud.banner('Ranked verify failed — run kept locally', 0xffd54a)
+      }
+    })
+  }
+
+  // GHOST — download a top run's replay log and build an incremental replay we
+  // advance in lockstep with the live run. Fully async + degrading: if the log
+  // can't be fetched the race simply doesn't appear and play is unaffected.
+  private async loadGhost(runId: string): Promise<void> {
+    const g = await fetchGhost(runId)
+    if (!g || !this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
+    try {
+      this.ghost = new GhostRunner(g.mode, this.seed, g.party, g.log)
+    } catch { return }
+    const el = document.createElement('div')
+    el.style.cssText =
+      'position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 58px);z-index:30;' +
+      'pointer-events:none;font-family:"Baloo 2","Nunito",system-ui,sans-serif;font-weight:900;font-size:12px;' +
+      'letter-spacing:.03em;color:#e9dcff;background:rgba(16,10,30,.72);border:1px solid rgba(180,140,255,.4);' +
+      'border-radius:999px;padding:6px 13px;box-shadow:0 6px 20px rgba(0,0,0,.4);white-space:nowrap;'
+    el.textContent = '👻 GHOST loading…'
+    document.body.appendChild(el)
+    this.ghostEl = el
+    this.updateGhostPill()
+  }
+
+  private updateGhostPill(): void {
+    if (!this.ghostEl || !this.ghost) return
+    const gs = this.ghost.score()
+    const ys = this.sim.score()
+    const lead = ys - gs
+    const state = lead >= 0 ? 'AHEAD' : 'BEHIND'
+    const color = lead >= 0 ? '#8dff4a' : '#ff8da6'
+    this.ghostEl.innerHTML =
+      `👻 GHOST W${this.ghost.wave()} · ${gs.toLocaleString()}` +
+      `<span style="opacity:.5"> — </span>` +
+      `<span style="color:${color}">YOU ${state} ${Math.abs(lead).toLocaleString()}</span>`
   }
 
   // ROGUELIKE END-OF-RUN RECAP — the build you took, your biggest reaction, how
@@ -1675,6 +1795,9 @@ export class BattleScene extends Phaser.Scene {
     this.captionEl = null
     this.attractEndEl?.remove()
     this.attractEndEl = null
+    this.ghostEl?.remove()
+    this.ghostEl = null
+    this.ghost = null
     this.coach?.dispose()
     this.coach = null
     this.hud?.dispose()

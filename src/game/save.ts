@@ -283,6 +283,12 @@ export function loadSave(): SaveData {
   }
 }
 
+/** Field-by-field-defended coercion of an arbitrary blob (e.g. a CLOUD save) into
+ *  a valid SaveData — never throws, missing fields fall back to defaults. */
+export function coerceSave(raw: unknown): SaveData {
+  return coerce(raw)
+}
+
 export function writeSave(data: SaveData): void {
   try {
     data.version = SAVE_VERSION

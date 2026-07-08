@@ -25,6 +25,7 @@ export interface FrontPageHandlers {
   onEndless(): void
   onRoguelike(): void
   onDaily(): void
+  onRanked(): void
   onReplayIntro(): void
 }
 
@@ -423,6 +424,11 @@ export class FrontPage {
           <span class="efp-btxt"><span class="efp-blabel">ROGUELIKE</span><span class="efp-bsub">Relics &middot; curses &middot; weekly mutator</span></span>
           <span class="efp-pill">WEEKLY</span>
         </button>
+        <button class="efp-btn efp-in" style="animation-delay:.645s; --a:#8dff4a" data-act="ranked">
+          <span class="efp-ic">${svg(ICONS.shield)}</span>
+          <span class="efp-btxt"><span class="efp-blabel">RANKED</span><span class="efp-bsub">Provably fair &middot; a board money can't climb</span></span>
+          <span class="efp-pill">🔒 FAIR</span>
+        </button>
         <button class="efp-btn efp-in" style="animation-delay:.66s; --a:#ffd54a" data-act="daily">
           <span class="efp-ic">${svg(ICONS.calendar)}</span>
           <span class="efp-btxt"><span class="efp-blabel">DAILY SEED</span><span class="efp-bsub">One shared run &middot; beat your best</span></span>
@@ -488,6 +494,7 @@ export class FrontPage {
       else if (act === 'endless') this.leave(() => this.handlers.onEndless())
       else if (act === 'roguelike') this.leave(() => this.handlers.onRoguelike())
       else if (act === 'daily') this.leave(() => this.handlers.onDaily())
+      else if (act === 'ranked') this.leave(() => this.handlers.onRanked())
       else if (act === 'invite') showReferralPanel()
       else if (act === 'install') showInstallCard({ force: true })
       else if (act === 'welcome') showWelcomeReward(() => this.refreshGrowth())
