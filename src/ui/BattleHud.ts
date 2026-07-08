@@ -473,6 +473,53 @@ const CSS = `
   .eld-react { top:24%; font-size: clamp(24px, 5.5vw, 40px); letter-spacing:2px; }
   .eld-react .rx-sub { font-size:10px; letter-spacing:4px; }
 }
+
+/* ===== LANDSCAPE PHONES (short height, ample width) =================
+   The BOARD is the dominant element and must stay fully visible in BOTH the
+   build/selection phase AND combat. So the dock stops being a tall vertical
+   stack (which occluded the play plane and inflated --dock-h, shoving the
+   upgrade sheet into the top bar) and becomes a SLIM, edge-docked HORIZONTAL
+   rail: prep row on top, all action tiles on one short line below, tiles
+   scaled down to fit the tightest landscape phone (iPhone SE, 667px) with
+   the full loadout (3 spells + 3 controls + 3 heroes + 5 towers) on one line. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .eld-dock {
+    flex-flow: row wrap; align-items: flex-end; justify-content: center;
+    gap: 4px 10px; padding: 5px 8px calc(env(safe-area-inset-bottom,0px) + 5px);
+    max-width: none; left: 0; right: 0; transform: none; border-radius: 0;
+    background: linear-gradient(0deg, rgba(18,10,36,.96), rgba(18,10,36,.4) 84%, rgba(18,10,36,0));
+  }
+  /* prep row (incoming telegraph + START) keeps its own full-width top line */
+  .eld-dockbar { flex: 1 1 100%; order: -1; gap: 6px; }
+  /* action groups share one centered line, sized to fit — never grow-to-fill */
+  .eld-spellrow, .eld-heroes, .eld-towers { flex: 0 0 auto; }
+  .eld-spells { flex: 0 0 auto; gap: 6px; }
+  .eld-spell { width: 40px; height: 40px; font-size: 18px; }
+  .eld-spell .cdtxt { font-size: 12px; }
+  .eld-heroes { gap: 6px; }
+  .eld-hero { width: 42px; }
+  .eld-hero .hport { width: 40px; height: 40px; font-size: 17px; }
+  .eld-hero .hname { font-size: 9px; }
+  .eld-hero .hlvl { font-size: 9px; padding: 1px 3px; }
+  .eld-towers { gap: 5px; }
+  .eld-tower { flex: 0 0 auto; width: 44px; max-width: 44px; padding: 4px 2px 3px;
+    border-radius: 11px; gap: 1px; }
+  .eld-tower .gem { width: 22px; height: 22px; border-radius: 7px; margin-top: 1px; }
+  .eld-tower .tn { font-size: 10px; }
+  .eld-tower .tc { font-size: 11px; }
+  .eld-tower .tt { font-size: 7px; letter-spacing: .2px; }
+  .eld-rc { gap: 5px; }
+  .eld-rc button { width: 32px; height: 32px; border-radius: 10px; font-size: 15px; }
+  .eld-start { padding: 7px 18px; font-size: 16px; }
+  .eld-telegraph { flex: 1 1 120px; font-size: 12px; padding: 6px 12px; }
+
+  /* upgrade sheet: right half only, anchored above the slim dock and height-
+     capped to the gap under the top bar, so it never climbs into the top strip
+     and the left board stays readable. */
+  .eld-upg { left: auto; right: 8px; bottom: calc(var(--dock-h, 108px) + 8px); top: auto;
+    width: min(340px, 50vw);
+    max-height: calc(100vh - var(--dock-h, 108px) - 84px); padding: 10px 12px; }
+}
 `
 
 // Growth-infra additions: attract-mode chrome hiding + the prove-it share card.

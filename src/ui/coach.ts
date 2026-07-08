@@ -30,6 +30,12 @@ const CSS = `
 @media (prefers-reduced-motion: reduce) {
   .chr-coach-hand.show, .chr-coach-ringbox.show { animation: none; }
 }
+/* Landscape phones: the dock is a slim bottom rail (~108px), not the tall
+   portrait stack — so the "Press START" pill must sit just above it instead of
+   at bottom:316px, where on a 390-tall screen it would land in the top strip. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .chr-coach-pill { bottom: 132px; }
+}
 `
 
 export class Coach {
