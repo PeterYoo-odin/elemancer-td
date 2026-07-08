@@ -46,6 +46,7 @@ import { analytics } from '../game/analytics'
 import { Coach } from '../ui/coach'
 import { showWelcomeReward } from '../ui/WelcomeReward'
 import { showInstallCard } from '../ui/pwa'
+import { promptSaveAfterFirstWin } from '../ui/SignInModal'
 import { withRef } from '../game/referral'
 
 // ONBOARDING coach steps for the first-ever battle (L1). Every step completes
@@ -1527,8 +1528,20 @@ export class BattleScene extends Phaser.Scene {
       // (the demo or first campaign clear) — the activation + account hook. Never
       // in attract (headless capture / landing embed must not claim). After the
       // celebratory claim, offer the PWA install (a completed critical journey).
-      if (!this.attract && economy.welcomeAvailable()) {
-        window.setTimeout(() => showWelcomeReward(() => showInstallCard()), 1100)
+      if (!this.attract) {
+        // ACCOUNT HOOK: right after the first felt win, offer to SAVE the account
+        // (portable sign-in) — once, ever, and only for a configured guest. We
+        // chain it after the welcome + install beats so prompts never stack; if the
+        // install toast shows we defer the account nudge to the next win (Settings
+        // always offers it too). promptSaveAfterFirstWin() self-guards everything.
+        if (economy.welcomeAvailable()) {
+          window.setTimeout(() => showWelcomeReward(() => {
+            const installShown = showInstallCard()
+            if (!installShown) window.setTimeout(promptSaveAfterFirstWin, 500)
+          }), 1100)
+        } else {
+          window.setTimeout(promptSaveAfterFirstWin, 900)
+        }
       }
     } else {
       this.hud.flash(0xff3b6b, 0.5)

@@ -110,16 +110,19 @@ export function localHandle(): string | null {
   try { return localStorage.getItem(HANDLE_KEY) } catch { return null }
 }
 
-function setLocalHandle(h: string): void {
+/** Persist the display handle locally (also used after a sign-in link carries the
+ *  account's handle back). Exported so the auth layer can sync it. */
+export function setLocalHandle(h: string): void {
   try { localStorage.setItem(HANDLE_KEY, h) } catch { /* private mode */ }
 }
 
-/** Register (or fetch) this device's account, optionally claiming a handle.
- *  Returns the confirmed handle, or null if the backend is unavailable. */
-export async function registerHandle(handle?: string): Promise<string | null> {
+/** Register (or fetch) this device's account, optionally claiming a handle. When
+ *  an `accessToken` is passed (signed in) the handle is set on the durable auth
+ *  account, not the guest device row. Returns the confirmed handle, or null. */
+export async function registerHandle(handle?: string, accessToken?: string): Promise<string | null> {
   const dh = await deviceHash()
   const clean = handle ? handle.replace(/[^\w \-]/g, '').trim().slice(0, 24) : undefined
-  const r = await apiPost('account', { op: 'register', deviceHash: dh, handle: clean })
+  const r = await apiPost('account', { op: 'register', deviceHash: dh, handle: clean, accessToken })
   if (r?.ok) {
     if (r.handle) setLocalHandle(r.handle)
     else if (clean) setLocalHandle(clean)
@@ -214,15 +217,15 @@ export async function submitRun(rec: RankedRunRecord): Promise<SubmitResult | nu
 //  Cloud save (local-first mirror)
 // ---------------------------------------------------------------------------
 
-export async function cloudSavePut(data: unknown, rev: number): Promise<boolean> {
+export async function cloudSavePut(data: unknown, rev: number, accessToken?: string): Promise<boolean> {
   const dh = await deviceHash()
-  const r = await apiPost('account', { op: 'save', deviceHash: dh, data, rev })
+  const r = await apiPost('account', { op: 'save', deviceHash: dh, data, rev, accessToken })
   return !!r?.ok
 }
 
-export async function cloudSaveGet(): Promise<{ data: unknown; rev: number; handle: string | null } | null> {
+export async function cloudSaveGet(accessToken?: string): Promise<{ data: unknown; rev: number; handle: string | null } | null> {
   const dh = await deviceHash()
-  const r = await apiPost('account', { op: 'load', deviceHash: dh })
+  const r = await apiPost('account', { op: 'load', deviceHash: dh, accessToken })
   if (!r?.ok || !r.exists) return null
   return { data: r.data ?? null, rev: Number(r.rev) || -1, handle: r.handle ?? null }
 }

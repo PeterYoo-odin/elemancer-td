@@ -19,6 +19,7 @@ import { playCutscene } from './ui/Cutscene'
 import { captureAttribution, reportAttribution, getReferrer } from './game/attribution'
 import { economy } from './game/economy'
 import { reconcileCloudSave } from './game/cloudSave'
+import { handleAuthCallback } from './game/authNet'
 import { registerServiceWorker } from './ui/pwa'
 import { analytics } from './game/analytics'
 import { applyAccessibility } from './ui/a11y'
@@ -33,10 +34,12 @@ economy.setReferredBy(getReferrer())
 reportAttribution()
 registerServiceWorker()
 
-// CLOUD SAVE reconcile — if this device's save is fresh/empty but the ranked
-// account holds progress (browser cleared / new device), pull it back down.
-// Fire-and-forget; a no-op when the ranked backend is unwired.
-void reconcileCloudSave()
+// AUTH callback + CLOUD SAVE reconcile. If we just returned from a magic-link /
+// OAuth sign-in, the URL hash carries the session — capture it, clean the URL,
+// and LINK this device to the account FIRST, then reconcile so a freshly
+// signed-in device pulls its portable cloud save. Both no-op when unwired; the
+// game boots exactly as before for guests.
+void handleAuthCallback().finally(() => { void reconcileCloudSave() })
 
 // Apply the saved accessibility preferences (colorblind palette + glyphs, text
 // scale, high contrast) to the document root BEFORE the first frame paints.

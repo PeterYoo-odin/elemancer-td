@@ -11,6 +11,8 @@ import { music } from './music'
 import { playUiTick, refreshSfxVolume, refreshMasterVolume, refreshVoVolume } from './sfx'
 import { heroVo } from './vo'
 import { analytics } from '../game/analytics'
+import { authConfigured, isSignedIn, onAuthChange } from '../game/authNet'
+import { openSignIn, accountStatusLabel } from './SignInModal'
 
 export interface SettingsPanelOpts {
   onReplayIntro?: () => void
@@ -57,6 +59,7 @@ export class SettingsPanel {
   private root: HTMLDivElement
   private listening: BindableAction | null = null
   private keyHandler = (e: KeyboardEvent) => this.onCaptureKey(e)
+  private offAuth: () => void = () => {}
 
   constructor(private opts: SettingsPanelOpts = {}) {
     if (!cssInjected) {
@@ -79,11 +82,34 @@ export class SettingsPanel {
     this.root.addEventListener('click', (e) => this.onClick(e))
     this.root.addEventListener('input', (e) => this.onInput(e))
     document.body.appendChild(this.root)
+    // keep the Account row live (sign-in / link / sign-out can flip state)
+    if (authConfigured()) this.offAuth = onAuthChange(() => this.refreshAccount())
+  }
+
+  private accountSection(): string {
+    if (!authConfigured()) return ''
+    const signed = isSignedIn()
+    return section('Account', `
+      <div class="settings-note">Sign in to make your progress, handle and purchases <b>portable across devices</b> and recoverable — passwordless, no card, and Ranked stays untouched. Guest play never needs an account.</div>
+      <div class="settings-row"><span data-acctstatus>${signed ? 'Signed in · ' : 'Guest · '}${escHtml(accountStatusLabel())}</span>
+        <button class="settings-btn small" data-act="signin">${signed ? 'Manage account' : 'Sign in / Save account'}</button></div>
+    `)
+  }
+
+  private refreshAccount(): void {
+    const host = this.root.querySelector('[data-acctstatus]')
+    if (host) {
+      const signed = isSignedIn()
+      host.textContent = (signed ? 'Signed in · ' : 'Guest · ') + accountStatusLabel()
+      const btn = host.parentElement?.querySelector<HTMLElement>('[data-act="signin"]')
+      if (btn) btn.textContent = signed ? 'Manage account' : 'Sign in / Save account'
+    }
   }
 
   private body(): string {
     const s = appSettings.data
     return `
+      ${this.accountSection()}
       ${section('Audio', `
         ${sliderRow('Master volume', 'masterVol', Math.round(s.masterVol * 100))}
         ${toggleRow('Sound effects', 'sound', s.sound)}
@@ -163,6 +189,7 @@ export class SettingsPanel {
     if (target === this.root) { this.close(); return }
     const act = target.closest<HTMLElement>('[data-act]')?.dataset.act
     if (act === 'close') { this.close(); return }
+    if (act === 'signin') { playUiTick(); openSignIn({ onClose: () => this.refreshAccount() }); return }
     if (act === 'replay') { this.close(); this.opts.onReplayIntro?.(); return }
     if (act === 'resetBinds') { appSettings.set({ keybinds: { ...DEFAULT_KEYBINDS } }); this.stopListening(); this.refreshBinds(); playUiTick(); return }
 
@@ -264,15 +291,19 @@ export class SettingsPanel {
 
   private close(): void {
     this.stopListening()
+    this.offAuth()
     playUiTick()
     this.root.classList.add('hide')
     window.setTimeout(() => { this.root.remove(); this.opts.onClose?.() }, appSettings.reducedMotion() ? 0 : 200)
   }
 
-  destroy(): void { this.stopListening(); this.root.remove() }
+  destroy(): void { this.stopListening(); this.offAuth(); this.root.remove() }
 }
 
 // ---- template helpers -------------------------------------------------------
+function escHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c))
+}
 function section(title: string, inner: string): string {
   return `<section class="settings-sec"><h3>${title}</h3>${inner}</section>`
 }

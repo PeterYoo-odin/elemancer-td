@@ -30,6 +30,7 @@ import {
 } from '../game/cosmetics'
 import { uiDyeAccent } from '../game/skins'
 import { heroArtUrl } from './heroArt'
+import { guardPurchaseWithSignIn } from './SignInModal'
 import { playUiTick } from './sfx'
 import { currencyIcon, glyphIcon } from './icons'
 
@@ -293,11 +294,16 @@ export class StorePage {
     }
     window.clearTimeout(this.confirmTimer)
     this.confirmId = null
-    if (economy.buySku(id)) {
-      this.refreshChips()
-      this.render()
-      this.bloom()
-    }
+    // Before committing a purchase, offer a guest one-tap sign-in so it's tied to
+    // a recoverable account. Never blocks: signed-in / unwired players buy straight
+    // through; a guest who declines proceeds too (and isn't asked again this session).
+    guardPurchaseWithSignIn(() => {
+      if (economy.buySku(id)) {
+        this.refreshChips()
+        this.render()
+        this.bloom()
+      }
+    })
   }
 
   private toggleEquip(id: string): void {
@@ -313,11 +319,13 @@ export class StorePage {
       this.mockModal('NOT YET', `Premium costs ${PASS_PREMIUM_DIAMONDS} ${DIA}. Diamonds drip free from play — or ${PASS_PREMIUM_USD} once real purchases launch. The pass keeps counting your XP either way; unlock late and claim everything at once.`)
       return
     }
-    if (economy.unlockPassPremium()) {
-      this.refreshChips()
-      this.render()
-      this.bloom()
-    }
+    guardPurchaseWithSignIn(() => {
+      if (economy.unlockPassPremium()) {
+        this.refreshChips()
+        this.render()
+        this.bloom()
+      }
+    })
   }
 
   private claimPass(): void {

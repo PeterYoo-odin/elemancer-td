@@ -7,6 +7,7 @@
 import { economy } from './economy'
 import { coerceSave, type SaveData } from './save'
 import { cloudSaveGet, cloudSavePut, rankedConfigured } from './rankedNet'
+import { getAccessToken, isSignedIn } from './authNet'
 
 let lastPushedJson = ''
 let pushTimer = 0
@@ -30,7 +31,11 @@ export function pushSave(): void {
   const json = JSON.stringify(economy.data)
   if (json === lastPushedJson) return
   lastPushedJson = json
-  void cloudSavePut(economy.data, Date.now())
+  const data = economy.data
+  const rev = Date.now()
+  // When signed in, target the durable auth account (portable across devices);
+  // otherwise the guest device row. Token fetch is fire-and-forget.
+  void getAccessToken().then((token) => cloudSavePut(data, rev, token ?? undefined))
 }
 
 /** Debounced push — call after any progress change (e.g. returning to the menu). */
@@ -46,13 +51,25 @@ export function scheduleCloudPush(): void {
 export async function reconcileCloudSave(): Promise<void> {
   if (!rankedConfigured()) return
   let cloud: Awaited<ReturnType<typeof cloudSaveGet>>
-  try { cloud = await cloudSaveGet() } catch { return }
+  try {
+    const token = await getAccessToken()
+    cloud = await cloudSaveGet(token ?? undefined)
+  } catch { return }
   if (!cloud || cloud.data == null) { pushSave(); return }
   const remote = coerceSave(cloud.data)
   const localScore = progressScore(economy.data)
   const remoteScore = progressScore(remote)
-  if (localScore <= 1 && remoteScore > localScore) {
-    // browser-cleared / new device → recover the cloud save
+  // Recover the cloud when it holds MORE progress than this device.
+  //  • GUEST (one row per device): only a fresh/browser-cleared device adopts —
+  //    the local device stays authoritative otherwise (unchanged behavior).
+  //  • SIGNED IN (the save row is now SHARED across devices): higher progress
+  //    always wins, so signing in to RECOVER on a new device that has a little
+  //    guest progress never clobbers a richer account. Prevents last-write-wins
+  //    thrash on the sign-in transition (the account, not the timestamp, wins).
+  const recoverRemote = isSignedIn()
+    ? remoteScore > localScore
+    : localScore <= 1 && remoteScore > localScore
+  if (recoverRemote) {
     economy.data = remote
     economy.save()
     lastPushedJson = JSON.stringify(economy.data)

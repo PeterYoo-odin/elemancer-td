@@ -10,6 +10,7 @@
 import { todaysDaily, seedToCode } from '../game/seedcode'
 import { weeklyRankedSeed, weekIndexFor, type RankedMode } from '../game/ranked'
 import { rankedConfigured, fetchBoard, fetchRank, registerHandle, localHandle, type BoardRow } from '../game/rankedNet'
+import { getAccessToken } from '../game/authNet'
 import { localBest, localHistory, type RankedLocalBest } from '../game/rankedLocal'
 import { withRef } from '../game/referral'
 import { appSettings } from './settings'
@@ -260,7 +261,9 @@ export class RankedPage {
     if (raw == null) return
     const clean = raw.replace(/[^\w \-]/g, '').trim().slice(0, 24)
     if (!clean) return
-    void registerHandle(clean).then(() => void this.renderBoard())
+    // When signed in, claim the handle on the durable auth account (portable);
+    // otherwise on the guest device row. Token fetch degrades to guest on failure.
+    void getAccessToken().then((token) => registerHandle(clean, token ?? undefined)).then(() => void this.renderBoard())
   }
 
   private copyLink(code: string): void {
