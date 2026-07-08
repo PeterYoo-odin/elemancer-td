@@ -35,6 +35,7 @@ export class MenuScene extends Phaser.Scene {
       onWorkshop: () => this.scene.start('Workshop'),
       onShop: () => this.scene.start('Shop'),
       onEndless: () => this.scene.start('Battle', { endless: true }),
+      onRoguelike: () => this.scene.start('Battle', { roguelike: true }),
       onDaily: () => this.scene.start('Daily'),
       // Replay from settings: the user has interacted, so no tap gate needed.
       onReplayIntro: () => showOdinSplash({ gate: false }),

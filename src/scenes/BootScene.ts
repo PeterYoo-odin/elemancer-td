@@ -71,6 +71,10 @@ function deepLinkRoute(): BattleLaunchData | null {
   }
   if (p.attract) return { ...common, attract: true, demo: true }
   if (p.demo) return { ...common, demo: true }
+  // ?rogue=1 → THIS WEEK'S roguelike run. The week (seed + mutator + event) is
+  // derived from the wall clock, so a shared link opens the identical weekly board
+  // for anyone who clicks it during the same week — the fair "challenge a friend".
+  if (new URLSearchParams(window.location.search).get('rogue')) return { roguelike: true }
   if (p.seed !== null) {
     if (p.levelId && levelById(p.levelId)) return { ...common, levelId: p.levelId }
     return { ...common, endless: true }

@@ -29,7 +29,11 @@ import {
 } from './combat'
 import { COLS, ROWS, TILE, FIXED_DT, MAX_STEPS_PER_FRAME, cellCenter } from './layout'
 import { AURA_COLOR, FUSION_NAMES, REACTIONS, reactionFor, type AuraElement, type ReactionDef, type ReactionKey } from './reactions'
-import { DRAFT_POOL, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
+import { DRAFT_POOL, rollRogueDraft, neutralUpgrades, type DraftCard, type RunUpgrades } from './drafts'
+import {
+  neutralRogueEffects, resolveRogueEffects, rogueWave, rollEliteAffixes, isBossRush,
+  type RogueEffects, type RogueConfig,
+} from './rogue'
 import { heroById, type HeroDef, type HeroRole, type HeroSpellDef, type SpellEffect } from '../game/heroes'
 import { heroStats, heroSpellScaled, signatureAwake } from '../game/heroProgress'
 import { resolveBond, type BondResolution } from '../game/wyrms'
@@ -84,6 +88,9 @@ export interface SimConfig {
   mods: RunModifiers
   seed: number
   endless: boolean
+  // ROGUELIKE endless: opt-in relic/affix/mutator layer. Endless-only; Ranked leaves
+  // it undefined so its provably-fair ladder stays pure. Ignored when !endless.
+  rogue?: RogueConfig
   startGold: number
   startLives: number
   // slice-6 hero loadout (optional). Each hero may carry a bonded Chromatic Wyrm
@@ -129,6 +136,13 @@ export interface SimEnemy {
   castAt: number // absolute clock time the next ability lands
   castWarned: boolean // telegraph already emitted for the pending cast
   speedMult: number // phase-3 stride (1 for everything else)
+  // ROGUELIKE elite-affix state (endless+rogue only; inert everywhere else).
+  elite: boolean
+  affix: string // primary affix adjective for the view ('' = not elite)
+  affixColor: number
+  dmgTakenMult: number // <1 = tanky affix; 1 = normal
+  bounty: number // gold multiplier on kill (affix); 1 = normal
+  regen: number // self-heal fraction of maxHp per second (Revenant affix)
   // transient view hints
   hitFlash: number
 }
@@ -343,6 +357,15 @@ export class Sim {
   draftOffer: DraftCard[] = []
   draftsTaken = 0
 
+  // ROGUELIKE mode (endless-only, opt-in via SimConfig.rogue). When null EVERY
+  // rogue code path is skipped, so Ranked/campaign math is byte-identical. Its own
+  // RNG stream keeps the main rng's draw order untouched (Ranked replays identically).
+  readonly rogue: boolean
+  private fx: RogueEffects = neutralRogueEffects()
+  private rogueRng: RNG
+  private rogueBoost: readonly string[] = []
+  private rogueTakenIds = new Set<string>()
+
   // Morose intrusions — planned up-front from a SEPARATE rng stream (the main
   // rng's draw order is untouched, so pre-intrusion seeds replay identically).
   // greyWaves: wave indices that get a mid-wave grey-a-tower moment.
@@ -362,6 +385,8 @@ export class Sim {
     reactionCounts: {} as Record<string, number>, // reaction NAME -> times fired
     fusions: 0, // fusion towers forged this run
     goldEarned: 0, // all battle-gold income (kills + clears + bonuses)
+    elitesSlain: 0, // ROGUELIKE: affixed elite enemies destroyed
+    relicsTaken: [] as string[], // ROGUELIKE: relic/curse titles drafted, in order
   }
 
   // spells
@@ -377,6 +402,15 @@ export class Sim {
     this.config = config
     this.seed = config.seed >>> 0
     this.rng = new RNG(this.seed)
+    // ROGUELIKE: only endless runs may carry a rogue config. A DEDICATED rng stream
+    // (seeded off the run seed) drives every affix + rogue-draft roll, so the main
+    // rng's draw order — and therefore a Ranked/campaign replay — is unaffected.
+    this.rogue = !!(config.endless && config.rogue)
+    this.rogueRng = new RNG((this.seed ^ 0x0ddba11) >>> 0)
+    if (this.rogue && config.rogue) {
+      this.fx = resolveRogueEffects(config.rogue.mutators ?? [])
+      this.rogueBoost = config.rogue.boostTags ?? []
+    }
     this.gold = Math.max(0, Math.floor(config.startGold))
     this.startLives = Math.max(1, Math.floor(config.startLives))
     this.lives = this.startLives
@@ -628,6 +662,14 @@ export class Sim {
 
   // How much of the level's colour the player has painted back (0 = fully Greyed,
   // 1 = restored). Monotonic across a run: waves cleared + kills within the wave.
+  // ROGUELIKE slow-strength knob (the "glacial silence" mutator muffles frost, or a
+  // mutator could sharpen it). Identity when !rogue. Clamped so slowFactor stays in
+  // (0,1] — the simcheck range invariant — for every caller.
+  private slowTarget(factor: number): number {
+    if (!this.rogue || this.fx.slowPower === 1) return factor
+    return clamp(1 - (1 - factor) * this.fx.slowPower, 0.05, 1)
+  }
+
   colorProgress(): number {
     if (this.state === 'won') return 1
     if (this.config.endless) return clamp(this.waveIndex / 12, 0, 1)
@@ -667,6 +709,7 @@ export class Sim {
   }
 
   currentWave(): Wave {
+    if (this.rogue) return rogueWave(this.waveIndex + 1)
     if (this.config.endless) return this.endlessWave(this.waveIndex + 1)
     const t = this.config.level.waves
     return t[Math.min(this.waveIndex, t.length - 1)]
@@ -758,6 +801,14 @@ export class Sim {
   // ---- drafts -------------------------------------------------------------
   private enterDraft(): void {
     this.state = 'draft'
+    if (this.rogue) {
+      // ROGUELIKE: deterministic weighted pick-1-of-N from the 100+ relic/curse pool
+      // (own rng stream). Pick-1-of-4 opens up once the run has real momentum.
+      const count = this.waveIndex >= 15 ? 4 : 3
+      this.draftOffer = rollRogueDraft(this.rogueRng, this.rogueTakenIds, this.waveIndex, this.rogueBoost, count)
+      this.emit({ t: 'banner', msg: 'CHOOSE A RELIC', color: 0xc06bff })
+      return
+    }
     this.draftOffer = this.rng.sample(DRAFT_POOL, 3)
     // Morose steals one option from the planned draft — a choice still remains.
     if (!this.config.endless && this.draftsTaken === this.stealDraftOrdinal && this.draftOffer.length === 3) {
@@ -774,6 +825,11 @@ export class Sim {
     const card = this.draftOffer[index]
     if (!card) return false
     card.apply(this.upgrades)
+    // ROGUELIKE run-summary + no-repeat bookkeeping (the taken relics ARE the build).
+    if (this.rogue) {
+      this.runStats.relicsTaken.push(card.title)
+      this.rogueTakenIds.add(card.id)
+    }
     if (card.livesDelta) {
       this.lives = clamp(this.lives + card.livesDelta, 0, 9999)
       if (this.lives <= 0) {
@@ -796,8 +852,19 @@ export class Sim {
     const keeper = kind === 'keeper' && keeperId ? KEEPER_BY_ID[keeperId] : undefined
     const def = keeper ? keeper.enemy : ENEMIES[kind]
     if (echo) hpMul *= ECHO_HP_MULT
+    // ROGUELIKE: fold mutator + curse HP scaling and roll per-enemy ELITE affixes
+    // (endless only; drawn from the dedicated rogue rng, so Ranked draw order is
+    // untouched). rollEliteAffixes consumes NO rng for bosses/keepers, so its call
+    // stays consistent for every spawn. Bosses also take the mutator boss-HP knob.
+    const affix = this.rogue ? rollEliteAffixes(this.rogueRng, kind, this.waveIndex + 1, this.fx.eliteChance) : null
+    if (this.rogue) {
+      hpMul *= this.fx.enemyHp * this.upgrades.curseEnemyHp
+      if (def.boss) hpMul *= this.fx.bossHp
+      if (affix) hpMul *= affix.hp
+    }
     const maxHp = Math.max(1, Math.round(def.hp * Math.max(0.1, hpMul)))
-    const shieldMax = def.shield ? Math.max(0, Math.round(def.shield * Math.max(0.1, hpMul))) : 0
+    let shieldMax = def.shield ? Math.max(0, Math.round(def.shield * Math.max(0.1, hpMul))) : 0
+    if (affix && affix.shieldFrac > 0) shieldMax += Math.round(maxHp * affix.shieldFrac)
     const start = this.positionAt(0)
     const e = this.freeEnemy()
     e.active = true
@@ -830,7 +897,25 @@ export class Sim {
     e.phase = 1
     e.castAt = 0
     e.castWarned = false
-    e.speedMult = 1
+    e.speedMult = this.rogue ? this.fx.enemySpeed : 1
+    // ROGUELIKE elite-affix application (endless only; inert otherwise). All
+    // affix effects are fair threats — tankier / faster / shielded / self-healing /
+    // gold piñata — none damage the player, so a run only ever fails by leaks.
+    e.elite = false
+    e.affix = ''
+    e.affixColor = 0
+    e.dmgTakenMult = 1
+    e.bounty = 1
+    e.regen = 0
+    if (affix && affix.ids.length > 0) {
+      e.elite = true
+      e.affix = affix.name
+      e.affixColor = affix.color
+      e.dmgTakenMult = affix.dr
+      e.bounty = affix.bounty
+      e.regen = affix.regen
+      e.speedMult *= affix.speed
+    }
     e.hitFlash = 0
     if (keeper) {
       // first cast lands early so the twist is legible from the start
@@ -848,7 +933,8 @@ export class Sim {
       dist: 0, x: 0, y: 0, slowUntil: 0, slowFactor: 1, stunUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0,
       poisonUntil: 0, poisonDps: 0, tearUntil: 0, tearAmount: 0, healTick: 0,
       auraElem: '', auraUntil: 0, reactLockUntil: 0, amplifyUntil: 0,
-      keeperId: '', keeperEcho: false, phase: 1, castAt: 0, castWarned: false, speedMult: 1, hitFlash: 0,
+      keeperId: '', keeperEcho: false, phase: 1, castAt: 0, castWarned: false, speedMult: 1,
+      elite: false, affix: '', affixColor: 0, dmgTakenMult: 1, bounty: 1, regen: 0, hitFlash: 0,
     }
     this.enemies.push(e)
     e.id = this.nextId++
@@ -881,6 +967,12 @@ export class Sim {
       if (e.poisonUntil > this.clock && e.poisonDps > 0) {
         this.applyRaw(e, e.poisonDps * dt, false)
         if (!e.active) continue
+      }
+
+      // ROGUELIKE Revenant affix: self-heal (a DPS check). Clamped to maxHp so the
+      // hp∈[0,maxHp] invariant holds; only heals a wounded, still-alive elite.
+      if (e.regen > 0 && e.hp > 0 && e.hp < e.maxHp) {
+        e.hp = Math.min(e.maxHp, e.hp + e.regen * e.maxHp * dt)
       }
 
       // healer aura
@@ -1488,7 +1580,7 @@ export class Sim {
       if (t.kind === 'frost') {
         const r2 = range * range
         const s = this.stats(t)
-        const slowF = clamp((s.slowFactor ?? 0.5) - this.upgrades.frostSlowBonus, 0.1, 1)
+        const slowF = this.slowTarget(clamp((s.slowFactor ?? 0.5) - this.upgrades.frostSlowBonus, 0.1, 1))
         for (const e of this.enemies) {
           if (!this.canTarget(t, e)) continue
           if (dist2(t.x, t.y, e.x, e.y) <= r2) {
@@ -1796,8 +1888,18 @@ export class Sim {
       comboN = this.comboCount
     }
 
-    // AMPLIFY reaction mark: the target takes bonus damage while marked.
-    if (e.amplifyUntil > this.clock) dmg *= AMPLIFY_TAKEN
+    // ROGUELIKE (endless only): global mutator damage, boss-slayer relics, and the
+    // enemy's elite damage-taken multiplier. All identity/skipped when !rogue, so
+    // the Ranked/campaign damage number is byte-identical.
+    if (this.rogue) {
+      dmg *= this.fx.playerDmg
+      if (def.boss) dmg *= this.upgrades.bossDmg
+      dmg *= e.dmgTakenMult
+    }
+
+    // AMPLIFY reaction mark: the target takes bonus damage while marked (relics
+    // deepen the mark's bite).
+    if (e.amplifyUntil > this.clock) dmg *= AMPLIFY_TAKEN + (this.rogue ? this.upgrades.amplifyPower : 0)
 
     // shield absorption (breaks → not an immunity)
     if (e.shield > 0) {
@@ -1817,6 +1919,12 @@ export class Sim {
 
     // elemental reactions: paint the aura / detonate a pair (survivors only)
     if (e.active && atk.aura) this.applyAura(e, atk.aura, dmg)
+
+    // ROGUELIKE "everything burns" mutator: every hit ignites the target.
+    if (this.rogue && this.fx.burnEveryHit > 0 && e.active) {
+      e.burnUntil = Math.max(e.burnUntil, this.clock + 2)
+      e.burnDps = Math.max(e.burnDps, this.fx.burnEveryHit * this.upgrades.burnDmgMult)
+    }
   }
 
   // ======================================================================
@@ -1854,6 +1962,13 @@ export class Sim {
   private triggerReaction(e: SimEnemy, def: ReactionDef, trigger: number): void {
     this.runStats.reactions++
     this.runStats.reactionCounts[def.name] = (this.runStats.reactionCounts[def.name] ?? 0) + 1
+    // ROGUELIKE relics/mutators: reactions detonate harder + wider, and some relics
+    // mint gold per detonation. All identity/skipped when !rogue (Ranked unchanged).
+    if (this.rogue) {
+      trigger *= this.fx.reactionDmg * this.upgrades.reactionDmg
+      if (this.upgrades.goldPerReaction > 0) this.addGold(this.upgrades.goldPerReaction)
+    }
+    const rMul = this.rogue ? this.fx.reactionRadius * this.upgrades.reactionRadius : 1
     const cx = e.x
     const cy = e.y
     let radius = 0
@@ -1869,7 +1984,7 @@ export class Sim {
       this.reactionBurst(e, trigger * 1.3 * (armored ? 2 : 1))
     } else if (def.key === 'flashover') {
       // FLASHOVER: explosion around the target
-      radius = TILE * 1.6
+      radius = TILE * 1.6 * rMul
       const r2 = radius * radius
       for (const o of this.enemies) {
         if (!o.active || o.hp <= 0) continue
@@ -1878,7 +1993,7 @@ export class Sim {
       }
     } else if (def.key === 'wildfire') {
       // WILDFIRE: the burn leaps to everything nearby
-      radius = TILE * 2
+      radius = TILE * 2 * rMul
       const r2 = radius * radius
       const dps = clamp(12 + trigger * 0.35, 0, 400)
       for (const o of this.enemies) {
@@ -1889,17 +2004,17 @@ export class Sim {
       }
     } else if (def.key === 'overgrow') {
       // OVERGROW: roots erupt — heavy area slow
-      radius = TILE * 1.8
+      radius = TILE * 1.8 * rMul
       const r2 = radius * radius
       for (const o of this.enemies) {
         if (!o.active || o.hp <= 0) continue
         if (dist2(cx, cy, o.x, o.y) > r2) continue
         o.slowUntil = Math.max(o.slowUntil, this.clock + 2.5)
-        o.slowFactor = Math.min(o.slowFactor, 0.3)
+        o.slowFactor = Math.min(o.slowFactor, this.slowTarget(0.3))
       }
     } else if (def.key === 'eclipse') {
       // ECLIPSE: a blink of darkness — brief area stun
-      radius = TILE * 1.5
+      radius = TILE * 1.5 * rMul
       const r2 = radius * radius
       for (const o of this.enemies) {
         if (!o.active || o.hp <= 0) continue
@@ -1908,12 +2023,12 @@ export class Sim {
       }
     } else if (def.key === 'conduct') {
       // CONDUCT: the charge arcs outward — a bonus chain off the target
-      radius = TILE * 2.5
+      radius = TILE * 2.5 * rMul
       const r2 = radius * radius
       const chain: SimEnemy[] = []
       let cursor: SimEnemy = e
       const used = new Set<number>([e.id])
-      while (chain.length < 4) {
+      while (chain.length < 4 + (this.rogue ? this.upgrades.conductJumps : 0)) {
         let best: SimEnemy | null = null
         let bd = Infinity
         for (const o of this.enemies) {
@@ -1938,7 +2053,7 @@ export class Sim {
       }
     } else if (def.key === 'blight') {
       // BLIGHT: corrupted spores — poison DoT area
-      radius = TILE * 1.6
+      radius = TILE * 1.6 * rMul
       const r2 = radius * radius
       const dps = clamp(10 + trigger * 0.3, 0, 300)
       for (const o of this.enemies) {
@@ -1949,7 +2064,7 @@ export class Sim {
       }
     } else {
       // AMPLIFY: mark the target — it takes bonus damage from everything
-      e.amplifyUntil = this.clock + AMPLIFY_DURATION
+      e.amplifyUntil = this.clock + AMPLIFY_DURATION + (this.rogue ? this.upgrades.amplifyDur : 0)
       this.reactionBurst(e, trigger * 0.4)
     }
 
@@ -1972,7 +2087,19 @@ export class Sim {
     this.waveKills++ // every kill paints a little colour back (Greying restoration)
     this.runStats.kills++
     if (e.def.boss) this.runStats.bossKills++
-    const reward = Math.max(0, Math.round(e.def.reward * this.config.mods.goldGainMult * this.upgrades.goldGainMult))
+    // Base reward — kept in the ORIGINAL left-to-right product order so the non-rogue
+    // gold value stays bit-identical (no IEEE associativity drift into replays).
+    let rewardRaw = e.def.reward * this.config.mods.goldGainMult * this.upgrades.goldGainMult
+    // ROGUELIKE: mutator gold + elite bounty; boss-slayer relics restore lives.
+    if (this.rogue) {
+      rewardRaw *= this.fx.goldMult * e.bounty
+      if (e.elite) this.runStats.elitesSlain++
+      if (e.def.boss && this.upgrades.lifePerBoss > 0) {
+        this.lives = clamp(this.lives + this.upgrades.lifePerBoss, 0, 9999)
+        this.emit({ t: 'text', x: e.x, y: e.y - 40, msg: `+${this.upgrades.lifePerBoss} ❤`, color: 0xff5b7a, size: 22 })
+      }
+    }
+    const reward = Math.max(0, Math.round(rewardRaw))
     this.addGold(reward)
     this.emit({ t: 'gold', x: e.x, y: e.y, amount: reward })
     this.emit({ t: 'death', x: e.x, y: e.y, kind: e.kind, color: e.def.color, boss: !!e.def.boss })
@@ -2254,7 +2381,7 @@ export class Sim {
 
     if (h.role === 'Control' && target.active && h.slowFactor < 1) {
       target.slowUntil = Math.max(target.slowUntil, this.clock + h.slowDuration)
-      target.slowFactor = Math.min(target.slowFactor, h.slowFactor)
+      target.slowFactor = Math.min(target.slowFactor, this.slowTarget(h.slowFactor))
     }
   }
 
@@ -2371,7 +2498,7 @@ export class Sim {
         break
       case 'slow':
         e.slowUntil = Math.max(e.slowUntil, this.clock + dur)
-        e.slowFactor = Math.min(e.slowFactor, isUlt ? 0.4 : 0.55)
+        e.slowFactor = Math.min(e.slowFactor, this.slowTarget(isUlt ? 0.4 : 0.55))
         break
       case 'poison':
         e.poisonUntil = Math.max(e.poisonUntil, this.clock + dur + 1)
@@ -2436,7 +2563,7 @@ export class Sim {
         e.stunUntil = Math.max(e.stunUntil, this.clock + dur)
         if (sp.slowFactor) {
           e.slowUntil = Math.max(e.slowUntil, this.clock + (sp.slowDuration ?? dur))
-          e.slowFactor = Math.min(e.slowFactor, clamp(sp.slowFactor, 0.1, 1))
+          e.slowFactor = Math.min(e.slowFactor, this.slowTarget(clamp(sp.slowFactor, 0.1, 1)))
         }
         n++
       }
@@ -2455,7 +2582,7 @@ export class Sim {
         if (dist2(cx, cy, e.x, e.y) > r2) continue
         if (sp.slowFactor) {
           e.slowUntil = Math.max(e.slowUntil, this.clock + (sp.slowDuration ?? 2))
-          e.slowFactor = Math.min(e.slowFactor, clamp(sp.slowFactor, 0.1, 1))
+          e.slowFactor = Math.min(e.slowFactor, this.slowTarget(clamp(sp.slowFactor, 0.1, 1)))
         }
       }
       this.emit({ t: 'heroSpell', effect: 'heal', name: sp.name, glyph: sp.glyph, x: cx, y: cy, radius, color, count: heal })
@@ -2602,7 +2729,49 @@ export class Sim {
       : this.waveIndex
     const s = this.runStats.kills * 20 + this.runStats.reactions * 45 + this.runStats.maxCombo * 30
       + this.runStats.bossKills * 400 + this.runStats.fusions * 300 + wavesCleared * 250 + Math.max(0, this.lives) * 60
+      + this.runStats.elitesSlain * 25
     return clamp(Math.round(s), 0, 1e9)
+  }
+
+  // Is the UPCOMING wave a BOSS RUSH? (view telegraph / banner; rogue-only.)
+  rogueBossRush(): boolean {
+    return this.rogue && isBossRush(this.waveIndex + 1)
+  }
+
+  // End-of-run recap payload (ROGUELIKE): the build you took, your biggest reaction,
+  // how deep you got, and the seed to share. Pure function of run stats + config, so
+  // it's stable and shareable. Mutator ids are returned raw; the view names them.
+  runSummary(): {
+    wave: number
+    seed: number
+    score: number
+    kills: number
+    reactions: number
+    elitesSlain: number
+    maxCombo: number
+    relics: string[]
+    biggestReaction: { name: string; count: number } | null
+    mutators: string[]
+    eventId: string | null
+  } {
+    let bestName = ''
+    let bestN = 0
+    for (const [name, n] of Object.entries(this.runStats.reactionCounts)) {
+      if (n > bestN) { bestN = n; bestName = name }
+    }
+    return {
+      wave: this.waveIndex + 1,
+      seed: this.seed,
+      score: this.score(),
+      kills: this.runStats.kills,
+      reactions: this.runStats.reactions,
+      elitesSlain: this.runStats.elitesSlain,
+      maxCombo: this.runStats.maxCombo,
+      relics: this.runStats.relicsTaken.slice(),
+      biggestReaction: bestName ? { name: bestName, count: bestN } : null,
+      mutators: this.config.rogue?.mutators?.slice() ?? [],
+      eventId: this.config.rogue?.eventId ?? null,
+    }
   }
   private spendGold(n: number): void {
     this.gold = clamp(this.gold - Math.round(n), 0, 1e9)

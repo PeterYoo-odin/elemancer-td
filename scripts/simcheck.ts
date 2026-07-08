@@ -9,7 +9,11 @@
 // x/y in map bounds, dist∈[0,pathLength], comboMult∈[1,COMBO_MAX], every damage
 // number finite & ≥0, all coords/cooldowns finite.
 
-import { Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES } from '../src/sim/index'
+import {
+  Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES,
+  DRAFT_POOL, ROGUE_DRAFT_POOL, MUTATOR_IDS, MUTATORS, rollRogueDraft, RNG, type MutatorId,
+} from '../src/sim/index'
+import { weeklyPlan, activeEvent, weekIndex, weeklyMutator, EVENTS } from '../src/game/events'
 import { NEUTRAL } from '../src/game/workshop'
 import { LEVELS, pathCellsFor, type LevelDef } from '../src/game/levels'
 import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
@@ -477,6 +481,160 @@ for (const lvl of LEVELS) {
   if (lvl.unlockTower) owned.add(lvl.unlockTower) // its reward is available on the NEXT level
 }
 if (beatFails === 0) console.log(`  all ${LEVELS.length} live levels beatable (base towers + unlocks only) — tightest: ${hardest.id} @ ${hardest.lives} lives`)
+
+// ---------------------------------------------------------------------------
+//  ROGUELIKE ENDLESS — the live-ops spine. Prove: (1) RANKED PURITY — with NO
+//  rogue config the endless path is byte-inert (draft only from the base pool, ZERO
+//  affixes, no rogue bookkeeping); (2) the 100+ relic pool + weighted roll are
+//  deterministic and never repeat a unique; (3) every mutator + the live event run
+//  clean (in-range, deterministic) with affixes spawning and reactions firing;
+//  (4) a REALISTIC-lives run fails cleanly (terminates — no one-mistake snowball).
+// ---------------------------------------------------------------------------
+console.log('\nroguelike endless — relics, affixes, mutators, weekly seed, events…')
+
+// (1) RANKED PURITY: a no-rogue endless run must stay exactly as it always was.
+{
+  const sim = makeSim(4242, 3, 0) // makeSim passes NO rogue config
+  if (sim.rogue) fail('ranked-purity: makeSim (no rogue config) unexpectedly entered rogue mode')
+  deployParty(sim); saturateTowers(sim, 'max')
+  const baseIds = new Set(DRAFT_POOL.map((c) => c.id))
+  let sawElite = false
+  let badDraft = ''
+  let tick = 0
+  while (sim.waveIndex < 24 && tick < STEP_BUDGET) {
+    if (sim.state === 'draft') {
+      for (const c of sim.draftOffer) if (!baseIds.has(c.id)) badDraft = c.id
+      sim.chooseDraft(tick % 3); continue
+    }
+    if (sim.state === 'prep') sim.startWave()
+    if (sim.state === 'won' || sim.state === 'lost') break
+    sim.step(); tick++
+    for (const e of sim.enemies) if (e.active && e.elite) sawElite = true
+  }
+  if (sawElite) fail('ranked-purity: an ELITE affix spawned in a non-rogue endless run')
+  if (badDraft) fail(`ranked-purity: non-rogue draft offered a ROGUE card (${badDraft})`)
+  if (sim.runStats.relicsTaken.length !== 0) fail('ranked-purity: relicsTaken populated in a non-rogue run')
+  if (sim.runStats.elitesSlain !== 0) fail('ranked-purity: elitesSlain nonzero in a non-rogue run')
+  console.log('  ranked purity ✓ — no rogue card / affix / bookkeeping leaks into endless')
+}
+
+// (2) POOL + DETERMINISTIC ROLL
+if (ROGUE_DRAFT_POOL.length < 100) fail(`rogue pool too small: ${ROGUE_DRAFT_POOL.length} (need 100+)`)
+{
+  const dupe = ROGUE_DRAFT_POOL.map((c) => c.id).filter((x, i, a) => a.indexOf(x) !== i)
+  if (dupe.length) fail(`rogue pool has duplicate ids: ${dupe.slice(0, 3).join(',')}`)
+  // deterministic weighted roll + no-repeat of taken uniques
+  const a = rollRogueDraft(new RNG(7), new Set(), 10, [], 3)
+  const b = rollRogueDraft(new RNG(7), new Set(), 10, [], 3)
+  if (a.map((c) => c.id).join() !== b.map((c) => c.id).join()) fail('rollRogueDraft is non-deterministic for a fixed rng/seed')
+  const taken = new Set(ROGUE_DRAFT_POOL.filter((c) => c.unique).map((c) => c.id))
+  const excl = rollRogueDraft(new RNG(9), taken, 30, [], 4)
+  if (excl.some((c) => c.unique && taken.has(c.id))) fail('rollRogueDraft offered an already-taken unique relic')
+  // event boost tags must skew the distribution toward matching relics
+  let fireHits = 0
+  for (let s = 0; s < 400; s++) {
+    for (const c of rollRogueDraft(new RNG(s * 131 + 1), new Set(), 20, ['fire'], 3)) {
+      if (c.tags?.includes('fire')) fireHits++
+    }
+  }
+  if (fireHits < 60) fail(`event boost tags barely skewed the roll (${fireHits} fire hits in 400 draws)`)
+  console.log(`  pool ✓ — ${ROGUE_DRAFT_POOL.length} cards, deterministic weighted roll, uniques never repeat, boost skews (${fireHits} fire hits/400)`)
+}
+
+// (3) a rogue run with the given mutators — god-mode so it reaches deep waves and
+// stacks affixes; validated every tick, elites must spawn, reactions must fire.
+function runRogue(seed: number, mutators: MutatorId[], boostTags: string[], waves: number): { wave: number; elites: number; reactions: number; relics: number; fp: string } {
+  const sim = new Sim({
+    level: STRESS_LEVEL, mods: { ...NEUTRAL }, seed, endless: true,
+    rogue: { mutators, boostTags },
+    startGold: 5_000_000, startLives: 5_000_000, party: PARTIES[0],
+  })
+  if (!sim.rogue) fail(`rogue config [${mutators.join(',')}] did not enter rogue mode`)
+  deployParty(sim); saturateTowers(sim, 'max'); fuseSome(sim)
+  const retired = new Set<number>()
+  let tick = 0
+  let elites = 0
+  while (sim.waveIndex < waves && tick < STEP_BUDGET) {
+    if (sim.state === 'draft') { sim.chooseDraft(tick % 3); continue }
+    if (sim.state === 'prep') sim.startWave()
+    if (sim.state === 'won' || sim.state === 'lost') break
+    if (tick % 600 === 0) saturateTowers(sim, 'max')
+    if (tick % 120 === 0) castHeroSpells(sim)
+    sim.step(); tick++
+    for (const e of sim.enemies) if (e.active && e.elite) elites++
+    validate(sim, tick)
+    checkIds(sim, retired, tick)
+  }
+  return { wave: sim.waveIndex, elites, reactions: sim.runStats.reactions, relics: sim.runStats.relicsTaken.length, fp: `${sim.waveIndex}|${sim.gold}|${sim.clock.toFixed(3)}|${sim.liveEnemyCount()}` }
+}
+
+let rogueElites = 0
+let rogueReactions = 0
+let mi = 0
+for (const m of MUTATOR_IDS) {
+  const seed = (0x1234567 ^ Math.imul(mi + 1, 2654435761)) >>> 0
+  const r = runRogue(seed, [m], [], 26)
+  rogueElites += r.elites
+  rogueReactions += r.reactions
+  if (r.relics < 3) fail(`rogue run [${m}] drafted too few relics (${r.relics})`)
+  mi++
+}
+// the live event (weekly headline + emberwaste twist) must also run clean
+{
+  const plan = weeklyPlan(EVENTS[0].startMs + 3_600_000)
+  const r = runRogue(plan.seed, plan.rogue.mutators, plan.rogue.boostTags, 24)
+  rogueElites += r.elites; rogueReactions += r.reactions
+}
+if (rogueElites === 0) fail('no ELITE affixes ever spawned across the rogue stress runs')
+if (rogueReactions === 0) fail('no reactions fired across the rogue stress runs')
+console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rogueElites}, reactions ${rogueReactions}`)
+
+// determinism: identical rogue seed + mutators ⇒ identical end-state
+{
+  const f1 = runRogue(31337, ['chain_reaction'], ['fire'], 14).fp
+  const f2 = runRogue(31337, ['chain_reaction'], ['fire'], 14).fp
+  if (f1 !== f2) fail(`rogue run non-deterministic: ${f1} vs ${f2}`)
+}
+
+// (4) CLEAN FAILURE — a realistic-lives run must TERMINATE (die or reach target),
+// never snowball forever. No god-mode: 20 lives, base towers only.
+{
+  const sim = new Sim({
+    level: STRESS_LEVEL, mods: { ...NEUTRAL }, seed: 55, endless: true,
+    rogue: { mutators: ['ironclad', 'blitz'], boostTags: [] },
+    startGold: 300, startLives: 20, party: PARTIES[0],
+  })
+  deployParty(sim); saturateTowers(sim, 'base')
+  let tick = 0
+  const retired = new Set<number>()
+  while (tick < 60 * 60 * 30) {
+    if (sim.state === 'draft') { sim.chooseDraft(tick % 3); continue }
+    if (sim.state === 'prep') sim.startWave()
+    if (sim.state === 'won' || sim.state === 'lost') break
+    sim.step(); tick++
+    validate(sim, tick)
+    checkIds(sim, retired, tick)
+  }
+  if (sim.state !== 'lost' && sim.waveIndex < 5) fail(`clean-failure run neither died nor progressed (wave ${sim.waveIndex}, ${sim.lives} lives)`)
+  console.log(`  clean failure ✓ — realistic run ended state '${sim.state}' at wave ${sim.waveIndex + 1}, ${sim.lives} lives`)
+}
+
+// (5) EVENTS + WEEKLY SEED — deterministic resolution + window correctness.
+{
+  const emberwaste = EVENTS.find((e) => e.id === 'emberwaste')!
+  if (!emberwaste) fail('Emberwaste event missing from EVENTS')
+  const inWindow = emberwaste.startMs + 86_400_000
+  if (activeEvent(inWindow)?.id !== 'emberwaste') fail('Emberwaste not active inside its own window')
+  if (activeEvent(emberwaste.endMs + 86_400_000) !== null) fail('an event is active AFTER its window closes')
+  if (activeEvent(emberwaste.startMs - 86_400_000) !== null) fail('an event is active BEFORE its window opens')
+  // weekly plan is deterministic + folds the event mutators/boosts
+  const p1 = weeklyPlan(inWindow); const p2 = weeklyPlan(inWindow)
+  if (JSON.stringify(p1.rogue) !== JSON.stringify(p2.rogue)) fail('weeklyPlan is non-deterministic')
+  if (!p1.rogue.mutators.includes('pyroclasm')) fail('Emberwaste window plan is missing the event mutator (pyroclasm)')
+  if (!p1.rogue.mutators.includes(weeklyMutator(weekIndex(inWindow)))) fail('weeklyPlan dropped the weekly headline mutator')
+  if (!MUTATORS[p1.headline]) fail('weekly headline mutator id is not a real mutator')
+  console.log(`  events ✓ — Emberwaste live in-window, weekly seed deterministic, headline+event mutators folded`)
+}
 
 if (failures > 0) {
   console.error(`\nSIMCHECK FAILED — ${failures} violation(s).`)

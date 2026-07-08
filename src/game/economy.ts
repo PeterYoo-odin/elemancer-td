@@ -419,6 +419,17 @@ class Economy {
     return { coins, best }
   }
 
+  // ---- roguelike reward (coins + pass xp; NEVER touches endlessBest, so the
+  //      provably-fair Ranked ladder stays pure — the roguelike is its own mode) ----
+  awardRoguelike(wavesReached: number): { coins: number } {
+    const meta = this.meta()
+    const coins = Math.round(wavesReached * 9 * meta.coinBoost)
+    this.data.coins += coins
+    this.data.pass.xp += Math.min(50, wavesReached * 2)
+    this.save()
+    return { coins }
+  }
+
   // ---- idle offline earnings ----
   idlePreview(): IdleReport {
     const last = this.data.lastSeen

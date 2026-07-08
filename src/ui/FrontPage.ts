@@ -23,6 +23,7 @@ export interface FrontPageHandlers {
   onWorkshop(): void
   onShop(): void
   onEndless(): void
+  onRoguelike(): void
   onDaily(): void
   onReplayIntro(): void
 }
@@ -417,6 +418,11 @@ export class FrontPage {
           <span class="efp-btxt"><span class="efp-blabel">ENDLESS</span><span class="efp-bsub">Fair play &middot; no boosts</span></span>
           <span class="efp-pill">RANKED</span>
         </button>
+        <button class="efp-btn efp-in" style="animation-delay:.63s; --a:#c06bff" data-act="roguelike">
+          <span class="efp-ic">${svg(ICONS.gem)}</span>
+          <span class="efp-btxt"><span class="efp-blabel">ROGUELIKE</span><span class="efp-bsub">Relics &middot; curses &middot; weekly mutator</span></span>
+          <span class="efp-pill">WEEKLY</span>
+        </button>
         <button class="efp-btn efp-in" style="animation-delay:.66s; --a:#ffd54a" data-act="daily">
           <span class="efp-ic">${svg(ICONS.calendar)}</span>
           <span class="efp-btxt"><span class="efp-blabel">DAILY SEED</span><span class="efp-bsub">One shared run &middot; beat your best</span></span>
@@ -480,6 +486,7 @@ export class FrontPage {
       else if (act === 'workshop') this.leave(() => this.handlers.onWorkshop())
       else if (act === 'shop') this.leave(() => this.handlers.onShop())
       else if (act === 'endless') this.leave(() => this.handlers.onEndless())
+      else if (act === 'roguelike') this.leave(() => this.handlers.onRoguelike())
       else if (act === 'daily') this.leave(() => this.handlers.onDaily())
       else if (act === 'invite') showReferralPanel()
       else if (act === 'install') showInstallCard({ force: true })

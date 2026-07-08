@@ -28,6 +28,8 @@ import { playMoroseHush } from '../ui/sfx'
 import { battleSfx } from '../ui/battleSfx'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
 import { recordDailyResult } from '../game/daily'
+import { weeklyPlan, planHeadline, recordWeeklyBest, type WeeklyPlan } from '../game/events'
+import { MUTATORS } from '../sim'
 import { ScriptRunner, DEMO_SCRIPT, DEMO_SEED, DEMO_PARTY, DEMO_FROST_CELL } from '../game/attractScript'
 import { DEMO_CINE_CUES, DEMO_CAPTIONS, CINE_HOME } from '../game/cinema'
 import { ftue, LEVEL_LESSONS, deathLesson } from '../game/onboarding'
@@ -62,6 +64,7 @@ export interface BattleLaunchData {
   difficulty?: import('../game/modes').Difficulty // campaign: 'heroic' scales waves
   challenge?: import('../game/modes').Challenge // campaign: iron / nohero / towers
   endless?: boolean
+  roguelike?: boolean // ROGUELIKE endless: weekly mutator + relics + affixes (its own mode)
   demo?: boolean // "The Restoration of Ember Vale" — live play
   attract?: boolean // hands-free cinematic demo reel (?attract=1)
   seedOverride?: number // ?seed= deep link — the exact seeded run
@@ -75,6 +78,8 @@ export class BattleScene extends Phaser.Scene {
   private levelId = 'l1'
   private runMode: RunMode = NORMAL_MODE
   private endless = false
+  private roguelike = false
+  private roguePlan: import('../game/events').WeeklyPlan | null = null
   private demoMode = false
   private attract = false
   private seedOverride: number | undefined
@@ -146,7 +151,11 @@ export class BattleScene extends Phaser.Scene {
   init(data: BattleLaunchData): void {
     this.attract = !!data?.attract
     this.demoMode = this.attract || !!data?.demo || data?.levelId === 'demo'
-    this.endless = !this.demoMode && !!data?.endless
+    // ROGUELIKE is its OWN infinite mode (weekly mutator + relics + affixes). It
+    // reuses the endless scaffolding (infinite waves + draft loop) but never writes
+    // the Ranked ladder (endlessBest), so the provably-fair board stays pure.
+    this.roguelike = !this.demoMode && !!data?.roguelike
+    this.endless = !this.demoMode && (!!data?.endless || this.roguelike)
     this.levelId = this.demoMode ? 'demo' : data?.levelId ?? 'l1'
     // Difficulty/challenge modes apply to campaign play only (never demo/attract/endless).
     this.runMode = (this.demoMode || data?.endless)
@@ -165,6 +174,10 @@ export class BattleScene extends Phaser.Scene {
     const baseLevel = this.endless ? this.endlessLevel() : this.demoMode ? DEMO_LEVEL : levelById(this.levelId) ?? LEVELS[0]
     // Heroic scales the waves (deterministic, harder); other modes leave waves intact.
     this.level = levelForMode(baseLevel, this.runMode)
+    // ROGUELIKE: resolve THIS week's shared plan (headline mutator + live event +
+    // relic boosts) from the wall clock. The sim never reads the clock — it takes
+    // the resolved RogueConfig verbatim, so the shared weekly seed replays for all.
+    this.roguePlan = this.roguelike ? weeklyPlan(Date.now()) : null
     // Demo/attract runs are provably fair showcases: NEUTRAL modifiers always,
     // so a shared seed replays identically on every account.
     const mods = this.demoMode ? { ...NEUTRAL } : economy.runModifiers(this.endless)
@@ -180,11 +193,13 @@ export class BattleScene extends Phaser.Scene {
     const startLives = this.endless ? ENDLESS_START_LIVES : startLivesForMode(this.level.startLives + mods.startLivesBonus, this.runMode) + assistLives
     // Every run's seed lives in the shareable WORD-WORD-NN code space, so the
     // "Copy seed link" on ANY run reproduces it exactly.
-    const rawSeed = this.endless
-      ? (0xE9D1E55 ^ (economy.data.endlessBest * 2654435761)) >>> 0
-      : this.demoMode
-        ? DEMO_SEED
-        : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234 ^ modeSeedSalt(this.runMode)) >>> 0
+    const rawSeed = this.roguelike
+      ? this.roguePlan!.seed // the SHARED weekly seed — everyone's board runs this
+      : this.endless
+        ? (0xE9D1E55 ^ (economy.data.endlessBest * 2654435761)) >>> 0
+        : this.demoMode
+          ? DEMO_SEED
+          : (0xA5EED ^ (this.level.index * 40503) ^ 0x1234 ^ modeSeedSalt(this.runMode)) >>> 0
     this.seed = this.seedOverride ?? canonicalSeed(rawSeed)
     this.seedCode = seedToCode(this.seed)
     // resolve the chosen loadout into (heroId, level) pairs — economy.party() is
@@ -192,14 +207,18 @@ export class BattleScene extends Phaser.Scene {
     // The attract reel uses a FIXED party so the footage never depends on a save.
     // RANKED (endless): loadout slot 1 with NORMALIZED hero levels — no purchase
     // and no grind changes ranked strength (the store constitution, enforced).
+    // ROGUELIKE feeds the shared WEEKLY BOARD, so hero power is NORMALIZED exactly
+    // like Ranked — every account on the week's seed compares fairly (the wildness
+    // comes from seed-fair relics/mutators, never from grind/purchases). Its own MODE
+    // (relics, curses, affixes, mutators); still provably fair on the leaderboard.
     const party = this.attract
       ? DEMO_PARTY.map((p) => ({ ...p }))
-      : this.endless
+      : this.endless // covers Ranked AND roguelike — both normalized
         ? economy.rankedParty()
         : partyAllowedForMode(this.runMode) // No-Hero challenge: leave the champions home
           ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level, wyrm: economy.bondEntry(id) }))
           : []
-    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
+    this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, rogue: this.roguePlan?.rogue, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
 
     // LIVE demo: Maddervane pre-places the Frost tower (the guaranteed-SHATTER
     // setup — the player adds Storm). Placement is refunded: a gift, not a cost.
@@ -307,6 +326,10 @@ export class BattleScene extends Phaser.Scene {
       this.buildTakeoverOverlay()
     } else if (this.demoMode) {
       this.hud.banner('MADDERVANE LEFT YOU A FROST TOWER', 0x9fdcff)
+    } else if (this.roguelike && this.roguePlan) {
+      // The weekly headline mutator (+ live event) — the run's rule twist, up front.
+      const head = MUTATORS[this.roguePlan.headline]
+      this.hud.banner(`${head?.icon ?? '🎲'} ${planHeadline(this.roguePlan)}`, this.roguePlan.event?.color ?? head?.color ?? 0xc06bff)
     } else if (this.endless) {
       // The store constitution, on screen: Ranked ignores every purchase —
       // heroes normalized, boosts/convenience/extra slots disabled.
@@ -967,7 +990,10 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private quitBattle(): void {
-    if (this.endless) {
+    if (this.roguelike) {
+      economy.awardRoguelike(this.sim.waveIndex)
+      this.awardHeroes(this.endlessShards(), this.endlessXp())
+    } else if (this.endless) {
       economy.awardEndless(this.sim.waveIndex)
       this.awardHeroes(this.endlessShards(), this.endlessXp())
     }
@@ -1106,7 +1132,17 @@ export class BattleScene extends Phaser.Scene {
     } else {
       this.hud.flash(0xff3b6b, 0.5)
       battleSfx.defeat()
-      if (this.endless) {
+      if (this.roguelike) {
+        // ROGUELIKE run end: coins/xp via the rogue path (never endlessBest), a LOCAL
+        // weekly-best record (the leaderboard hook), and the full run-summary recap.
+        const res = economy.awardRoguelike(this.sim.waveIndex)
+        const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
+        const plan = this.roguePlan!
+        const pb = recordWeeklyBest(plan.week, this.sim.waveIndex + 1)
+        const bestTag = pb ? ' · NEW WEEKLY BEST!' : ''
+        this.hud.showResult({ win: false, title: 'RUN OVER', color: 0xc06bff, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${bestTag}`, endless: true, share: this.buildShare(false) })
+        window.setTimeout(() => this.showRunSummary(), 480)
+      } else if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
         // Daily runs also log a PURELY LOCAL best-for-today (habit loop; no backend).
@@ -1122,6 +1158,62 @@ export class BattleScene extends Phaser.Scene {
         this.tryBark('defeat') // Morose condoles — he always does
       }
     }
+  }
+
+  // ROGUELIKE END-OF-RUN RECAP — the build you took, your biggest reaction, how
+  // deep you got, and the seed to share. A self-contained DOM overlay layered over
+  // the result card; dismisses on tap.
+  private showRunSummary(): void {
+    if (!this.roguePlan) return
+    const s = this.sim.runSummary()
+    const plan = this.roguePlan
+    const ov = document.createElement('div')
+    ov.style.cssText =
+      'position:fixed;inset:0;z-index:4300;display:flex;align-items:center;justify-content:center;padding:20px;' +
+      'background:rgba(8,5,18,.82);backdrop-filter:blur(5px);opacity:0;transition:opacity .45s ease;' +
+      'font-family:"Baloo 2","Nunito",system-ui,sans-serif;color:#fff;'
+    const relics = s.relics.length ? s.relics.map((r) => `<span style="display:inline-block;margin:2px 3px;padding:3px 9px;border-radius:9px;background:rgba(192,107,255,.18);border:1px solid rgba(192,107,255,.4);font-size:12px;font-weight:700">${r}</span>`).join('') : '<span style="opacity:.6">no relics drafted</span>'
+    const big = s.biggestReaction ? `${s.biggestReaction.name} ×${s.biggestReaction.count}` : '—'
+    const muts = plan.rogue.mutators.map((m) => `${MUTATORS[m]?.icon ?? ''} ${MUTATORS[m]?.name ?? m}`).join(' · ')
+    const card = document.createElement('div')
+    card.style.cssText =
+      'width:min(92vw,460px);max-height:88vh;overflow:auto;border-radius:18px;padding:22px 22px 18px;' +
+      'background:linear-gradient(170deg,#1a1030,#0d0820);border:1px solid rgba(192,107,255,.35);box-shadow:0 18px 60px rgba(0,0,0,.6);'
+    card.innerHTML = `
+      <div style="font:900 26px 'Baloo 2';letter-spacing:.5px;color:#d8ccff">RUN SUMMARY</div>
+      ${plan.event ? `<div style="margin-top:4px;font-size:13px;font-weight:800;color:#${plan.event.color.toString(16).padStart(6, '0')}">${plan.event.icon} ${plan.event.name}</div>` : ''}
+      <div style="margin-top:2px;font-size:12px;font-weight:700;color:#9ad0ff">${muts}</div>
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <div style="flex:1;text-align:center;background:rgba(255,255,255,.05);border-radius:12px;padding:12px 6px">
+          <div style="font:900 30px 'Baloo 2';color:#2ff7c3">${s.wave}</div><div style="font-size:11px;font-weight:800;opacity:.7">WAVE REACHED</div></div>
+        <div style="flex:1;text-align:center;background:rgba(255,255,255,.05);border-radius:12px;padding:12px 6px">
+          <div style="font:900 30px 'Baloo 2';color:#ffd54a">${s.score.toLocaleString('en-US')}</div><div style="font-size:11px;font-weight:800;opacity:.7">SCORE</div></div>
+      </div>
+      <div style="margin-top:14px;font-size:13px;line-height:1.7">
+        <div>⚛ Biggest reaction: <b>${big}</b></div>
+        <div>🔗 Combo peak: <b>×${s.maxCombo}</b> &nbsp;·&nbsp; 💥 Reactions: <b>${s.reactions}</b></div>
+        <div>💀 Kills: <b>${s.kills}</b> &nbsp;·&nbsp; ⭐ Elites: <b>${s.elitesSlain}</b></div>
+      </div>
+      <div style="margin-top:14px;font-size:12px;font-weight:800;opacity:.7">YOUR BUILD (${s.relics.length} relics)</div>
+      <div style="margin-top:6px">${relics}</div>
+      <div style="margin-top:16px;display:flex;gap:8px">
+        <button data-copy style="flex:1;padding:11px;border-radius:12px;border:1px solid rgba(255,255,255,.25);cursor:pointer;color:#cbe9ff;background:rgba(90,141,255,.14);font:800 13px 'Baloo 2'">🔗 Copy challenge link · seed ${this.seedCode}</button>
+        <button data-close style="flex:0 0 auto;padding:11px 20px;border-radius:12px;border:1px solid rgba(255,255,255,.25);cursor:pointer;color:#fff;background:rgba(192,107,255,.24);font:800 13px 'Baloo 2'">CLOSE</button>
+      </div>
+      <div style="margin-top:8px;text-align:center;font-size:11px;opacity:.55">Same weekly board all week — challenge a friend to beat wave ${s.wave}</div>
+    `
+    ov.appendChild(card)
+    document.body.appendChild(ov)
+    requestAnimationFrame(() => { ov.style.opacity = '1' })
+    const close = () => { ov.style.opacity = '0'; window.setTimeout(() => ov.remove(), 350) }
+    card.querySelector<HTMLButtonElement>('[data-close]')!.onclick = close
+    // Share the ROGUELIKE deep link (?rogue=1), NOT a bare seed — a raw seed routes
+    // to plain endless. This week's link opens the same weekly board for the clicker.
+    card.querySelector<HTMLButtonElement>('[data-copy]')!.onclick = () => {
+      copyText(withRef(window.location.origin + window.location.pathname + '?rogue=1'))
+      battleSfx.draftPick()
+    }
+    ov.addEventListener('click', (e) => { if (e.target === ov) close() })
   }
 
   // The reel's final frame: prove-it card + the seed challenge + one-tap PLAY.
