@@ -86,6 +86,11 @@ const CSS = `
 @keyframes efpIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .efp-in { animation: efpIn .65s cubic-bezier(.22,1,.36,1) both; }
 .efp.efp-reduced .efp-in { animation: none; }
+/* FIRST-TAP-COUNTS: while the staggered entrance is still running, each button's
+   translateY(16px) rise offsets its hitbox below its resting spot, so a tap on the
+   final position misses and needs a second tap. On the first pointer interaction we
+   add .efp-settled to snap every element to rest, so that SAME tap lands. */
+.efp.efp-settled .efp-in { animation: none !important; }
 .efp.efp-reduced .efp-logo, .efp.efp-reduced .efp-logo-sheen,
 .efp.efp-reduced .efp-spark, .efp.efp-reduced .efp-orb { animation: none !important; }
 
@@ -528,6 +533,15 @@ export class FrontPage {
       wrap.style.borderRadius = '18px'
       wrap.style.boxShadow = '0 0 30px rgba(255,190,70,.16), inset 0 0 24px rgba(255,190,70,.07)'
     }
+
+    // Make the very first tap count: snap the entrance to its resting layout on the
+    // first pointerdown (capture, once) BEFORE the click hit-tests, so a tap on a
+    // card that's still mid-rise lands on that card instead of the gap above it.
+    const settleEntrance = () => {
+      this.root.classList.add('efp-settled')
+      this.root.removeEventListener('pointerdown', settleEntrance, true)
+    }
+    this.root.addEventListener('pointerdown', settleEntrance, true)
 
     this.root.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')

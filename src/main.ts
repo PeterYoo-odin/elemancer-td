@@ -23,6 +23,7 @@ import { handleAuthCallback } from './game/authNet'
 import { registerServiceWorker } from './ui/pwa'
 import { analytics } from './game/analytics'
 import { applyAccessibility } from './ui/a11y'
+import { qa, qaFlagPresent } from './game/qa'
 
 // GROWTH FUNNEL: a shared/ad/social link drops the player straight into playable
 // game. Snapshot the marketing params (?ref= · ?utm_* · ?campaign= · ?src= · ?c=)
@@ -84,4 +85,13 @@ const config: Phaser.Types.Core.GameConfig = {
   scene: [BootScene, MenuScene, MapScene, WorkshopScene, ShopScene, HeroesScene, DailyScene, RankedScene, PathforgeScene],
 }
 
-new Phaser.Game(config)
+const game = new Phaser.Game(config)
+
+// QA DRIVE + JUICE TELEMETRY — attached ONLY when the QA flag is present
+// (?qa=1 / VITE_QA_HOOKS / dev). A normal production load takes neither branch,
+// so window.__chromancer is absent and nothing extra runs. Imported eagerly but
+// side-effect-free; the install is what gates activation.
+if (qaFlagPresent()) {
+  qa.enable()
+  void import('./game/chromancerApi').then(({ installChromancer }) => installChromancer(game))
+}

@@ -5601,6 +5601,50 @@ var Sim = class {
     for (const e3 of this.enemies) if (e3.active) n++;
     return n;
   }
+  // ==== QA-ONLY control surface ==========================================
+  // These are invoked EXCLUSIVELY by the gated QA drive (window.__chromancer);
+  // nothing in normal play, the UI, the ranked recorder, or api/verify-run calls
+  // them. Adding them changes no existing code path, so determinism and the
+  // provably-fair replay of real runs are untouched. They exist so an automated
+  // tester can reach a dense late wave and both end screens deterministically.
+  /** QA: jump straight to wave `n` (1-based) in a clean PREP so the caller can
+   *  startWave() + step and watch a dense wave render. Clears the board first. */
+  qaSkipToWave(n) {
+    const cap = this.config.endless ? Number.MAX_SAFE_INTEGER : this.config.level.waves.length;
+    const target = Math.max(1, Math.min(Math.floor(n), cap));
+    for (const e3 of this.enemies) e3.active = false;
+    for (const p of this.projectiles) p.active = false;
+    for (const z of this.zones) z.active = false;
+    this.spawnQueue = [];
+    this.waveKills = 0;
+    this.waveSpawnTotal = 1;
+    this.greyPendingAt = -1;
+    this.greyWarned = false;
+    this.waveIndex = target - 1;
+    this.state = "prep";
+    this.prepTimer = 3;
+  }
+  /** QA: remove the tower on a cell (frees the tile). Refund-free — QA board edit. */
+  qaRemoveTower(col, row) {
+    const t = this.towerAt(col, row);
+    if (!t) return false;
+    t.active = false;
+    if (this.occupied[row]?.[col] === t) this.occupied[row][col] = null;
+    this.recomputeBuffs();
+    this.recomputeResonances();
+    return true;
+  }
+  /** QA: force an end screen deterministically. */
+  qaForceEnd(result) {
+    if (result === "lost") this.lives = 0;
+    for (const e3 of this.enemies) e3.active = false;
+    this.spawnQueue = [];
+    this.state = result;
+  }
+  /** QA: top up gold so a placement/upgrade can't fail on affordability. */
+  qaGrantGold(amount) {
+    this.gold = Math.max(this.gold, Math.floor(amount));
+  }
 };
 var EMPTY_EVENTS = [];
 function adjacentCell(a, b, reach = 1) {

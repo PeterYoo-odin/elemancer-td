@@ -134,8 +134,14 @@ class Music {
     if (this.unlocked) return
     this.unlocked = true
     for (const t of TRACKS) {
-      const a = this.el(t)
       if (t === this.want && appSettings.data.music) continue // apply() starts it in-gesture
+      // LAZY BATTLE BED: do NOT prime a not-yet-wanted track on the menu/first
+      // paint — priming calls play(), which fetches the file (the 3.9 MB battle
+      // theme). It stays untouched (preload='none') until a scene first calls
+      // setTrack('battle'), where apply() plays it (that transition follows a tap,
+      // and the shared audio context is already unlocked, so it still sounds).
+      if (!this.els.has(t)) continue
+      const a = this.el(t)
       a.muted = true
       void a
         .play()

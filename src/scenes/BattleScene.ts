@@ -48,6 +48,8 @@ import { showWelcomeReward } from '../ui/WelcomeReward'
 import { showInstallCard } from '../ui/pwa'
 import { promptSaveAfterFirstWin } from '../ui/SignInModal'
 import { withRef } from '../game/referral'
+import { qa, type QaSceneControl, type QaState } from '../game/qa'
+import { REACTIONS, type ReactionKey } from '../sim/reactions'
 
 // ONBOARDING coach steps for the first-ever battle (L1). Every step completes
 // by DOING; none of them ever blocks input, and skipping ahead auto-advances.
@@ -86,6 +88,7 @@ export interface BattleLaunchData {
   ghostRunId?: string // race a downloaded top run's replay ghost alongside this run
   pathforge?: boolean // PATHFORGE: defend the player-built maze (seeded endless, local score)
   pathforgeMaze?: Array<[number, number]> // the committed spawn→base road route
+  qaHeroId?: string // QA-only (window.__chromancer): force a single-hero party
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -97,6 +100,9 @@ export class BattleScene extends Phaser.Scene {
   private demoMode = false
   private attract = false
   private seedOverride: number | undefined
+  private qaCtl: QaSceneControl | null = null // QA-only: the bound drive surface
+  private qaHeroId?: string // QA-only: force a single-hero party (window.__chromancer)
+  private qaClock = 0 // QA-only: synthetic monotonic time fed to the driven update()
   private isDaily = false
   private pathforge = false
   private pathforgeMaze: Array<[number, number]> | null = null
@@ -209,6 +215,7 @@ export class BattleScene extends Phaser.Scene {
       ? NORMAL_MODE
       : { difficulty: data?.difficulty ?? 'normal', challenge: data?.challenge ?? '' }
     this.seedOverride = data?.seedOverride
+    this.qaHeroId = qa.enabled ? data?.qaHeroId : undefined
     this.isDaily = !!data?.daily
     // RANKED (provably-fair) = the pure normalized modes only. Roguelike is endless
     // but carries mutators/relics, so it rides its OWN weekly board, not this one.
@@ -274,13 +281,15 @@ export class BattleScene extends Phaser.Scene {
     // like Ranked — every account on the week's seed compares fairly (the wildness
     // comes from seed-fair relics/mutators, never from grind/purchases). Its own MODE
     // (relics, curses, affixes, mutators); still provably fair on the leaderboard.
-    const party = this.attract
+    let party = this.attract
       ? DEMO_PARTY.map((p) => ({ ...p }))
       : this.endless // covers Ranked AND roguelike — both normalized
         ? economy.rankedParty()
         : partyAllowedForMode(this.runMode) // No-Hero challenge: leave the champions home
           ? economy.party().map((id) => ({ heroId: id, level: economy.heroState(id).level, wyrm: economy.bondEntry(id) }))
           : []
+    // QA-only: override the loadout to a single requested hero (never in normal play).
+    if (this.qaHeroId && heroById(this.qaHeroId)) party = [{ heroId: this.qaHeroId, level: economy.heroState(this.qaHeroId).level }]
     if (this.ranked) {
       // Route the ranked Sim through the SAME canonical builder the SERVER uses,
       // so the config the player runs is byte-identical to the one we re-run to
@@ -410,6 +419,10 @@ export class BattleScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.teardown())
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.teardown())
 
+    // QA DRIVE: hand the gated drive a controlled surface onto this live battle.
+    // No-op unless the QA flag is set (window.__chromancer never exists otherwise).
+    if (qa.enabled) { this.qaClock = 0; this.qaCtl = this.qaMakeControl(); qa.bindScene(this.qaCtl) }
+
     // ---- ATTRACT / DEMO REEL: scripted run + cinematic camera, hands-free ----
     if (this.attract) {
       this.script = new ScriptRunner(DEMO_SCRIPT)
@@ -475,7 +488,13 @@ export class BattleScene extends Phaser.Scene {
   // ======================================================================
   update(time: number, delta: number): void {
     if (!this.sim) return
+    // QA DRIVE: in driven mode Phaser's own rAF frames are ignored — only
+    // qa.stepOnce() re-enters here (at a fixed dt) so the render+view loop (and
+    // therefore hitstop/juice timing) advances against a known, deterministic
+    // clock instead of a headless tab's 100–950ms frame gaps. Inert in normal play.
+    if (qa.enabled && qa.skipAutoFrame()) return
     const dt = Math.min(0.05, delta / 1000)
+    if (qa.enabled) qa.beginFrame(dt)
     let simDt = this.paused ? 0 : dt * this.gameSpeed
     // HITSTOP — a true freeze-frame (40–70ms) on reaction detonations + boss/elite
     // kills: the single best "weight" trick. We halt BOTH the sim step (enemy screen
@@ -487,10 +506,13 @@ export class BattleScene extends Phaser.Scene {
     // never a drag. Wall-clock timers below still use real dt.
     let viewDt = dt
     if (this.hitstopT > 0) {
+      // QA: time the REALIZED freeze span (overlapping reactions extend it via
+      // Math.max, so we measure the actual frozen frames, not the requested value).
+      if (qa.enabled) qa.hitstopTick(dt)
       this.hitstopT -= dt
       simDt = 0
       viewDt = 0
-    }
+    } else if (qa.enabled) qa.hitstopIdle()
     // Scripted input (attract reel) is injected on exact fixed-step boundaries
     // so the showcase run replays identically at any frame rate or ?speed=.
     // The draft pick is held open for a real-time beat (sim clock is frozen in
@@ -569,6 +591,7 @@ export class BattleScene extends Phaser.Scene {
     }
     if (this.sim.state !== 'draft' && this.draftShown) { this.draftShown = false; this.hud.hideDraft() }
     if ((this.sim.state === 'won' || this.sim.state === 'lost') && !this.resultShown) this.showResult()
+    if (qa.enabled) qa.endFrame()
     void time
   }
 
@@ -1784,6 +1807,12 @@ export class BattleScene extends Phaser.Scene {
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind, ev.elite)
         battleSfx.kill(this.sim.comboCount, ev.boss, panFor(ev.x))
+        if (qa.enabled) {
+          qa.emit('kill', { kind: ev.kind, boss: ev.boss, elite: ev.elite })
+          // kill pop pitch ladder: 430 Hz base, climbs one octave over 12 kills
+          const ratio = Math.pow(2, Math.min(12, this.sim.comboCount) / 12)
+          qa.emit('sound', { id: ev.boss ? 'kill:boss' : 'kill', gain: 0.16, playbackRate: ratio, freq: 430 * ratio, combo: this.sim.comboCount })
+        }
         if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = Math.max(this.hitstopT, 0.07); this.view.bloomPulse(0.4); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
         else if (ev.elite && this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.055); this.killStopCd = 0.45; this.view.bloomPulse(0.18); duckPunch(0.35); if (!this.attract) haptic(HAPTIC.reaction) }
         // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
@@ -1793,6 +1822,7 @@ export class BattleScene extends Phaser.Scene {
         this.floatAt(ev.x, ev.y, 'SHIELD BREAK!', 0x9fdcff, 22)
         this.view.fxAoe(ev.x, ev.y, ev.radius + 20, 0x9fdcff, 0.9)
         this.view.shake(0.05)
+        if (qa.enabled) { qa.emit('shake', { amplitude: 0.05, cause: 'shieldBreak' }); qa.emit('sound', { id: 'shieldBreak', gain: 0.12 }) }
         // a small satisfying freeze, but THROTTLED — a shielded pack breaking across
         // consecutive frames must not chain hard-freezes into a stutter.
         if (this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.04); this.killStopCd = 0.4 }
@@ -1804,6 +1834,7 @@ export class BattleScene extends Phaser.Scene {
         const heavy = ev.dmg >= 6 || ev.boss
         this.hud.flash(0xff3b3b, heavy ? 0.6 : 0.4)
         this.view.shake(heavy ? 0.16 : 0.08)
+        if (qa.enabled) qa.emit('shake', { amplitude: heavy ? 0.16 : 0.08, cause: 'leak', dmg: ev.dmg })
         this.view.enemyStrike(ev.x, ev.y, ev.kind, ev.boss) // wind-up → lunge → strike the base
         this.floatAt(ev.x, ev.y - 30, `−${ev.dmg}`, heavy ? 0xff3b6b : 0xff8a9a, heavy ? 32 : 24, 'crit')
         this.view.heroHurtAll() // the line broke — every fielded hero flinches
@@ -1845,6 +1876,15 @@ export class BattleScene extends Phaser.Scene {
         // colour flash, a bloom surge and a fat pitched sting — the peak beat.
         const big = ev.count === 10 || ev.count === 25 || (ev.count >= 50 && ev.count % 25 === 0)
         this.floatAt(ev.x, ev.y, `COMBO ×${ev.count}!`, comboHue(ev.count), 28 + Math.min(30, ev.count * 3), 'combo', 1.1)
+        if (qa.enabled) {
+          qa.emit('combo', { multiplier: Math.round(ev.mult * 100) / 100, count: ev.count, milestone: big || ev.milestone, big })
+          if (big || ev.milestone) {
+            // combo sting pitch ladder: 660 Hz base, climbs one octave over 14 kills
+            const ratio = Math.pow(2, Math.min(14, ev.count) / 14)
+            qa.emit('sound', { id: 'combo', gain: 0.06, playbackRate: ratio, freq: 660 * ratio, count: ev.count })
+          }
+          if (big) qa.emit('callout', { text: `COMBO ×${ev.count}`, kind: 'KILL STREAK' })
+        }
         const reduced = appSettings.reducedMotion()
         if (big) {
           this.hud.reactionCallout(`COMBO ×${ev.count}`, comboHue(ev.count), 'KILL STREAK')
@@ -1944,6 +1984,17 @@ export class BattleScene extends Phaser.Scene {
         if (!this.attract) haptic(HAPTIC.reaction) // sharp single bump on detonation
         duckPunch(0.4 + mag * 0.2)
         battleSfx.reaction(ev.key, panFor(ev.x))
+        if (qa.enabled) {
+          // FRAME-LOCK: burst + shake + sound (+ throttled callout/flash below) all
+          // land on THIS frame index. `magnitude`→`shakeAmplitude` is monotonic
+          // (fxReaction shakes 0.055 + 0.055·max(0.4,mag)), so bigger reaction ⇒
+          // bigger amplitude is directly assertable from the log.
+          const shakeAmp = 0.055 + 0.055 * Math.max(0.4, mag)
+          qa.lastReaction = ev.name
+          qa.emit('reaction', { name: ev.name, key: ev.key, magnitude: mag, x: ev.x, y: ev.y, shakeAmplitude: Math.round(shakeAmp * 1000) / 1000, requestedHitstopMs: Math.round((0.045 + mag * 0.025) * 1000) })
+          qa.emit('shake', { amplitude: Math.round(shakeAmp * 1000) / 1000, cause: 'reaction', magnitude: mag })
+          qa.emit('sound', { id: `reaction:${ev.key}`, gain: 0.16, magnitude: mag })
+        }
         // the demo's scripted wow: the FIRST Shatter re-colours a slice of the vale
         if (this.demoMode && ev.key === 'shatter' && !this.shatterBloomDone) {
           this.shatterBloomDone = true
@@ -1964,6 +2015,7 @@ export class BattleScene extends Phaser.Scene {
           // the throttled LOUD beat: the named slam + a brief element-flash + a bloom
           // surge + the freeze-frame — gated so a burst of reactions can't strobe.
           this.hud.reactionCallout(ev.name, ev.color)
+          if (qa.enabled) qa.emit('callout', { text: ev.name, kind: 'reaction', magnitude: mag })
           this.reactCalloutCd = 0.55
           this.hitstopT = Math.max(this.hitstopT, 0.045 + mag * 0.025) // 40–70ms, scaled
           if (!appSettings.reducedMotion()) {
@@ -2073,7 +2125,99 @@ export class BattleScene extends Phaser.Scene {
   // ======================================================================
   //  TEARDOWN (critical: dispose GL context every time we leave/restart)
   // ======================================================================
+  // ======================================================================
+  //  QA DRIVE surface (gated — only reachable via window.__chromancer)
+  // ======================================================================
+  private qaMakeControl(): QaSceneControl {
+    const scene = this
+    return {
+      sim: () => scene.sim,
+      // Re-enter the REAL update() (render + view + hitstop) one frame at a fixed
+      // dt on a synthetic monotonic clock — deterministic, and juice stays measurable.
+      stepOnce: (dtMs: number) => { scene.qaClock += dtMs; scene.update(scene.qaClock, dtMs) },
+      placeTower: (kind, col, row) => {
+        const k = kind as TowerKind
+        if (!TOWERS[k]) return false
+        scene.sim.qaGrantGold(scene.sim.placeCost(k)) // QA convenience: never fail on affordability
+        return !!scene.sim.placeTower(k, col, row)
+      },
+      placeHero: (heroId, col, row) => {
+        if (!heroById(heroId)) return false
+        scene.sim.qaGrantGold(scene.sim.heroDeployCost(heroId))
+        return !!scene.sim.deployHero(heroId, col, row)
+      },
+      upgradeTower: (col, row) => {
+        const t = scene.sim.towerAt(col, row)
+        if (!t) return false
+        const cost = scene.sim.upgradeCostFor(t)
+        if (cost === null) return false
+        scene.sim.qaGrantGold(cost)
+        return scene.sim.upgradeTower(t.id)
+      },
+      sellTower: (col, row) => scene.sim.qaRemoveTower(col, row),
+      startWave: () => { if (scene.sim.state === 'prep') scene.sim.startWave() },
+      skipToWave: (n) => scene.sim.qaSkipToWave(n),
+      forceWin: () => scene.sim.qaForceEnd('won'),
+      forceDefeat: () => scene.sim.qaForceEnd('lost'),
+      triggerReaction: (name) => scene.qaFireReaction(name),
+      state: () => scene.qaState(),
+    }
+  }
+
+  // Fire a NAMED reaction's full view juice on demand — burst, callout, shake,
+  // sound, hitstop, telemetry — WITHOUT the save-state side effects of the live
+  // handler (no codex unlock / ftue / discovery banners). Pure measurement.
+  private qaFireReaction(name: string): boolean {
+    const key = qaReactionKey(name)
+    if (!key) return false
+    const def = REACTIONS[key]
+    const mag = REACTION_MAG[key] ?? 0.75
+    const cx = MAP_X + MAP_W / 2
+    const cy = MAP_Y + MAP_H / 2
+    const radius = 70
+    this.view.fxReaction(cx, cy, radius, def.color, def.color2, key, mag)
+    this.floatAt(cx, cy, def.name + '!', def.color, 24 + Math.round(mag * 8), 'combo', 1.1)
+    duckPunch(0.4 + mag * 0.2)
+    battleSfx.reaction(key, panFor(cx))
+    const shakeAmp = 0.055 + 0.055 * Math.max(0.4, mag)
+    qa.lastReaction = def.name
+    qa.emit('reaction', { name: def.name, key, magnitude: mag, x: cx, y: cy, shakeAmplitude: Math.round(shakeAmp * 1000) / 1000, requestedHitstopMs: Math.round((0.045 + mag * 0.025) * 1000) })
+    qa.emit('shake', { amplitude: Math.round(shakeAmp * 1000) / 1000, cause: 'reaction', magnitude: mag })
+    qa.emit('sound', { id: `reaction:${key}`, gain: 0.16, magnitude: mag })
+    if (this.reactCalloutCd <= 0) {
+      this.hud.reactionCallout(def.name, def.color)
+      qa.emit('callout', { text: def.name, kind: 'reaction', magnitude: mag })
+      this.reactCalloutCd = 0.55
+      this.hitstopT = Math.max(this.hitstopT, 0.045 + mag * 0.025)
+      if (!appSettings.reducedMotion()) { this.hud.flash(def.color, 0.1 + mag * 0.12, 200); this.view.bloomPulse(0.14 + mag * 0.2) }
+    }
+    return true
+  }
+
+  private qaState(): QaState {
+    const s = this.sim
+    const towers = s.towers.filter((t) => t.active).map((t) => ({ id: t.id, kind: t.kind as string, col: t.col, row: t.row, level: t.level }))
+    return {
+      wave: s.waveIndex + 1,
+      waveTotal: s.totalWaves(),
+      state: s.state,
+      baseHp: s.baseHp,
+      baseIntegrity: Math.round(s.baseIntegrity * 1000) / 1000,
+      gold: s.gold,
+      mana: null, // gold-only economy — no mana resource exists in the sim
+      aliveEnemies: s.liveEnemyCount(),
+      towers,
+      comboMult: Math.round(s.comboMult * 100) / 100,
+      comboCount: s.comboCount,
+      draftOffer: s.state === 'draft' ? s.draftOffer.map((c) => c.title) : [],
+      currentReaction: qa.lastReaction,
+      frame: qa.frame,
+      driven: qa.driven,
+    }
+  }
+
   private teardown(): void {
+    if (this.qaCtl) { qa.unbindScene(this.qaCtl); this.qaCtl = null }
     // leaving battle: colour + volume back to neutral so map/menu music is full
     // spectrum and un-ducked (the greying is a battlefield state, not a global one).
     music.setBoss(false)
@@ -2116,6 +2260,17 @@ const REACTION_MAG: Record<string, number> = {
   overgrow: 0.75, // Water+Nature — area root/slow
   blight: 0.7, // Nature+Dark — poison field
   amplify: 0.55, // Arcane — a vulnerability MARK, not a blast
+}
+
+// QA: resolve a human reaction identifier ('SHATTER', 'Thermal Shock', 'thermal',
+// 'thermal shock') to its ReactionKey. Case/space/underscore tolerant.
+function qaReactionKey(name: string): ReactionKey | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '')
+  const q = norm(name)
+  for (const k of Object.keys(REACTIONS) as ReactionKey[]) {
+    if (norm(k) === q || norm(REACTIONS[k].name) === q) return k
+  }
+  return null
 }
 
 function comboHue(count: number): number {
