@@ -51,6 +51,24 @@ function isIos(): boolean {
     (/Macintosh/.test(navigator.userAgent) && 'ontouchend' in document)
 }
 
+// On iOS EVERY browser is WebKit, but only Safari puts Share in the toolbar the
+// old copy pointed at — Chrome/Edge/Firefox for iOS hide it elsewhere, so a real
+// owner "couldn't find Share". Give the right one-liner per browser. (Detect the
+// wrapper browsers by their iOS UA tokens; if none match on iOS it's Safari.)
+function iosInstallHint(): string {
+  const ua = navigator.userAgent
+  if (/CriOS/.test(ua)) // Chrome for iOS
+    return 'Tap  Share  (top-right ⬆) or ⋯ → “Add to Home Screen”. Plays offline; your colours stay saved.'
+  if (/EdgiOS/.test(ua)) // Edge for iOS
+    return 'Tap the ⋯ menu → “Add to Home Screen”. Plays offline; your colours stay saved.'
+  if (/FxiOS/.test(ua)) // Firefox for iOS
+    return 'Tap the ⋯ menu → “Share” → “Add to Home Screen”. Plays offline; your colours stay saved.'
+  if (/Safari/.test(ua)) // real Safari — Share ⬆ in the toolbar
+    return 'Tap  Share  ⬆ → “Add to Home Screen”. Plays offline; your colours stay saved.'
+  // unknown in-app / other iOS browser — stay neutral, nudge toward Safari
+  return 'Open your browser’s Share menu → “Add to Home Screen” (Safari works best). Plays offline.'
+}
+
 function dismissed(): boolean {
   try { return localStorage.getItem(DISMISS_KEY) === '1' } catch { return false }
 }
@@ -100,7 +118,7 @@ export function showInstallCard(opts: { force?: boolean } = {}): boolean {
   title.style.cssText = 'font-weight:800;font-size:15px;line-height:1.2;'
   const sub = document.createElement('div')
   sub.textContent = ios
-    ? 'Tap  Share  →  “Add to Home Screen”. Plays offline; your colours stay saved.'
+    ? iosInstallHint()
     : 'Plays offline · instant reloads · your colours stay saved.'
   sub.style.cssText = 'font-size:12.5px;color:#b9a8e8;margin-top:2px;line-height:1.3;'
   body.append(title, sub)

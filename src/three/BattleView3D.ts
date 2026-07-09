@@ -1068,8 +1068,13 @@ export class BattleView3D {
     this.baseLight = baseLight
 
     // Radiant ground halo — a soft colour bloom on the floor that dims as HP falls.
-    const haloGeo = new THREE.RingGeometry(0.55, 1.25, 40)
-    this.baseHaloMat = new THREE.MeshBasicMaterial({ color: 0x2ff7c3, transparent: true, opacity: 0.42, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    // A radial-gradient glow (alpha → 0 at the rim) on a small flat quad, NOT a
+    // flat-opacity ring: a solid-opacity annulus reads as a hard-edged milky disc
+    // (and, clipped by the board edge + amplified by bloom, as the "quad with
+    // straight edges" the owner saw washing out START). The gradient falls off
+    // smoothly so it stays a gentle glow that never boxes or reaches the HUD.
+    const haloGeo = new THREE.PlaneGeometry(2.2, 2.2)
+    this.baseHaloMat = new THREE.MeshBasicMaterial({ map: this.enemyGlowTexture(), color: 0x2ff7c3, transparent: true, opacity: 0.42, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
     this.disposables.push(haloGeo, this.baseHaloMat)
     this.baseHalo = new THREE.Mesh(haloGeo, this.baseHaloMat)
     this.baseHalo.rotation.x = -Math.PI / 2
@@ -1089,7 +1094,12 @@ export class BattleView3D {
           this.disposables.push(tex)
           const aspect = tex.image && tex.image.width ? tex.image.width / tex.image.height : 1
           const h = 2.6
-          const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: initOpacity, depthWrite: false, depthTest: true })
+          // alphaTest discards the fully-transparent quad corners BEFORE any blend
+          // runs — without it the sprite's transparent region blends as a hard-edged
+          // milky/dark box on some GPUs (the owner's iOS artifact). Matches the enemy
+          // (0.04) / tower (0.05) body sprites, which never showed the box for this
+          // exact reason. Kept low so the painting's soft anti-aliased rim survives.
+          const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: initOpacity, alphaTest: 0.06, depthWrite: false, depthTest: true })
           this.disposables.push(mat)
           const sprite = new THREE.Sprite(mat)
           sprite.scale.set(h * aspect, h, 1)
