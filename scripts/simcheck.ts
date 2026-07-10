@@ -280,6 +280,11 @@ function checkIds(sim: Sim, retired: Set<number>, tick: number): void {
   for (const p of sim.projectiles) if (!p.active) retired.add(p.id)
 }
 
+// Every enemy KIND observed active across the stress runs — used below to prove
+// armored/elite (the newest archetypes) actually spawn under Endless, not just
+// exist in the data tables.
+const seenEnemyKinds = new Set<string>()
+
 function runOne(seed: number, mode: 'max' | 'base' | 'flood', party = 0): { maxEntities: number; wavesReached: number } {
   const sim = makeSim(seed, 3, party)
   if (mode !== 'flood') deployParty(sim) // heroes before towers claim the build cells
@@ -304,6 +309,7 @@ function runOne(seed: number, mode: 'max' | 'base' | 'flood', party = 0): { maxE
     maxEntities = Math.max(maxEntities, ents)
     validate(sim, tick)
     checkIds(sim, retired, tick)
+    for (const en of sim.enemies) if (en.active) seenEnemyKinds.add(en.kind)
     // flood only needs to PROVE hundreds coexist with clean math — early-exit once shown
     if (mode === 'flood' && maxEntities >= 300) break
   }
@@ -325,6 +331,10 @@ for (const [seed, mode, party] of runs) {
   waves = Math.max(waves, r.wavesReached)
   console.log(`  seed ${seed} [${mode}·p${party}]: reached wave ${r.wavesReached}, peak entities ${r.maxEntities}`)
 }
+// armored/elite must actually spawn during the 60-wave Endless stress run, not
+// just be reachable in theory — proves the wiring, not just the data tables.
+if (!seenEnemyKinds.has('armored')) fail('armored never spawned across the 60-wave Endless stress runs')
+if (!seenEnemyKinds.has('elite')) fail('elite never spawned across the 60-wave Endless stress runs')
 
 // determinism check: identical seeds must produce identical end-state
 function fingerprint(seed: number): string {
@@ -495,6 +505,24 @@ LEVELS.forEach((lvl, i) => {
 // The topology variety must actually REACH the live ladder — not merely be supported.
 if (multiSpawnLevels < 3) fail(`too few multi-spawn levels in the live ladder (${multiSpawnLevels}) — topology variety not reaching players`)
 console.log(`  topology mix: ${topologyTally.single} single-lane, ${topologyTally.multi} multi-spawn (${multiSpawnLevels} across ${LEVELS.length})`)
+
+// armored/elite must actually REACH the live ladder (not just be supported by the
+// generator) — and never in l1, the hand-authored tutorial.
+const armoredLevels = new Set<string>()
+const eliteLevels = new Set<string>()
+for (const lvl of LEVELS) {
+  for (const wv of lvl.waves) {
+    for (const en of wv.entries) {
+      if (en.kind === 'armored') armoredLevels.add(lvl.id)
+      if (en.kind === 'elite') eliteLevels.add(lvl.id)
+    }
+  }
+}
+if (armoredLevels.size === 0) fail('armored never spawns anywhere in the live campaign ladder')
+if (eliteLevels.size === 0) fail('elite never spawns anywhere in the live campaign ladder')
+if (armoredLevels.has('l1')) fail('armored spawns in l1 (the tutorial) — must gate in later')
+if (eliteLevels.has('l1')) fail('elite spawns in l1 (the tutorial) — must gate in later')
+console.log(`  armored/elite reach the ladder: armored in ${armoredLevels.size} levels, elite in ${eliteLevels.size} levels (neither in l1)`)
 
 // beatability: the fair, MIN-RESOURCE bot must WIN every live level using only the
 // towers actually unlocked by that point in the ladder + starter heroes.

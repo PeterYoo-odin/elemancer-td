@@ -232,6 +232,12 @@ export const CODEX: CodexEntry[] = [
   { id: 'enemy-boss', category: 'enemies', title: 'The Hollow Titan',
     text: 'Not a person. Morose\'s engine — a mobile cathedral of stopped feeling that walks the last mile of the campaign, greying everything it passes as a matter of course. It does not hate you. It has no room left for hate, or anything. It is what "grey is peace" looks like when you build it a body.',
     hint: 'Face the Hollow Titan.' },
+  { id: 'enemy-armored', category: 'enemies', title: 'Ironclad',
+    text: 'A soldier who mistook the plate for the person underneath and let the grey seal the two together. Pierce it cleanly and the point just skates off the seam — you have to go through it, a shell blast or a real weight of magic, not a clever angle. There was someone in there who used to take the armor off at night.',
+    hint: 'Fell an Ironclad.' },
+  { id: 'enemy-elite', category: 'enemies', title: 'Champion',
+    text: 'The grey does not usually reward talent, but it made an exception for the ones who were already hard to touch — duelists, wardens, a captain who never lost. Warded through and through: your spellwork slides off them half-strength. Plain steel still lands true. Sometimes the oldest answer is the only one that works.',
+    hint: 'Fell a Champion.' },
 
   // ---- Morose's tragedy, in scattered pieces (found on the road) ----
   { id: 'morose-1', category: 'morose', title: 'Fragment: The Sky-Painter',
@@ -393,6 +399,7 @@ export const CODEX_ON_KEEPER_REDEEM: Record<string, string[]> = {
 const ENEMY_CODEX: Record<string, string> = {
   runner: 'enemy-runner', grunt: 'enemy-grunt', brute: 'enemy-brute', flyer: 'enemy-flyer',
   shielded: 'enemy-shielded', healer: 'enemy-healer', swarm: 'enemy-swarm', boss: 'enemy-boss',
+  armored: 'enemy-armored', elite: 'enemy-elite',
 }
 
 /** Unlock a batch of ids; returns how many were NEWLY filled in (for a toast). */

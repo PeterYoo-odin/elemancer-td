@@ -182,6 +182,12 @@ export function deathLesson(d: DefeatDiagnosis): string {
   if (dominant === 'boss') {
     return 'The Keeper out-lasted you. Pair two elements on one stretch — reactions like THERMAL SHOCK bite through anything.'
   }
+  if (dominant === 'armored') {
+    return "Ironclads' Fortified plate folds Pierce and Physical. Bring a Mortar (Siege) or your Magic towers — they punch straight through."
+  }
+  if (dominant === 'elite') {
+    return "Champions are Warded — your Magic towers land half damage. A plain Cannon (Physical) cuts them down fastest."
+  }
   if (d.goldLeft >= 150) {
     return `You fell with $${Math.floor(d.goldLeft)} unspent. Gold in the bank protects nothing — spend it the moment you have it.`
   }

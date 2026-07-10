@@ -18,19 +18,25 @@ interface EnemyArtDef {
 }
 
 // EnemyKind → painted sprite + accent. The manifest ships eight archetypes; the
-// sim's nine kinds map on so every role reads at a glance:
-//   grunt  → armored (steel-blue) · the rank-and-file with light plate
-//   keeper → elite   (crimson)    · sub-boss silhouette, differentiated by its
-//                                   per-Keeper crown retint + set-piece scale
-//   boss   → elite   (crimson)    · the Morose Titan, scaled to fill the arena
+// sim's eleven kinds map on so every role reads at a glance:
+//   armored → armored (steel-blue) · the Fortified rank-and-file, its own kind now
+//   grunt   → no painted art (no dedicated asset) · falls back to its primitive
+//             shape/colour, which stays visually distinct from armored's plate
+//   elite   → elite   (crimson)    · the Warded veteran, its own kind now
+//   keeper  → elite   (crimson)    · sub-boss silhouette, differentiated by its
+//                                    per-Keeper crown retint + set-piece scale
+//   boss    → elite   (crimson)    · the Morose Titan, scaled to fill the arena
+// (keeper/boss reusing elite's art is safe — both are always clearly telegraphed
+// by name/BOSS banner + huge scale, so there's no read-at-a-glance collision.)
 const ENEMY_ART: Partial<Record<EnemyKind, EnemyArtDef>> = {
   runner: { file: 'runner.png', accent: 0x7fe05a },
-  grunt: { file: 'armored.png', accent: 0x7fa8d6 },
   brute: { file: 'brute.png', accent: 0xe8a23c },
   flyer: { file: 'flyer.png', accent: 0x63d6e0 },
   shielded: { file: 'shielded.png', accent: 0xb07de0 },
   healer: { file: 'healer.png', accent: 0x4fd6b0 },
   swarm: { file: 'swarm.png', accent: 0xe8d24a },
+  armored: { file: 'armored.png', accent: 0x7fa8d6 },
+  elite: { file: 'elite.png', accent: 0xe0507d },
   keeper: { file: 'elite.png', accent: 0xe0507d },
   boss: { file: 'elite.png', accent: 0xe0507d },
 }

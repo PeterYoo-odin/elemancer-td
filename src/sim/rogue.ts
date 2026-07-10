@@ -248,6 +248,8 @@ export function rogueWave(n: number): Wave {
   if (n >= 4 && n % 2 === 0) e.push({ kind: 'healer', count: 1 + Math.floor(n * 0.12), spacing: 1.1, hpMul: hp })
   if (n >= 3) e.push({ kind: 'swarm', count: 8 + n * 2, spacing: 0.12, hpMul: hp })
   if (n >= 5) e.push({ kind: 'brute', count: 1 + Math.floor(n * 0.22), spacing: 1.0, hpMul: hp })
+  if (n >= 6) e.push({ kind: 'armored', count: 1 + Math.floor(n * 0.18), spacing: 0.78, hpMul: hp })
+  if (n >= 9) e.push({ kind: 'elite', count: 1 + Math.floor(n * 0.1), spacing: 1.15, hpMul: hp })
 
   if (bossRush) {
     e.push({ kind: 'boss', count: 2 + Math.floor(n / 10), spacing: 2.2, hpMul: 1 + n * 0.1 })

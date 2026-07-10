@@ -618,7 +618,7 @@ var REALM_GEN = [
     palette: PAL.frost,
     keeperId: "maravelle",
     finaleId: "l2",
-    roster: ["shielded", "brute", "flyer", "swarm"],
+    roster: ["shielded", "brute", "flyer", "swarm", "armored"],
     terrain: ["frozen", "fog", "highground"],
     archetypes: ["switchback", "serpentine", "spiral", "verticalSnake"],
     names: ["Spire-Crown Heights", "The Frozen Throne", "Aurora Galleries", "Glacier-Heart Deep", "Still-Crystal Chasm", "The Icebound Galleries", "Rimeward Pass", "Maravelle\u2019s Vigil"],
@@ -634,7 +634,7 @@ var REALM_GEN = [
     palette: PAL.storm,
     keeperId: "vorn",
     finaleId: "l3",
-    roster: ["flyer", "runner", "brute", "grunt"],
+    roster: ["flyer", "runner", "brute", "grunt", "armored", "elite"],
     terrain: ["highground", "fog"],
     archetypes: ["switchback", "zigzag", "verticalSnake", "hairpin"],
     names: ["Windbreak Peaks", "The Becalmed Isle", "Cloud-Breach Spire", "Sky-Rigging Yards", "Gale\u2019s Crags", "Storm-Eye Galleries", "Thunderless Reach", "Vorn\u2019s Anchorage"],
@@ -650,7 +650,7 @@ var REALM_GEN = [
     palette: PAL.meadow,
     keeperId: "wessa",
     finaleId: "l4",
-    roster: ["healer", "swarm", "shielded", "runner"],
+    roster: ["healer", "swarm", "shielded", "runner", "elite"],
     terrain: ["fog", "highground", "sacred"],
     archetypes: ["spiral", "hairpin", "serpentine", "corridor"],
     names: ["Thornwood Canopy", "The Deeproot Chasm", "Overgrown Sanctum", "Vine-Heart Galleries", "Seedbed Thicket", "Blight-Choked Wilds", "Mossway", "Wessa\u2019s Grove"],
@@ -666,7 +666,7 @@ var REALM_GEN = [
     palette: PAL.lumen,
     keeperId: "aurelin",
     finaleId: "l5",
-    roster: ["healer", "shielded", "swarm", "flyer"],
+    roster: ["healer", "shielded", "swarm", "flyer", "elite"],
     terrain: ["sacred", "fog", "highground"],
     archetypes: ["serpentine", "spiral", "corridor", "zigzag"],
     names: ["Dawnspire Cathedral", "Golden Halls", "The Aureate Court", "Light-Heart Sanctum", "Blessed Galleries", "The Radiant Sanctum", "Gilded Approach", "Aurelin\u2019s Choir"],
@@ -682,7 +682,7 @@ var REALM_GEN = [
     palette: PAL.void,
     keeperId: "vesper",
     finaleId: "l6",
-    roster: ["swarm", "shielded", "brute", "flyer", "healer"],
+    roster: ["swarm", "shielded", "brute", "flyer", "healer", "armored", "elite"],
     terrain: ["void", "fog", "highground"],
     archetypes: ["spiral", "switchback", "zigzag", "hairpin", "verticalSnake"],
     names: ["The Mirror Chasm", "Void-Heart Cathedral", "The Forgotten Throne", "Moth-Wing Galleries", "The Hollow\u2019s Embrace", "Shard-Breach Sanctum", "The Grey Between", "Vesper\u2019s Margin"],
@@ -696,7 +696,9 @@ var KIND_TUNE = {
   flyer: { base: 4, per: 5, spacing: 0.68 },
   shielded: { base: 4, per: 4, spacing: 0.8 },
   healer: { base: 2, per: 1.8, spacing: 1.2 },
-  swarm: { base: 14, per: 16, spacing: 0.14 }
+  swarm: { base: 14, per: 16, spacing: 0.14 },
+  armored: { base: 3, per: 3.2, spacing: 0.78 },
+  elite: { base: 1, per: 1.7, spacing: 1.15 }
 };
 var HP_E = 4.5;
 var HP_ESAT = 0.85;
@@ -715,11 +717,13 @@ var INTRO_GATE = {
   swarm: 0.35,
   flyer: 0.55,
   shielded: 0.7,
-  healer: 1.15
+  healer: 1.15,
+  armored: 0.9,
+  elite: 1.3
 };
 function unlockedKinds(prog) {
   const out = [];
-  for (const kind of ["runner", "grunt", "brute", "swarm", "flyer", "shielded", "healer"]) {
+  for (const kind of ["runner", "grunt", "brute", "swarm", "flyer", "shielded", "healer", "armored", "elite"]) {
     if (prog >= (INTRO_GATE[kind] ?? 1e9)) out.push(kind);
   }
   return out;
@@ -1703,6 +1707,8 @@ function rogueWave(n) {
   if (n >= 4 && n % 2 === 0) e3.push({ kind: "healer", count: 1 + Math.floor(n * 0.12), spacing: 1.1, hpMul: hp });
   if (n >= 3) e3.push({ kind: "swarm", count: 8 + n * 2, spacing: 0.12, hpMul: hp });
   if (n >= 5) e3.push({ kind: "brute", count: 1 + Math.floor(n * 0.22), spacing: 1, hpMul: hp });
+  if (n >= 6) e3.push({ kind: "armored", count: 1 + Math.floor(n * 0.18), spacing: 0.78, hpMul: hp });
+  if (n >= 9) e3.push({ kind: "elite", count: 1 + Math.floor(n * 0.1), spacing: 1.15, hpMul: hp });
   if (bossRush) {
     e3.push({ kind: "boss", count: 2 + Math.floor(n / 10), spacing: 2.2, hpMul: 1 + n * 0.1 });
   } else if (boss) {
@@ -1828,6 +1834,34 @@ var ENEMIES = {
     reward: 3,
     armor: "Unarmored",
     flatArmor: 0
+  },
+  armored: {
+    kind: "armored",
+    name: "Ironclad",
+    hp: 150,
+    speed: 1.05,
+    radius: 20,
+    color: 8366294,
+    accent: 3099238,
+    shape: "square",
+    reward: 16,
+    armor: "Fortified",
+    // Siege & Magic bite; Pierce/Physical fold — the anti-Sniper-mono unit
+    flatArmor: 3
+  },
+  elite: {
+    kind: "elite",
+    name: "Champion",
+    hp: 300,
+    speed: 0.95,
+    radius: 24,
+    color: 14700669,
+    accent: 7999536,
+    shape: "hex",
+    reward: 32,
+    armor: "Warded",
+    // resists Magic (0.5×) hard — the anti-all-Magic-board unit; bring Physical/cannon
+    flatArmor: 7
   },
   // Fallback stat block for the 'keeper' kind — real Keeper fights override this
   // with per-Keeper defs from keepers.ts at spawn (sim looks them up by wave
@@ -3376,6 +3410,8 @@ var Sim = class {
     if (n >= 5 && n % 2 === 0) entries.push({ kind: "healer", count: 1 + Math.floor(n * 0.16), spacing: 1.1, hpMul: hp });
     if (n >= 4) entries.push({ kind: "swarm", count: 10 + n * 2, spacing: 0.12, hpMul: hp });
     if (n >= 6) entries.push({ kind: "brute", count: 1 + Math.floor(n * 0.28), spacing: 1, hpMul: hp });
+    if (n >= 5 && n % 2 === 0) entries.push({ kind: "armored", count: 1 + Math.floor(n * 0.14), spacing: 0.5, hpMul: hp });
+    if (n >= 7) entries.push({ kind: "elite", count: 1 + Math.floor(n * 0.3), spacing: 0.5, hpMul: hp });
     if (n % 5 === 0) entries.push({ kind: "boss", count: Math.floor(n / 5), spacing: 2, hpMul: hp * 1.25 });
     return { entries, clearBonus: 30 + n * 6 };
   }

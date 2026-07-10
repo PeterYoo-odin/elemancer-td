@@ -177,7 +177,7 @@ const REALM_GEN: RealmGen[] = [
     intro: 'The Greying froze even the aurora. Bring back the blue of deep winter ice.',
     ui: { accent: '#7fe3ff', deep: '#081827', mid: '#14395c', glow: 'rgba(127,227,255,.28)', ridge: '#0f2439', ridgeFar: '#1b3c5e' },
     palette: PAL.frost, keeperId: 'maravelle', finaleId: 'l2',
-    roster: ['shielded', 'brute', 'flyer', 'swarm'], terrain: ['frozen', 'fog', 'highground'],
+    roster: ['shielded', 'brute', 'flyer', 'swarm', 'armored'], terrain: ['frozen', 'fog', 'highground'],
     archetypes: ['switchback', 'serpentine', 'spiral', 'verticalSnake'],
     names: ['Spire-Crown Heights', 'The Frozen Throne', 'Aurora Galleries', 'Glacier-Heart Deep', 'Still-Crystal Chasm', 'The Icebound Galleries', 'Rimeward Pass', 'Maravelle’s Vigil'],
     suffixes: ['Heights', 'Chasm', 'Shelf', 'Causeway', 'Hollow', 'Vault', 'Drift', 'Vigil'],
@@ -187,7 +187,7 @@ const REALM_GEN: RealmGen[] = [
     intro: 'Silent summits where thunder used to sing. Climb, and call the storm back home.',
     ui: { accent: '#ffd95c', deep: '#0a1e22', mid: '#155059', glow: 'rgba(72,214,202,.26)', ridge: '#0d2c31', ridgeFar: '#175059' },
     palette: PAL.storm, keeperId: 'vorn', finaleId: 'l3',
-    roster: ['flyer', 'runner', 'brute', 'grunt'], terrain: ['highground', 'fog'],
+    roster: ['flyer', 'runner', 'brute', 'grunt', 'armored', 'elite'], terrain: ['highground', 'fog'],
     archetypes: ['switchback', 'zigzag', 'verticalSnake', 'hairpin'],
     names: ['Windbreak Peaks', 'The Becalmed Isle', 'Cloud-Breach Spire', 'Sky-Rigging Yards', 'Gale’s Crags', 'Storm-Eye Galleries', 'Thunderless Reach', 'Vorn’s Anchorage'],
     suffixes: ['Peaks', 'Spire', 'Crags', 'Reach', 'Ascent', 'Yards', 'Isle', 'Gale'],
@@ -197,7 +197,7 @@ const REALM_GEN: RealmGen[] = [
     intro: 'Every leaf hangs ashen and still. The Wilds are waiting for one drop of green.',
     ui: { accent: '#6fe08a', deep: '#0a2010', mid: '#1b4a22', glow: 'rgba(110,224,138,.26)', ridge: '#113016', ridgeFar: '#1e5426' },
     palette: PAL.meadow, keeperId: 'wessa', finaleId: 'l4',
-    roster: ['healer', 'swarm', 'shielded', 'runner'], terrain: ['fog', 'highground', 'sacred'],
+    roster: ['healer', 'swarm', 'shielded', 'runner', 'elite'], terrain: ['fog', 'highground', 'sacred'],
     archetypes: ['spiral', 'hairpin', 'serpentine', 'corridor'],
     names: ['Thornwood Canopy', 'The Deeproot Chasm', 'Overgrown Sanctum', 'Vine-Heart Galleries', 'Seedbed Thicket', 'Blight-Choked Wilds', 'Mossway', 'Wessa’s Grove'],
     suffixes: ['Canopy', 'Thicket', 'Grove', 'Hollow', 'Tangle', 'Sanctum', 'Reach', 'Deep'],
@@ -207,7 +207,7 @@ const REALM_GEN: RealmGen[] = [
     intro: 'The last lanterns of Aetheria gutter. Rekindle the Sanctum before its gold goes out.',
     ui: { accent: '#ffe27a', deep: '#241c06', mid: '#59460f', glow: 'rgba(255,226,122,.28)', ridge: '#372c09', ridgeFar: '#5c4c14' },
     palette: PAL.lumen, keeperId: 'aurelin', finaleId: 'l5',
-    roster: ['healer', 'shielded', 'swarm', 'flyer'], terrain: ['sacred', 'fog', 'highground'],
+    roster: ['healer', 'shielded', 'swarm', 'flyer', 'elite'], terrain: ['sacred', 'fog', 'highground'],
     archetypes: ['serpentine', 'spiral', 'corridor', 'zigzag'],
     names: ['Dawnspire Cathedral', 'Golden Halls', 'The Aureate Court', 'Light-Heart Sanctum', 'Blessed Galleries', 'The Radiant Sanctum', 'Gilded Approach', 'Aurelin’s Choir'],
     suffixes: ['Cathedral', 'Halls', 'Court', 'Sanctum', 'Gallery', 'Aisle', 'Nave', 'Choir'],
@@ -217,7 +217,7 @@ const REALM_GEN: RealmGen[] = [
     intro: 'Morose the Hollow King sits at the heart of the Greying. End it — and colour comes home.',
     ui: { accent: '#b06bff', deep: '#0f0722', mid: '#2a1150', glow: 'rgba(176,107,255,.30)', ridge: '#190b34', ridgeFar: '#2c165a' },
     palette: PAL.void, keeperId: 'vesper', finaleId: 'l6',
-    roster: ['swarm', 'shielded', 'brute', 'flyer', 'healer'], terrain: ['void', 'fog', 'highground'],
+    roster: ['swarm', 'shielded', 'brute', 'flyer', 'healer', 'armored', 'elite'], terrain: ['void', 'fog', 'highground'],
     archetypes: ['spiral', 'switchback', 'zigzag', 'hairpin', 'verticalSnake'],
     names: ['The Mirror Chasm', 'Void-Heart Cathedral', 'The Forgotten Throne', 'Moth-Wing Galleries', 'The Hollow’s Embrace', 'Shard-Breach Sanctum', 'The Grey Between', 'Vesper’s Margin'],
     suffixes: ['Chasm', 'Cathedral', 'Throne', 'Gallery', 'Rift', 'Sanctum', 'Margin', 'Echo'],
@@ -233,6 +233,8 @@ const KIND_TUNE: Record<string, { base: number; per: number; spacing: number }> 
   shielded: { base: 4, per: 4, spacing: 0.8 },
   healer: { base: 2, per: 1.8, spacing: 1.2 },
   swarm: { base: 14, per: 16, spacing: 0.14 },
+  armored: { base: 3, per: 3.2, spacing: 0.78 },
+  elite: { base: 1, per: 1.7, spacing: 1.15 },
 }
 
 // ===========================================================================
@@ -277,13 +279,18 @@ function difficultyHp(prog: number): number {
 // EARLIER than before so the very first realm already interleaves types that no
 // single tower answers, forcing a varied defence. Realm roster only WEIGHTS the
 // unlocked set; the 0.5× no-immunity rule keeps ≥2 viable answers to each threat.
+// armored/elite gate LAST (after healer) — they're the ones that actually punish a
+// mono damage-type board (Fortified folds Pierce/Physical; Warded folds Magic), so
+// they only show up once the player has had every earlier realm to pick up a spread
+// of towers. Never in l1 (the tutorial is hand-authored and untouched by this gate).
 const INTRO_GATE: Partial<Record<EnemyKind, number>> = {
   runner: 0, grunt: 0, brute: 0.18, swarm: 0.35, flyer: 0.55, shielded: 0.7, healer: 1.15,
+  armored: 0.9, elite: 1.3,
 }
 
 function unlockedKinds(prog: number): EnemyKind[] {
   const out: EnemyKind[] = []
-  for (const kind of ['runner', 'grunt', 'brute', 'swarm', 'flyer', 'shielded', 'healer'] as EnemyKind[]) {
+  for (const kind of ['runner', 'grunt', 'brute', 'swarm', 'flyer', 'shielded', 'healer', 'armored', 'elite'] as EnemyKind[]) {
     if (prog >= (INTRO_GATE[kind] ?? 1e9)) out.push(kind)
   }
   return out

@@ -8,6 +8,11 @@
 //   healer   — periodically heals nearby enemies.
 //   swarm    — tiny, fast, low-HP; arrives in dense clusters (wave spacing does the clustering).
 //   boss     — huge HP, shielded, the finale of the campaign.
+//   armored  — Fortified plate; resists Pierce/Physical hard, folds to Siege/Magic.
+//              Punishes a Sniper/Cannon-mono board. Campaign-gated mid Emberwaste on.
+//   elite    — Warded veteran; resists Magic hard (0.5×), folds to Physical/cannon
+//              fire. Punishes an all-Magic board (frost/flame/storm/arcane). Gated
+//              in after armored, once the realm roster has room to answer it.
 
 export type EnemyKind =
   | 'runner'
@@ -17,6 +22,8 @@ export type EnemyKind =
   | 'shielded'
   | 'healer'
   | 'swarm'
+  | 'armored'
+  | 'elite'
   | 'boss'
   | 'keeper'
 
@@ -167,6 +174,32 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     reward: 3,
     armor: 'Unarmored',
     flatArmor: 0,
+  },
+  armored: {
+    kind: 'armored',
+    name: 'Ironclad',
+    hp: 150,
+    speed: 1.05,
+    radius: 20,
+    color: 0x7fa8d6,
+    accent: 0x2f4a66,
+    shape: 'square',
+    reward: 16,
+    armor: 'Fortified', // Siege & Magic bite; Pierce/Physical fold — the anti-Sniper-mono unit
+    flatArmor: 3,
+  },
+  elite: {
+    kind: 'elite',
+    name: 'Champion',
+    hp: 300,
+    speed: 0.95,
+    radius: 24,
+    color: 0xe0507d,
+    accent: 0x7a1030,
+    shape: 'hex',
+    reward: 32,
+    armor: 'Warded', // resists Magic (0.5×) hard — the anti-all-Magic-board unit; bring Physical/cannon
+    flatArmor: 7,
   },
   // Fallback stat block for the 'keeper' kind — real Keeper fights override this
   // with per-Keeper defs from keepers.ts at spawn (sim looks them up by wave

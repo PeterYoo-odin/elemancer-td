@@ -792,6 +792,8 @@ export class Sim {
     if (n >= 5 && n % 2 === 0) entries.push({ kind: 'healer', count: 1 + Math.floor(n * 0.16), spacing: 1.1, hpMul: hp })
     if (n >= 4) entries.push({ kind: 'swarm', count: 10 + n * 2, spacing: 0.12, hpMul: hp })
     if (n >= 6) entries.push({ kind: 'brute', count: 1 + Math.floor(n * 0.28), spacing: 1.0, hpMul: hp })
+    if (n >= 5 && n % 2 === 0) entries.push({ kind: 'armored', count: 1 + Math.floor(n * 0.14), spacing: 0.5, hpMul: hp })
+    if (n >= 7) entries.push({ kind: 'elite', count: 1 + Math.floor(n * 0.3), spacing: 0.5, hpMul: hp })
     // Bosses ride the same accelerating curve (×1.25) so they stay a real wall, not
     // a speed-bump the ramp leaves behind.
     if (n % 5 === 0) entries.push({ kind: 'boss', count: Math.floor(n / 5), spacing: 2.0, hpMul: hp * 1.25 })

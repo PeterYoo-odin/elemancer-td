@@ -255,6 +255,10 @@ const LOCO: Record<EnemyKind, LocoProfile> = {
   healer: { cyc: 10.5, bob: 0.13, sq: 0.05, lean: 0.03, sway: 0.10, shift: 0.03, wing: 0, jitter: 0 },
   // rapid skitter with per-member phase so the cluster crawls (not marches)
   swarm: { cyc: 30, bob: 0.17, sq: 0.18, lean: 0.07, sway: 0.05, shift: 0.05, wing: 0, jitter: 0.06 },
+  // braced heavy plate — a slower, stiffer cousin of shielded's shuffle
+  armored: { cyc: 9, bob: 0.12, sq: 0.20, lean: 0.05, sway: 0.03, shift: 0.07, wing: 0, jitter: 0 },
+  // confident veteran advance — deep stomp, proud lean, not yet boss-ponderous
+  elite: { cyc: 8, bob: 0.12, sq: 0.24, lean: 0.06, sway: 0.045, shift: 0.09, wing: 0, jitter: 0 },
   // set-piece finale: ponderous, ground-shaking stomp + heavy lumber
   boss: { cyc: 6, bob: 0.10, sq: 0.26, lean: 0.04, sway: 0.05, shift: 0.12, wing: 0, jitter: 0 },
   // Corrupted Keeper — a slow, imperious advance with a deep stomp
