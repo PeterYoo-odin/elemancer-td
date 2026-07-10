@@ -11,7 +11,16 @@ export const MAP_W = COLS * TILE // 720
 export const MAP_H = ROWS * TILE // 880 → map spans y 200..1080
 
 export const FIXED_DT = 1 / 60 // deterministic simulation step
-export const MAX_STEPS_PER_FRAME = 5 // spiral-of-death guard
+// spiral-of-death guard. advance()'s accumulator clamps each frame's incoming
+// dt to 0.25s BEFORE this cap ever applies (sim.ts), so the worst case this cap
+// must absorb is bounded: floor(0.25 / FIXED_DT) = 15 steps. That bound holds
+// regardless of game speed (1×/2×/4× normal play, up to 8× in attract) because
+// it's the ALREADY-SCALED dt that gets clamped — a faster game speed just packs
+// more steps into fewer real frames, it never needs more than 15 in one frame.
+// 15 is therefore the exact value that keeps 2×/4× (and attract's up to 8×)
+// pacing with wall clock without ever tripping the backlog-drop below — a lower
+// cap would silently fall behind at high speed and read as slow motion.
+export const MAX_STEPS_PER_FRAME = 15
 
 export function cellCenter(col: number, row: number): { x: number; y: number } {
   return { x: MAP_X + col * TILE + TILE / 2, y: MAP_Y + row * TILE + TILE / 2 }

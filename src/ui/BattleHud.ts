@@ -758,7 +758,7 @@ export class BattleHud {
     }))
     attachTip(this.speedBtn, () => ({
       tag: 'CONTROL', title: 'Battle speed', accent: '#c9b6ff',
-      body: 'Toggle between 1× and 2×. The simulation stays exact at both speeds — only time flows faster.',
+      body: 'Cycle 1× → 2× → 4×. The simulation stays exact at every speed — only time flows faster.',
     }))
     attachTip(resetBtn, () => ({
       tag: 'CONTROL', title: 'Reset view', accent: '#c9b6ff',

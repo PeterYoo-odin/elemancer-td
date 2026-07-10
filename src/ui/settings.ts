@@ -6,6 +6,7 @@ const KEY = 'elemancer_settings_v1'
 
 export type ColorblindMode = 'off' | 'deuter' | 'protan' | 'trit'
 export type AssistMode = 'off' | 'relaxed' | 'cozy'
+export type GameSpeed = 1 | 2 | 4
 // 'reduced' softens harsh transients + ducking for audio-sensitive players
 // (the reduce-motion analogue for ears).
 export type AudioSensitivity = 'full' | 'reduced'
@@ -43,6 +44,8 @@ export interface AppSettings {
   textScale: number // UI text scale, 0.8..1.5 (1 = default)
   // --- difficulty / assist ---
   assist: AssistMode // extra starting lives/gold for an easier ride (never harder)
+  // --- pacing ---
+  gameSpeed: GameSpeed // battle playback rate (1×/2×/4×); cosmetic — the fixed-step sim is identical at every speed
   // --- input remap ---
   keybinds: Record<BindableAction, string>
 }
@@ -56,7 +59,7 @@ function defaults(): AppSettings {
     masterVol: 0.9, sound: true, sfxVol: 0.8, music: true, musicVol: 0.6,
     vo: true, voVol: 0.75, audioSensitivity: 'full', reduceMotion: false, haptics: true,
     colorblind: 'off', elementGlyphs: false, highContrast: false, textScale: 1,
-    assist: 'off', keybinds: { ...DEFAULT_KEYBINDS },
+    assist: 'off', gameSpeed: 1, keybinds: { ...DEFAULT_KEYBINDS },
   }
 }
 
@@ -68,6 +71,7 @@ function load(): AppSettings {
     const p = JSON.parse(raw) as Partial<AppSettings>
     const cb: ColorblindMode = p.colorblind === 'deuter' || p.colorblind === 'protan' || p.colorblind === 'trit' ? p.colorblind : 'off'
     const assist: AssistMode = p.assist === 'relaxed' || p.assist === 'cozy' ? p.assist : 'off'
+    const gameSpeed: GameSpeed = p.gameSpeed === 2 || p.gameSpeed === 4 ? p.gameSpeed : 1
     const audioSens: AudioSensitivity = p.audioSensitivity === 'reduced' ? 'reduced' : 'full'
     const scale = typeof p.textScale === 'number' && isFinite(p.textScale) ? Math.min(1.5, Math.max(0.8, p.textScale)) : def.textScale
     const binds: Record<BindableAction, string> = { ...DEFAULT_KEYBINDS }
@@ -93,6 +97,7 @@ function load(): AppSettings {
       highContrast: p.highContrast === true,
       textScale: scale,
       assist,
+      gameSpeed,
       keybinds: binds,
     }
   } catch {

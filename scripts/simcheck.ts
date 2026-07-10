@@ -10,7 +10,7 @@
 // number finite & ≥0, all coords/cooldowns finite.
 
 import {
-  Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES,
+  Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES, FIXED_DT, MAX_STEPS_PER_FRAME,
   DRAFT_POOL, ROGUE_DRAFT_POOL, MUTATOR_IDS, MUTATORS, rollRogueDraft, RNG, type MutatorId,
   reactionFor, type AuraElement, type ReactionKey,
 } from '../src/sim/index'
@@ -21,7 +21,7 @@ import { LEVEL_STORY } from '../src/game/story'
 import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
 import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
-import { runScriptedDemo } from '../src/game/attractScript'
+import { runScriptedDemo, demoSimConfig, ScriptRunner, DEMO_SCRIPT } from '../src/game/attractScript'
 import { codeToSeed, seedToCode, SEED_SPACE } from '../src/game/seedcode'
 import { resolveBond, RANKED_WYRM_LEVEL, WYRM_MAX_LEVEL } from '../src/game/wyrms'
 import {
@@ -519,6 +519,61 @@ const demo2 = runScriptedDemo()
 if (demo.fingerprint !== demo2.fingerprint) fail(`demo replay diverged: ${demo.fingerprint} vs ${demo2.fingerprint}`)
 console.log(`  demo ok — won t=${demo.clock.toFixed(1)}s, lives=${demo.lives}, first SHATTER @${demo.shatterAt.toFixed(1)}s, ` +
   `reactions=${demo.reactions}, maxCombo=${demo.maxCombo}, score=${demo.score}`)
+
+// ---------------------------------------------------------------------------
+//  CHROMANCER #53 — GAME SPEED (1×/2×/4×) is cosmetic wall-clock scaling on the
+//  SAME fixed-timestep sim: BattleScene.update() feeds Sim.advance(dt * gameSpeed,
+//  beforeStep) every real frame (sim/sim.ts's accumulator does the rest), and
+//  ranked commands are tick-stamped (tick = round(clock / FIXED_DT)), not
+//  wall-clock-stamped (game/ranked.ts) — so a faster game speed can only pack
+//  more identical fixed steps into fewer real frames. Drive the scripted demo
+//  through that exact advance()-loop shape at three speeds and assert: (a) the
+//  tick count + final state are byte-identical regardless of speed, and (b) the
+//  MAX_STEPS_PER_FRAME headroom (layout.ts) actually keeps 2×/4× paced with
+//  wall clock — if the cap were too low the sim would fall behind and silently
+//  play back like slow motion instead of the real 2×/4× speedup.
+// ---------------------------------------------------------------------------
+console.log('\ngame speed — 1×/2×/4× drive identical tick sequences (real advance()-loop shape)…')
+function runScriptAtSpeed(speedMult: number): { fingerprint: string; realFrames: number; ticks: number } {
+  const sim = new Sim(demoSimConfig())
+  const runner = new ScriptRunner(DEMO_SCRIPT)
+  const REAL_DT = 1 / 60
+  let realFrames = 0
+  const capFrames = 60 * 60 * 20 // 20 real-minutes hard cap — generous headroom
+  while (sim.state !== 'won' && sim.state !== 'lost' && realFrames < capFrames) {
+    // an occasional hitch (mirrors BattleScene.update()'s Math.min(0.05, delta/1000)
+    // clamp on a dropped real frame) — proves the cap survives a hitch AT SPEED too.
+    const hitch = realFrames > 0 && realFrames % 97 === 0
+    const dt = Math.min(0.05, hitch ? 0.2 : REAL_DT)
+    sim.advance(dt * speedMult, () => runner.update(sim, true))
+    if (sim.state === 'draft') sim.chooseDraft(0) // script's own draftPick may already cover this
+    realFrames++
+  }
+  return {
+    fingerprint: `${sim.state}|${sim.waveIndex}|${sim.gold}|${sim.lives}|${sim.clock.toFixed(3)}|${sim.runStats.kills}|${sim.runStats.reactions}`,
+    realFrames,
+    ticks: Math.round(sim.clock / FIXED_DT),
+  }
+}
+const speed1 = runScriptAtSpeed(1)
+const speed2 = runScriptAtSpeed(2)
+const speed4 = runScriptAtSpeed(4)
+if (speed1.fingerprint !== speed2.fingerprint) fail(`game speed 2× diverged from 1×: ${speed2.fingerprint} vs ${speed1.fingerprint}`)
+if (speed1.fingerprint !== speed4.fingerprint) fail(`game speed 4× diverged from 1×: ${speed4.fingerprint} vs ${speed1.fingerprint}`)
+if (speed1.ticks !== speed2.ticks || speed1.ticks !== speed4.ticks) {
+  fail(`game speed tick counts differ: 1×=${speed1.ticks} 2×=${speed2.ticks} 4×=${speed4.ticks}`)
+}
+// pacing: MAX_STEPS_PER_FRAME must have enough headroom that 2×/4× actually finish
+// in proportionally fewer real frames — a starved cap would silently drop backlog
+// and 4× would look like slow motion instead of playing back 4× faster.
+if (speed2.realFrames > speed1.realFrames * 0.6) {
+  fail(`2× did not pace down real frames (1×=${speed1.realFrames} 2×=${speed2.realFrames}) — MAX_STEPS_PER_FRAME (${MAX_STEPS_PER_FRAME}) may be starving it`)
+}
+if (speed4.realFrames > speed1.realFrames * 0.35) {
+  fail(`4× did not pace down real frames (1×=${speed1.realFrames} 4×=${speed4.realFrames}) — MAX_STEPS_PER_FRAME (${MAX_STEPS_PER_FRAME}) may be starving it`)
+}
+console.log(`  speed-cosmetic ✓ — identical fingerprint + ${speed1.ticks} ticks at 1×/2×/4× ` +
+  `(real frames: ${speed1.realFrames}/${speed2.realFrames}/${speed4.realFrames}, MAX_STEPS_PER_FRAME=${MAX_STEPS_PER_FRAME})`)
 
 // ---------------------------------------------------------------------------
 //  CAMPAIGN LADDER — the generated ladder must be DETERMINISTIC, well-formed

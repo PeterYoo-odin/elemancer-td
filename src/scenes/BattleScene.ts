@@ -312,7 +312,10 @@ export class BattleScene extends Phaser.Scene {
     }
 
     // reset transient state (scene instance is reused across restarts)
-    if (!this.attract) this.gameSpeed = 1 // attract keeps its ?speed= capture rate
+    // normal play restores the player's persisted speed choice (same device-pref
+    // store as sound/motion — see ui/settings.ts); attract keeps its own ?speed=
+    // capture rate untouched.
+    if (!this.attract) this.gameSpeed = appSettings.data.gameSpeed
     this.paused = false
     this.resultShown = false
     this.draftShown = false
@@ -443,7 +446,7 @@ export class BattleScene extends Phaser.Scene {
       // heroes normalized, boosts/convenience/extra slots disabled.
       this.hud.banner('RANKED · NOTHING YOU CAN BUY WORKS HERE', 0x9fe8ff)
     }
-    if (this.attract) this.hud.setSpeed(this.gameSpeed)
+    this.hud.setSpeed(this.gameSpeed) // reflect the active (attract capture, or persisted) speed on load
 
     // ---- ONBOARDING: the L1 live coach, or a one-time ramp lesson (l2+) ----
     if (!this.attract && !this.demoMode && !this.endless) {
@@ -1384,9 +1387,28 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  // 1× → 2× → 4× → 1×. Purely cosmetic wall-clock scaling: the sim is fixed-
+  // timestep and ranked commands are tick-stamped (not wall-clock-stamped — see
+  // game/ranked.ts), so a faster game speed just packs more identical fixed
+  // steps into fewer real frames. Persisted so the choice survives level
+  // restarts and sessions (see ui/settings.ts, same store as other device prefs).
   private toggleSpeed(): void {
-    this.gameSpeed = this.gameSpeed === 1 ? 2 : 1
+    this.gameSpeed = this.gameSpeed === 1 ? 2 : this.gameSpeed === 2 ? 4 : 1
     this.hud.setSpeed(this.gameSpeed)
+    appSettings.set({ gameSpeed: this.gameSpeed as 1 | 2 | 4 })
+  }
+
+  // Hitstop is a true wall-clock freeze-frame (see update()). At 1× that reads as
+  // a satisfying punch; at higher game speed the SAME wall-clock freeze eats a
+  // proportionally bigger bite out of the sped-up action, so it's scaled down as
+  // speed rises — full weight at 1×, half at 2×, a light tap at 4× — so fast play
+  // stays smooth instead of stuttering on every kill/reaction.
+  private hitstopScale(): number {
+    return this.gameSpeed >= 4 ? 0.15 : this.gameSpeed >= 2 ? 0.5 : 1
+  }
+
+  private addHitstop(seconds: number): void {
+    this.hitstopT = Math.max(this.hitstopT, seconds * this.hitstopScale())
   }
 
   // Remappable keyboard controls (accessibility). Ignored while a DOM dialog is up
@@ -1813,8 +1835,8 @@ export class BattleScene extends Phaser.Scene {
           const ratio = Math.pow(2, Math.min(12, this.sim.comboCount) / 12)
           qa.emit('sound', { id: ev.boss ? 'kill:boss' : 'kill', gain: 0.16, playbackRate: ratio, freq: 430 * ratio, combo: this.sim.comboCount })
         }
-        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.hitstopT = Math.max(this.hitstopT, 0.07); this.view.bloomPulse(0.4); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
-        else if (ev.elite && this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.055); this.killStopCd = 0.45; this.view.bloomPulse(0.18); duckPunch(0.35); if (!this.attract) haptic(HAPTIC.reaction) }
+        if (ev.boss) { this.hud.flash(0xff6ad5, 0.35); this.addHitstop(0.07); this.view.bloomPulse(0.4); duckPunch(0.6); if (!this.attract) haptic(HAPTIC.bossKill); this.tryBark('kill') }
+        else if (ev.elite && this.killStopCd <= 0) { this.addHitstop(0.055); this.killStopCd = 0.45; this.view.bloomPulse(0.18); duckPunch(0.35); if (!this.attract) haptic(HAPTIC.reaction) }
         // Bestiary — "The Greyed" fills in as the player frees each kind (never keepers).
         if (ev.kind !== 'keeper' && unlockEnemyCodex(ev.kind)) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         break
@@ -1825,7 +1847,7 @@ export class BattleScene extends Phaser.Scene {
         if (qa.enabled) { qa.emit('shake', { amplitude: 0.05, cause: 'shieldBreak' }); qa.emit('sound', { id: 'shieldBreak', gain: 0.12 }) }
         // a small satisfying freeze, but THROTTLED — a shielded pack breaking across
         // consecutive frames must not chain hard-freezes into a stutter.
-        if (this.killStopCd <= 0) { this.hitstopT = Math.max(this.hitstopT, 0.04); this.killStopCd = 0.4 }
+        if (this.killStopCd <= 0) { this.addHitstop(0.04); this.killStopCd = 0.4 }
         battleSfx.shieldBreak(panFor(ev.x))
         break
       case 'leak': {
@@ -1857,7 +1879,7 @@ export class BattleScene extends Phaser.Scene {
         this.view.fxChain(ev.points, ev.color, ev.supercharged)
         // (renamed from SHATTER — that name now belongs to the Water+Storm reaction)
         if (ev.supercharged) {
-          this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.hitstopT = Math.max(this.hitstopT, 0.06); duckPunch(0.4)
+          this.hud.waveBanner('❄⚡ SUPERCHARGED!'); this.addHitstop(0.06); duckPunch(0.4)
           const tip = ev.points[ev.points.length - 1]
           battleSfx.reaction(undefined, tip ? panFor(tip[0]) : 0)
         }
@@ -2017,7 +2039,7 @@ export class BattleScene extends Phaser.Scene {
           this.hud.reactionCallout(ev.name, ev.color)
           if (qa.enabled) qa.emit('callout', { text: ev.name, kind: 'reaction', magnitude: mag })
           this.reactCalloutCd = 0.55
-          this.hitstopT = Math.max(this.hitstopT, 0.045 + mag * 0.025) // 40–70ms, scaled
+          this.addHitstop(0.045 + mag * 0.025) // 40–70ms, scaled by hitstopScale()
           if (!appSettings.reducedMotion()) {
             this.hud.flash(ev.color, 0.1 + mag * 0.12, 200) // brief element-colored surge (opacity-damped under reduce-motion)
             this.view.bloomPulse(0.14 + mag * 0.2)
@@ -2040,7 +2062,7 @@ export class BattleScene extends Phaser.Scene {
         this.view.bloomPulse(0.35)
         this.hud.flash(ev.color, 0.3)
         this.hud.reactionCallout(`⚛ ${ev.name}`, ev.color)
-        this.hitstopT = Math.max(this.hitstopT, 0.07)
+        this.addHitstop(0.07)
         battleSfx.fusion()
         if (unlockCodex('field-fusion')) this.hud.banner('✎ SKETCHBOOK UPDATED', 0xc9b6ff)
         this.tryBark('fusion')
@@ -2181,14 +2203,14 @@ export class BattleScene extends Phaser.Scene {
     battleSfx.reaction(key, panFor(cx))
     const shakeAmp = 0.055 + 0.055 * Math.max(0.4, mag)
     qa.lastReaction = def.name
-    qa.emit('reaction', { name: def.name, key, magnitude: mag, x: cx, y: cy, shakeAmplitude: Math.round(shakeAmp * 1000) / 1000, requestedHitstopMs: Math.round((0.045 + mag * 0.025) * 1000) })
+    qa.emit('reaction', { name: def.name, key, magnitude: mag, x: cx, y: cy, shakeAmplitude: Math.round(shakeAmp * 1000) / 1000, requestedHitstopMs: Math.round((0.045 + mag * 0.025) * this.hitstopScale() * 1000) })
     qa.emit('shake', { amplitude: Math.round(shakeAmp * 1000) / 1000, cause: 'reaction', magnitude: mag })
     qa.emit('sound', { id: `reaction:${key}`, gain: 0.16, magnitude: mag })
     if (this.reactCalloutCd <= 0) {
       this.hud.reactionCallout(def.name, def.color)
       qa.emit('callout', { text: def.name, kind: 'reaction', magnitude: mag })
       this.reactCalloutCd = 0.55
-      this.hitstopT = Math.max(this.hitstopT, 0.045 + mag * 0.025)
+      this.addHitstop(0.045 + mag * 0.025)
       if (!appSettings.reducedMotion()) { this.hud.flash(def.color, 0.1 + mag * 0.12, 200); this.view.bloomPulse(0.14 + mag * 0.2) }
     }
     return true

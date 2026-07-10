@@ -1250,7 +1250,7 @@ var MAP_Y = 200;
 var MAP_W = COLS * TILE;
 var MAP_H = ROWS * TILE;
 var FIXED_DT = 1 / 60;
-var MAX_STEPS_PER_FRAME = 5;
+var MAX_STEPS_PER_FRAME = 15;
 function cellCenter(col, row) {
   return { x: MAP_X + col * TILE + TILE / 2, y: MAP_Y + row * TILE + TILE / 2 };
 }
