@@ -58,7 +58,7 @@ export interface TowerVisual {
   turretY: number // turret pivot height
   height: number // approx total height (veil / glow placement)
   accents: AccentSpec[]
-  emitter?: { type: 'mist' | 'embers' | 'sparks' | 'motes'; y: number; rate: number }
+  emitter?: { type: 'mist' | 'embers' | 'sparks' | 'motes' | 'spores'; y: number; rate: number }
 }
 
 // ---------------------------------------------------------------- geometry kit
@@ -580,16 +580,229 @@ function buildArcane(b: Build, tb: Build, L: number, branch: number) {
   }
 }
 
+// ---------------------------------------------------------------- BLOOM
+// Living root spire. Branches: Thornspire = one MASSIVE curved thorn spike;
+// Overgrowth = a wide ring of leaning thorns + spreading ground roots.
+function buildBloom(b: Build, tb: Build, L: number, branch: number) {
+  const k = 1 + L * 0.15 // TIER: the root-mass thickens per upgrade
+  const accents: AccentSpec[] = []
+  const thornspire = L >= 3 && branch === 0
+  const overgrowth = L >= 3 && branch === 1
+  // loamy mound plinth
+  b.add('dark', lathe([[0.45, 0], [0.45, 0.06], [0.36, 0.13], [0.28, 0.15], [0.001, 0.15]], 18))
+  b.add('trim', band(0.38, 0.02, 18), { y: 0.1 })
+  // T2 wider root shelf — a heavier, spreading footing
+  if (L >= 2) {
+    b.add('dark', lathe([[0.51, 0.04], [0.5, 0.1], [0.41, 0.16], [0.33, 0.18], [0.001, 0.18]], 18))
+    b.add('trim', band(0.46, 0.02, 24), { y: 0.15 })
+  }
+
+  const trunkH = 0.36 + L * 0.18 // TIER: trunk climbs taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
+  // gnarled living trunk — swollen knots, tapering to a budding crown
+  b.add('body', lathe([
+    [0.22 * k, y0], [0.27 * k, y0 + trunkH * 0.25], [0.19 * k, y0 + trunkH * 0.5],
+    [0.24 * k, y0 + trunkH * 0.75], [0.155 * k, y0 + trunkH], [0.001, y0 + trunkH],
+  ], 16))
+  b.add('core', band(0.245 * k, 0.012, 16), { y: y0 + trunkH * 0.26 }) // glowing sap-vein ring
+  if (L >= 1) b.add('core', band(0.21 * k, 0.011, 16), { y: y0 + trunkH * 0.6 })
+
+  // ring of leaning thorn spikes around the crown shoulder
+  const topY = y0 + trunkH
+  const n = overgrowth ? 8 : 4 + Math.min(L, 2)
+  const lean = overgrowth ? 0.68 : 0.4
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + jit(i, L) * 0.5
+    const h = (thornspire ? 0.26 : 0.2) + jit(i, 7) * 0.08 + L * 0.035
+    const th = cone(0.03 + L * 0.004, h, 6)
+    th.rotateZ(-lean)
+    b.add('trim', th, { ry: -a, x: Math.cos(a) * 0.21 * k, z: Math.sin(a) * 0.21 * k, y: topY - 0.08 })
+  }
+
+  // budding pod core (in the turret so a hit pulses it)
+  if (thornspire) {
+    // ONE massive curved thorn spike, unmistakably a single-target executioner
+    const spike = cone(0.1, 0.95, 7)
+    spike.rotateZ(-0.22)
+    tb.add('core', spike, { y: 0.05 })
+    tb.add('trim', band(0.09, 0.016, 12), { y: 0.28 })
+  } else {
+    const podR = 0.1 + L * 0.03
+    tb.add('core', orb(podR, 12, 9), { sy: 0.85 })
+    if (L >= 2) {
+      tb.add('core', orb(podR * 0.5, 10, 8), { x: 0.12, z: 0.06, y: 0.06, sy: 0.85 })
+      tb.add('core', orb(podR * 0.45, 10, 8), { x: -0.1, z: -0.08, y: 0.05, sy: 0.85 })
+    }
+  }
+  if (overgrowth) {
+    // wide low ring of ground roots — "this ground is claimed"
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.3
+      b.add('core', cone(0.032, 0.08, 6), { x: Math.cos(a) * 0.42, z: Math.sin(a) * 0.42 })
+    }
+    accents.push({ shape: 'ring', role: 'core', attach: 'turret', y: 0.18, scale: 0.34, tiltX: 0.4, spin: 0.7, scaleY: 0.5 })
+  }
+  if (L >= 1 && !thornspire) {
+    accents.push({ shape: 'shard', role: 'core', attach: 'turret', y: 0.24, scale: 0.045, orbit: 0.24 + L * 0.03, spin: 0.7, bobAmp: 0.04, phase: 0.9 })
+  }
+
+  const coreH = thornspire ? 0.95 : 0.2 + L * 0.06
+  return {
+    turretY: topY,
+    height: topY + coreH,
+    accents,
+    emitter: { type: 'spores' as const, y: topY - 0.05, rate: 0.7 + L * 0.5 },
+  }
+}
+
+// ---------------------------------------------------------------- RADIANT
+// Golden beacon obelisk. Branches: Dawnbreaker = wide twin halo burst;
+// Judgment = one tall piercing radiant blade.
+function buildRadiant(b: Build, tb: Build, L: number, branch: number) {
+  const k = 1 + L * 0.14 // TIER: the obelisk broadens per upgrade
+  const accents: AccentSpec[] = []
+  const dawnbreaker = L >= 3 && branch === 0
+  const judgment = L >= 3 && branch === 1
+  // pale gold plinth with an inlaid glyph-ring
+  b.add('body', lathe([[0.43, 0], [0.44, 0.05], [0.36, 0.12], [0.28, 0.15], [0.001, 0.15]], 20))
+  b.add('trim', band(0.335, 0.012, 20), { y: 0.04 })
+  // T2 dais: a second gilded tier lifts the obelisk
+  if (L >= 2) {
+    b.add('body', lathe([[0.49, 0.04], [0.5, 0.1], [0.4, 0.16], [0.32, 0.18], [0.001, 0.18]], 20))
+    b.add('trim', band(0.44, 0.013, 28), { y: 0.16 })
+  }
+
+  const pilH = 0.4 + L * 0.19 // TIER: the obelisk climbs taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
+  // tapered four-sided obelisk (lathe with few segments reads as faceted)
+  b.add('body', lathe([
+    [0.2 * k, y0], [0.155 * k, y0 + pilH * 0.4], [0.13 * k, y0 + pilH * 0.7],
+    [0.09 * k, y0 + pilH * 0.94], [0.001, y0 + pilH],
+  ], 4))
+  b.add('trim', band(0.17 * k, 0.016, 20), { y: y0 + pilH * 0.32 })
+  b.add('trim', band(0.12 * k, 0.014, 20), { y: y0 + pilH * 0.7 })
+
+  const turretY = y0 + pilH + 0.03
+  const coreY = 0.14 + L * 0.03
+
+  if (judgment) {
+    // one tall piercing radiant blade — the executioner's crown
+    tb.add('core', cone(0.05, 0.85, 5), { y: coreY })
+    tb.add('trim', band(0.065, 0.014, 16), { y: coreY + 0.14 })
+  } else {
+    // floating sun-core orb (TIER: swells brighter each level)
+    accents.push({ shape: 'orb', role: 'core', attach: 'turret', y: coreY, scale: 0.1 + L * 0.032, spin: 1.1, bobAmp: 0.03, flicker: 0.16 })
+    // sun-ray spikes radiating from the core
+    const rays = dawnbreaker ? 8 : 5 + Math.min(L, 2)
+    for (let i = 0; i < rays; i++) {
+      const a = (i / rays) * Math.PI * 2
+      const ray = cone(0.018, dawnbreaker ? 0.26 : 0.16 + L * 0.02, 6)
+      ray.rotateZ(-1.35)
+      tb.add('trim', ray, { ry: -a, x: Math.cos(a) * (0.12 + L * 0.02), z: Math.sin(a) * (0.12 + L * 0.02), y: coreY })
+    }
+    if (dawnbreaker) {
+      accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: 0.42, scaleY: 0.4, tiltX: 0.5, spin: 1.4 })
+      accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: 0.3, scaleY: 0.4, tiltX: -0.6, spin: -1.9, phase: 2.3 })
+    }
+  }
+  // orbiting light motes
+  const motes = 2 + Math.min(L, 2) + (dawnbreaker ? 2 : 0)
+  for (let i = 0; i < motes; i++) {
+    accents.push({
+      shape: 'shard', role: 'core', attach: 'turret', y: coreY - 0.02 + jit(i, 4) * 0.08,
+      scale: 0.032 + jit(i, 6) * 0.012, orbit: (dawnbreaker ? 0.38 : 0.28) + jit(i, 10) * 0.05,
+      spin: 0.8 + jit(i, 12) * 0.5, phase: (i / motes) * Math.PI * 2, bobAmp: 0.025,
+    })
+  }
+
+  return {
+    turretY,
+    height: turretY + coreY + (judgment ? 0.9 : 0.25),
+    accents,
+    emitter: { type: 'sparks' as const, y: turretY + 0.1, rate: 0.6 + L * 0.4 },
+  }
+}
+
+// ---------------------------------------------------------------- SHADE
+// Twisted void obelisk. Branches: Wraithfang = one aimed curved fang, forward-
+// leaning like a levelled blade; Gloomspread = a wide cluster of drifting wisps.
+function buildShade(b: Build, tb: Build, L: number, branch: number) {
+  const k = 1 + L * 0.15 // TIER: the obelisk thickens per upgrade
+  const accents: AccentSpec[] = []
+  const wraithfang = L >= 3 && branch === 0
+  const gloomspread = L >= 3 && branch === 1
+  // dark riven plinth
+  b.add('dark', lathe([[0.44, 0], [0.44, 0.06], [0.35, 0.13], [0.27, 0.15], [0.001, 0.15]], 18))
+  b.add('trim', band(0.375, 0.018, 18), { y: 0.1 })
+  // T2 sunken dais: a heavier, cracked footing
+  if (L >= 2) {
+    b.add('dark', lathe([[0.5, 0.04], [0.49, 0.1], [0.4, 0.16], [0.32, 0.18], [0.001, 0.18]], 18))
+    b.add('trim', band(0.46, 0.018, 24), { y: 0.15 })
+  }
+
+  const pilH = 0.4 + L * 0.19 // TIER: the spire climbs taller each level
+  const y0 = L >= 2 ? 0.18 : 0.14
+  // twisted, waisted void pillar
+  b.add('dark', lathe([
+    [0.21 * k, y0], [0.26 * k, y0 + pilH * 0.22], [0.14 * k, y0 + pilH * 0.55],
+    [0.19 * k, y0 + pilH * 0.82], [0.13 * k, y0 + pilH], [0.001, y0 + pilH],
+  ], 16))
+  b.add('trim', band(0.15 * k, 0.016, 16), { y: y0 + pilH * 0.55 })
+  b.add('core', band(0.2 * k, 0.01, 16), { y: y0 + pilH * 0.22 })
+
+  const turretY = y0 + pilH
+  const coreY = 0.14 + L * 0.03
+
+  if (wraithfang) {
+    // one aimed, curved fang levelled forward like a blade — the execution edge
+    const fang = crystal(0.1, 0.85, 4)
+    fang.rotateZ(-Math.PI / 2 + 0.3)
+    tb.add('core', fang, { x: 0.32, y: coreY })
+    tb.add('trim', ringX(0.07, 0.014), { x: 0.05, y: coreY })
+  } else {
+    // floating void orb (TIER: swells darker/brighter each level)
+    accents.push({ shape: 'orb', role: 'core', attach: 'turret', y: coreY, scale: 0.11 + L * 0.035, spin: -1.0, bobAmp: 0.035, flicker: 0.12 })
+    accents.push({ shape: 'ring', role: 'trim', attach: 'turret', y: coreY, scale: 0.24 + L * 0.02, scaleY: 0.55, tiltX: 1.0, spin: -1.4 })
+    if (gloomspread) {
+      // a wide drifting cluster of wisp-shards spreading outward
+      for (let i = 0; i < 6; i++) {
+        accents.push({
+          shape: 'shard', role: 'core', attach: 'turret', y: coreY + jit(i, 8) * 0.14,
+          scale: 0.05 + jit(i, 3) * 0.02, orbit: 0.42 + jit(i, 5) * 0.08,
+          spin: 0.6 + jit(i, 9) * 0.4, phase: (i / 6) * Math.PI * 2, bobAmp: 0.05,
+        })
+      }
+    }
+  }
+  // orbiting curse motes (always present, denser at higher tiers)
+  const motes = 2 + Math.min(L, 2)
+  for (let i = 0; i < motes; i++) {
+    accents.push({
+      shape: 'shard', role: 'core', attach: 'turret', y: coreY - 0.03 + jit(i, 11) * 0.08,
+      scale: 0.03 + jit(i, 13) * 0.01, orbit: 0.26 + jit(i, 15) * 0.04,
+      spin: -(0.7 + jit(i, 17) * 0.4), phase: (i / motes) * Math.PI * 2, bobAmp: 0.03,
+    })
+  }
+
+  return {
+    turretY,
+    height: turretY + coreY + 0.3,
+    accents,
+    emitter: { type: 'motes' as const, y: turretY + 0.08, rate: 0.5 + L * 0.4 },
+  }
+}
+
 // ---------------------------------------------------------------- factory
 const BUILDERS: Record<TowerKind, (b: Build, tb: Build, L: number, branch: number) => {
   turretY: number; height: number; accents: AccentSpec[]
   emitter?: TowerVisual['emitter']
 }> = {
   cannon: buildCannon, frost: buildFrost, flame: buildFlame, storm: buildStorm, arcane: buildArcane,
+  bloom: buildBloom, radiant: buildRadiant, shade: buildShade,
 }
 
 // Persistent cache — geometry survives battle restarts (like the model registry);
-// 5 kinds × ≤5 tier/branch states, each a handful of small merged buffers.
+// 8 kinds × ≤5 tier/branch states, each a handful of small merged buffers.
 const cache = new Map<string, TowerVisual>()
 
 export function towerVisual(kind: TowerKind, level: number, branch: number): TowerVisual {

@@ -4,7 +4,7 @@
 // taps fall through to the canvas; only real controls opt back in (.pe).
 
 import type { Sim, SimHero } from '../sim'
-import { GRID, WHEEL, DAMAGE_TYPES, REACTIONS, type ArmorType, type DamageType, type Element, type ReactionKey } from '../sim'
+import { GRID, WHEEL, DAMAGE_TYPES, REACTIONS, type ArmorType, type DamageType, type Element, type ReactionKey, type StatusKind } from '../sim'
 import { TOWERS, TOWER_ORDER, type TowerBranch, type TowerKind } from '../game/towers'
 import { towerPalette, spellColor, heroDye } from '../game/skins'
 import { SPELLS, SPELL_ORDER, type SpellKey } from '../game/spells'
@@ -1483,7 +1483,7 @@ export class BattleHud {
         btn.style.background = `linear-gradient(180deg, ${hex(def.color)}, ${hex(def.accent)})`
         btn.append(el('span', undefined, b.name), el('span', 'bb', b.blurb), el('span', 'bc', `$${cost}`))
         btn.onclick = () => this.cb.onBranch(t.id, idx)
-        attachTip(btn, () => branchTip(def.name, b, cost, hex(def.color)))
+        attachTip(btn, () => branchTip(def.name, b, cost, hex(def.color), def.status))
         br.append(btn)
       })
       ctl.append(br)
@@ -2058,6 +2058,7 @@ export class BattleHud {
 // Aura each tower paints (mirror of the sim's TOWER_AURA, labels for the panel).
 const TOWER_AURA_LABEL: Partial<Record<TowerKind, string>> = {
   flame: 'Fire', frost: 'Water', storm: 'Storm', arcane: 'Arcane',
+  bloom: 'Nature', radiant: 'Light', shade: 'Dark',
 }
 // One-line effect summary per reaction (fusion panel legibility).
 const FUSE_EFFECT: Record<ReactionKey, string> = {
@@ -2086,7 +2087,7 @@ function gridCounters(dt: DamageType): { strong: string[]; weak: string[] } {
   }
   return { strong, weak }
 }
-function branchTip(towerName: string, b: TowerBranch, cost: number, accent: string): TipContent {
+function branchTip(towerName: string, b: TowerBranch, cost: number, accent: string, status?: StatusKind): TipContent {
   const rows: TipRow[] = [
     { k: 'Damage', v: String(b.damage) },
     { k: 'Rate', v: rateStr(b.cooldown) },
@@ -2096,8 +2097,9 @@ function branchTip(towerName: string, b: TowerBranch, cost: number, accent: stri
   if (b.splash) rows.push({ k: 'Splash', v: `${b.splash} tiles`, c: '#ff9a5c' })
   if (b.stunDuration) rows.push({ k: 'Stun', v: `${b.stunDuration}s`, c: '#6bd6ff' })
   if (b.slowFactor !== undefined) rows.push({ k: 'Slow', v: `to ${Math.round(b.slowFactor * 100)}% speed`, c: '#6bd6ff' })
-  if (b.burnDps) rows.push({ k: 'Burn', v: `${b.burnDps}/s`, c: '#ff9a5c' })
-  if (b.zoneDps) rows.push({ k: 'Ground fire', v: `${b.zoneDps}/s · ${b.zoneDuration}s`, c: '#ff9a5c' })
+  if (b.burnDps) rows.push({ k: status === 'poison' ? 'Poison' : 'Burn', v: `${b.burnDps}/s`, c: '#ff9a5c' })
+  if (b.zoneDps) rows.push({ k: status === 'poison' ? 'Toxic ground' : 'Ground fire', v: `${b.zoneDps}/s · ${b.zoneDuration}s`, c: '#ff9a5c' })
+  if (b.armorTear) rows.push({ k: 'Armor shred', v: `-${b.armorTear} armor · ${b.armorTearDuration ?? 3}s`, c: '#c06bff' })
   if (b.seeking) rows.push({ k: 'Shots', v: 'homing — never miss', c: '#ff9a5c' })
   if (b.chainCount !== undefined) rows.push({ k: 'Chains', v: b.chainCount === 0 ? 'no — one huge bolt' : `×${b.chainCount} jumps`, c: '#ffe14a' })
   if (b.buffDamage) rows.push({ k: 'Aura', v: `+${Math.round(b.buffDamage * 100)}% dmg${b.buffReach ? ` · ${b.buffReach}-tile reach` : ''}`, c: '#c9b6ff' })

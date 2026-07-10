@@ -8,7 +8,7 @@
 
 import type { DamageType, Element, StatusKind, TargetMode } from '../sim/combat'
 
-export type TowerKind = 'cannon' | 'frost' | 'flame' | 'storm' | 'arcane'
+export type TowerKind = 'cannon' | 'frost' | 'flame' | 'storm' | 'arcane' | 'bloom' | 'radiant' | 'shade'
 
 export interface TowerLevel {
   damage: number
@@ -18,7 +18,8 @@ export interface TowerLevel {
   // --- slice-3 combat model (all optional; fall back to the TowerDef defaults) ---
   damageType?: DamageType // branch can change the counter type (Sniper→Pierce, Mortar→Siege)
   armorPen?: number // flat armor ignored
-  armorTear?: number // Siege/branch: flat armor stripped from the target (status)
+  armorTear?: number // Siege/branch/Shade: flat armor stripped from the target (status)
+  armorTearDuration?: number // Shade: seconds the armor shred lingers
   // Frost:
   slowFactor?: number // enemy speed multiplier while slowed (e.g. 0.5)
   slowDuration?: number // seconds the slow lingers
@@ -208,9 +209,90 @@ export const TOWERS: Record<TowerKind, TowerDef> = {
       { key: 'prism', name: 'Prism', blurb: 'Piercing beam · buffs AND blasts', damage: 66, range: 3.0, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true, damageType: 'Pierce', armorPen: 6 },
     ],
   },
+  bloom: {
+    kind: 'bloom',
+    name: 'Bloom',
+    blurb: 'Toxic splash · lingers and spreads',
+    cost: 85,
+    color: 0x8dff4a,
+    accent: 0x2f6e1a,
+    projectile: false,
+    synergyDamage: true,
+    antiAir: false,
+    support: false,
+    damageType: 'Magic',
+    element: 'Nature',
+    status: 'poison',
+    defaultTargeting: 'Close',
+    levels: [
+      { damage: 7, range: 2.0, cooldown: 1.05, upgradeCost: 0, burnDps: 9, burnDuration: 3.0, splash: 1.15 },
+      { damage: 12, range: 2.3, cooldown: 0.95, upgradeCost: 78, burnDps: 15, burnDuration: 3.3, splash: 1.3 },
+      { damage: 19, range: 2.6, cooldown: 0.85, upgradeCost: 140, burnDps: 23, burnDuration: 3.6, splash: 1.5 },
+    ],
+    branches: [
+      // Thornspire reforges the bloom into a seeking, armour-piercing spike;
+      // Overgrowth leaves a wide toxic root zone — area denial, Nature-flavoured.
+      { key: 'thornspire', name: 'Thornspire', blurb: 'Seeking piercing thorn · hunts armored prey', damage: 100, range: 4.1, cooldown: 0.85, upgradeCost: 300, burnDps: 34, burnDuration: 3.2, splash: 0, seeking: true, damageType: 'Pierce', armorPen: 10 },
+      { key: 'overgrowth', name: 'Overgrowth', blurb: 'Wide toxic root zone · area denial', damage: 30, range: 2.9, cooldown: 1.05, upgradeCost: 300, burnDps: 32, burnDuration: 3.4, splash: 1.7, zoneDps: 22, zoneDuration: 4.0, zoneRadius: 1.6 },
+    ],
+  },
+  radiant: {
+    kind: 'radiant',
+    name: 'Radiant',
+    blurb: 'Holy burst · briefly stuns · hits flyers',
+    cost: 115,
+    color: 0xffe14a,
+    accent: 0x8a6a10,
+    projectile: false,
+    synergyDamage: true,
+    antiAir: true,
+    support: false,
+    damageType: 'Magic',
+    element: 'Light',
+    status: 'stun',
+    defaultTargeting: 'First',
+    levels: [
+      { damage: 22, range: 2.8, cooldown: 1.0, upgradeCost: 0, splash: 0.6, stunDuration: 0.18 },
+      { damage: 34, range: 3.1, cooldown: 0.9, upgradeCost: 100, splash: 0.75, stunDuration: 0.22 },
+      { damage: 50, range: 3.4, cooldown: 0.8, upgradeCost: 165, splash: 0.9, stunDuration: 0.26 },
+    ],
+    branches: [
+      // Dawnbreaker widens the burst into a stunning nova; Judgment narrows it into
+      // one devastating smite that punches through armour.
+      { key: 'dawnbreaker', name: 'Dawnbreaker', blurb: 'Wide radiant nova · stuns the pack', damage: 70, range: 3.6, cooldown: 0.85, upgradeCost: 340, splash: 1.6, stunDuration: 0.4 },
+      { key: 'judgment', name: 'Judgment', blurb: 'One devastating smite · executes the strongest foe', damage: 230, range: 4.4, cooldown: 1.05, upgradeCost: 340, splash: 0, stunDuration: 0.3, armorPen: 10 },
+    ],
+  },
+  shade: {
+    kind: 'shade',
+    name: 'Shade',
+    blurb: 'Curse bolt · shreds armor over time',
+    cost: 100,
+    color: 0xc06bff,
+    accent: 0x3a1a5c,
+    projectile: true,
+    synergyDamage: true,
+    antiAir: false,
+    support: false,
+    damageType: 'Magic',
+    element: 'Dark',
+    status: 'armorTear',
+    defaultTargeting: 'Strong',
+    levels: [
+      { damage: 20, range: 2.6, cooldown: 0.8, upgradeCost: 0, armorTear: 5, armorTearDuration: 3.0 },
+      { damage: 34, range: 2.9, cooldown: 0.72, upgradeCost: 95, armorTear: 7, armorTearDuration: 3.3 },
+      { damage: 54, range: 3.2, cooldown: 0.65, upgradeCost: 160, armorTear: 10, armorTearDuration: 3.6 },
+    ],
+    branches: [
+      // Wraithfang hunts one target with a seeking, armour-shredding execute bolt;
+      // Gloomspread bursts the curse outward to weaken the whole pack at once.
+      { key: 'wraithfang', name: 'Wraithfang', blurb: 'Seeking curse bolt · shreds armor to the bone', damage: 180, range: 4.6, cooldown: 1.05, upgradeCost: 320, armorTear: 16, armorTearDuration: 4.0, seeking: true, damageType: 'Pierce', armorPen: 6 },
+      { key: 'gloomspread', name: 'Gloomspread', blurb: 'Curse bursts outward · shreds the whole pack', damage: 80, range: 3.4, cooldown: 0.85, upgradeCost: 320, splash: 1.4, armorTear: 10, armorTearDuration: 3.6 },
+    ],
+  },
 }
 
-export const TOWER_ORDER: TowerKind[] = ['cannon', 'frost', 'flame', 'storm', 'arcane']
+export const TOWER_ORDER: TowerKind[] = ['cannon', 'frost', 'flame', 'storm', 'arcane', 'bloom', 'radiant', 'shade']
 
 // Towers gated behind unlocks (persisted). Cannon/Frost/Flame are free from the start.
 export const STARTER_TOWERS: TowerKind[] = ['cannon', 'frost', 'flame']

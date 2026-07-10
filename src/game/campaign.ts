@@ -511,11 +511,16 @@ function finaleLevel(id: string, rg: RealmGen, realmOrder: number): LevelDef {
   }
 }
 
-// Which local index of a realm grants storm / arcane (spread EARLY so players
-// aren't gated behind a keeper for basic towers; both land before flyers appear).
+// Which local index of a realm grants a new tower. Storm/arcane are spread EARLY
+// so players aren't gated behind a keeper for basic towers (both land before
+// flyers appear); the reaction-complete trio (bloom/radiant/shade) lands one per
+// realm across the mid-game so every element is tower-native well before Hollow.
 const UNLOCK_AT: Record<string, { j: number; tower: TowerKind }> = {
   emberwaste: { j: 5, tower: 'storm' },
   frostreach: { j: 4, tower: 'arcane' },
+  stormpeaks: { j: 5, tower: 'bloom' },
+  verdant: { j: 5, tower: 'radiant' },
+  lumen: { j: 5, tower: 'shade' },
 }
 
 export interface BuiltCampaign { levels: LevelDef[]; realms: RealmDef[]; firstLevelId: string }

@@ -101,7 +101,14 @@ const BUILDS: Build[] = [
   { id: 'storm_overload', label: 'Storm → Overload', kinds: ['storm'], branch: { storm: 1 }, tag: 'tower' },
   { id: 'arcane_amplify', label: 'Arcane → Amplify (+cannon)', kinds: ['cannon', 'arcane'], branch: { arcane: 0, cannon: 0 }, tag: 'tower' },
   { id: 'arcane_prism', label: 'Arcane → Prism', kinds: ['arcane'], branch: { arcane: 1 }, tag: 'tower' },
+  { id: 'bloom_thornspire', label: 'Bloom → Thornspire', kinds: ['bloom'], branch: { bloom: 0 }, tag: 'tower' },
+  { id: 'bloom_overgrowth', label: 'Bloom → Overgrowth', kinds: ['bloom'], branch: { bloom: 1 }, tag: 'tower' },
+  { id: 'radiant_dawnbreaker', label: 'Radiant → Dawnbreaker', kinds: ['radiant'], branch: { radiant: 0 }, tag: 'tower' },
+  { id: 'radiant_judgment', label: 'Radiant → Judgment', kinds: ['radiant'], branch: { radiant: 1 }, tag: 'tower' },
+  { id: 'shade_wraithfang', label: 'Shade → Wraithfang', kinds: ['shade'], branch: { shade: 0 }, tag: 'tower' },
+  { id: 'shade_gloomspread', label: 'Shade → Gloomspread', kinds: ['shade'], branch: { shade: 1 }, tag: 'tower' },
   { id: 'balanced', label: 'Balanced spread', kinds: ['cannon', 'frost', 'flame', 'storm'], branch: { cannon: 0, frost: 1, flame: 0, storm: 1 }, tag: 'control' },
+  { id: 'reaction_octet', label: 'Reaction octet (all 8 kinds)', kinds: ['cannon', 'frost', 'flame', 'storm', 'arcane', 'bloom', 'radiant', 'shade'], branch: { cannon: 0, frost: 1, flame: 0, storm: 1, arcane: 0, bloom: 1, radiant: 0, shade: 1 }, tag: 'control' },
   { id: 'tempest_blizzard', label: 'Tempest + Blizzard (suspect)', kinds: ['storm', 'frost'], branch: { storm: 0, frost: 0 }, tag: 'combo' },
 ]
 
@@ -465,6 +472,18 @@ function buffFor(buildId: string): Suggestion | null {
       return { target: 'Phoenix branch (flame)', file: 'src/game/towers.ts', kind: 'buff', change: 'phoenix damage', from: '95', to: '110', rationale: 'Phoenix’s single-target hunt lags the pack-clear branches; a damage bump sharpens its boss-killer role.' }
     case 'storm_overload':
       return { target: 'Overload branch (storm)', file: 'src/game/towers.ts', kind: 'buff', change: 'overload damage', from: '210', to: '235', rationale: 'Overload’s one-big-bolt identity falls behind Tempest’s chain; a bigger hit keeps the single-target option relevant.' }
+    case 'bloom_thornspire':
+      return { target: 'Thornspire branch (bloom)', file: 'src/game/towers.ts', kind: 'buff', change: 'thornspire damage', from: '100', to: '118', rationale: 'Thornspire trails the seeking-branch pack; a damage bump sharpens its armored-prey execute role.' }
+    case 'bloom_overgrowth':
+      return { target: 'Overgrowth branch (bloom)', file: 'src/game/towers.ts', kind: 'buff', change: 'overgrowth zoneDps', from: '22', to: '30', rationale: 'Overgrowth’s toxic ground is too weak to matter at the tested difficulty; a higher tick makes the zone a real threat.' }
+    case 'radiant_dawnbreaker':
+      return { target: 'Dawnbreaker branch (radiant)', file: 'src/game/towers.ts', kind: 'buff', change: 'dawnbreaker damage', from: '70', to: '85', rationale: 'Dawnbreaker’s nova undershoots the other wide-splash branches; a damage bump keeps the stunning pack-clear worth the slot.' }
+    case 'radiant_judgment':
+      return { target: 'Judgment branch (radiant)', file: 'src/game/towers.ts', kind: 'buff', change: 'judgment damage', from: '230', to: '255', rationale: 'Judgment’s single-smite identity lags the pack-clear branches; a bigger hit sharpens its executioner role.' }
+    case 'shade_wraithfang':
+      return { target: 'Wraithfang branch (shade)', file: 'src/game/towers.ts', kind: 'buff', change: 'wraithfang damage', from: '180', to: '205', rationale: 'Wraithfang’s single-target curse trails the pack; a damage bump keeps the execute build competitive.' }
+    case 'shade_gloomspread':
+      return { target: 'Gloomspread branch (shade)', file: 'src/game/towers.ts', kind: 'buff', change: 'gloomspread splash', from: '1.4', to: '1.7', rationale: 'Gloomspread underperforms Wraithfang on every board; a wider curse burst gives its crowd-shred a clearer niche.' }
     default:
       return null
   }

@@ -12,6 +12,7 @@
 import {
   Sim, TILE, MAP_X, MAP_Y, MAP_W, MAP_H, TARGET_MODES,
   DRAFT_POOL, ROGUE_DRAFT_POOL, MUTATOR_IDS, MUTATORS, rollRogueDraft, RNG, type MutatorId,
+  reactionFor, type AuraElement, type ReactionKey,
 } from '../src/sim/index'
 import { weeklyPlan, activeEvent, weekIndex, weeklyMutator, EVENTS } from '../src/game/events'
 import { NEUTRAL } from '../src/game/workshop'
@@ -357,6 +358,70 @@ else console.log(`  elemental reactions fired: ${reactionEvents}`)
 // and the fusion path must actually forge dual-aura towers under stress
 if (fusionsForged === 0) fail('no fusion towers were forged across the max-mode stress runs')
 else console.log(`  fusion towers forged: ${fusionsForged}`)
+
+// ---------------------------------------------------------------------------
+//  REACTION MATRIX — CHROMANCER #51: every one of the 9 elemental reactions
+//  must be triggerable from TOWER-vs-TOWER element pairings alone (no heroes/
+//  Wyrms involved). Pairs are DERIVED from reactionFor() itself (never hand-
+//  duplicated from the private PAIR table in reactions.ts), so this stays
+//  correct even if the pairing table changes shape.
+// ---------------------------------------------------------------------------
+console.log('\nreaction matrix — every one of the 9 elemental reactions must be tower-triggerable…')
+const AURA_ELEMENTS: AuraElement[] = ['Fire', 'Water', 'Nature', 'Light', 'Dark', 'Storm', 'Arcane']
+// The tower that paints each aura (mirrors sim.ts's private TOWER_AURA map).
+const TOWER_FOR_AURA: Record<AuraElement, TowerKind> = {
+  Fire: 'flame', Water: 'frost', Storm: 'storm', Nature: 'bloom', Light: 'radiant', Dark: 'shade', Arcane: 'arcane',
+}
+function reactionPairs(): Array<{ key: ReactionKey; a: AuraElement; b: AuraElement }> {
+  const out: Array<{ key: ReactionKey; a: AuraElement; b: AuraElement }> = []
+  const seen = new Set<ReactionKey>()
+  for (let i = 0; i < AURA_ELEMENTS.length; i++) {
+    for (let j = i + 1; j < AURA_ELEMENTS.length; j++) {
+      const a = AURA_ELEMENTS[i], b = AURA_ELEMENTS[j]
+      const def = reactionFor(a, b)
+      if (def && !seen.has(def.key)) { seen.add(def.key); out.push({ key: def.key, a, b }) }
+    }
+  }
+  return out
+}
+// Alternate the two towers across the WHOLE stress arena (the same placement
+// shape that already reliably detonates reactions elsewhere in this file) —
+// no hero, no Wyrm, no relic: proves the pairing is reachable from towers alone.
+function provesReaction(seed: number, key: ReactionKey, a: AuraElement, b: AuraElement): boolean {
+  const sim = new Sim({
+    level: STRESS_LEVEL, mods: { ...NEUTRAL }, seed, endless: true,
+    startGold: 5_000_000, startLives: 5_000_000,
+  })
+  const kindA = TOWER_FOR_AURA[a]
+  const kindB = TOWER_FOR_AURA[b]
+  let i = 0
+  for (const c of sim.buildCells()) {
+    const t = sim.placeTower(i % 2 === 0 ? kindA : kindB, c.col, c.row)
+    if (t) { sim.upgradeTower(t.id); sim.upgradeTower(t.id) }
+    i++
+  }
+  let saw = false
+  let tick = 0
+  while (!saw && tick < 60 * 60 * 2) {
+    if (sim.state === 'draft') { sim.chooseDraft(0); continue }
+    if (sim.state === 'prep') sim.startWave()
+    if (sim.state === 'won' || sim.state === 'lost') break
+    sim.step(); tick++
+    for (const ev of sim.drainEvents()) if (ev.t === 'reaction' && ev.key === key) saw = true
+  }
+  return saw
+}
+const REACTION_PAIRS = reactionPairs()
+if (REACTION_PAIRS.length !== 9) fail(`expected 9 distinct reactions derivable from reactionFor(), got ${REACTION_PAIRS.length}`)
+const failuresBeforeMatrix = failures
+let seedBump = 0
+for (const { key, a, b } of REACTION_PAIRS) {
+  const ok = provesReaction(0xBEEF00 ^ (seedBump++ * 7919), key, a, b)
+  if (!ok) fail(`reaction ${key} (${a} + ${b}) never fired from ${TOWER_FOR_AURA[a]}+${TOWER_FOR_AURA[b]} tower placement alone`)
+}
+if (failures === failuresBeforeMatrix) {
+  console.log(`  all 9 reactions proven tower-triggerable: ${REACTION_PAIRS.map((p) => `${p.key} (${TOWER_FOR_AURA[p.a]}+${TOWER_FOR_AURA[p.b]})`).join(', ')}`)
+}
 
 // ---------------------------------------------------------------------------
 //  CHROMATIC WYRMS — the bonded-companion breath must fire under stress AND it

@@ -212,8 +212,10 @@ const _reactB = new THREE.Color()
 const ORB_EMISSIVE_BASE = 1.85
 const ORB_EMISSIVE_SWELL = 0.4
 const WHITE_COL = new THREE.Color(0xffffff)
-// per-kind phase offset so the five element cores breathe out of sync
-const KIND_PHASE: Record<TowerKind, number> = { cannon: 0, frost: 1.3, flame: 2.6, storm: 3.9, arcane: 5.2 }
+// per-kind phase offset so the element cores breathe out of sync
+const KIND_PHASE: Record<TowerKind, number> = {
+  cannon: 0, frost: 1.3, flame: 2.6, storm: 3.9, arcane: 5.2, bloom: 0.7, radiant: 2.0, shade: 4.5,
+}
 
 // -------------------------------------------------------------------------
 // PER-ARCHETYPE LOCOMOTION — the fix for the "escalator" (sprites that slide
@@ -710,6 +712,9 @@ export class BattleView3D {
       flame: { body: 0x5a4650, bodyRough: 0.58, bodyMetal: 0.15, trim: 0xd6924e, trimRough: 0.36, trimMetal: 0.82, trimGlow: 0.16, dark: 0x271c20, bodyGlow: 0.13 },
       storm: { body: 0x4f495c, bodyRough: 0.52, bodyMetal: 0.4, trim: 0xe6bd5c, trimRough: 0.28, trimMetal: 0.92, trimGlow: 0.16, dark: 0x2b2636, bodyGlow: 0.11 },
       arcane: { body: 0xe3daf6, bodyRough: 0.48, bodyMetal: 0.07, trim: 0xecd08a, trimRough: 0.3, trimMetal: 0.85, trimGlow: 0.18, dark: 0x5b4c7f, bodyGlow: 0.14 },
+      bloom: { body: 0x6e8a52, bodyRough: 0.6, bodyMetal: 0.04, trim: 0x9fe066, trimRough: 0.4, trimMetal: 0.06, trimGlow: 0.16, dark: 0x2e3a1e, bodyGlow: 0.12 },
+      radiant: { body: 0xf3e4b0, bodyRough: 0.36, bodyMetal: 0.1, trim: 0xffe27a, trimRough: 0.24, trimMetal: 0.3, trimGlow: 0.28, dark: 0x6a5220, bodyGlow: 0.16 },
+      shade: { body: 0x4a3a5e, bodyRough: 0.5, bodyMetal: 0.2, trim: 0xc9a6ff, trimRough: 0.3, trimMetal: 0.25, trimGlow: 0.2, dark: 0x1a0f2a, bodyGlow: 0.13 },
     }
     for (const kind of Object.keys(TOWERS) as TowerKind[]) {
       // equipped store skin = palette swap; falls back to the stock element color
@@ -1891,6 +1896,9 @@ export class BattleView3D {
       case 'frost': g = new THREE.OctahedronGeometry(0.17, 0); break
       case 'storm': g = new THREE.OctahedronGeometry(0.13, 0); break
       case 'arcane': g = new THREE.IcosahedronGeometry(0.16, 0); break
+      case 'bloom': g = new THREE.ConeGeometry(0.11, 0.3, 6); break
+      case 'radiant': g = new THREE.TetrahedronGeometry(0.17, 0); break
+      case 'shade': g = new THREE.OctahedronGeometry(0.15, 1); break
       default: g = new THREE.SphereGeometry(0.14, 10, 8)
     }
     this.projGeoCache.set(kind, g)
@@ -1900,6 +1908,7 @@ export class BattleView3D {
 
   private static readonly TRAIL_COLOR: Record<string, number> = {
     flame: 0xffa04c, frost: 0xbfeaff, storm: 0xffe97a, arcane: 0xd6a6ff, cannon: 0x9aa0b8,
+    bloom: 0x9fe066, radiant: 0xffe27a, shade: 0xc9a6ff,
   }
 
   private acquireProj(kind: string, color: number): ProjSlot {
@@ -2770,7 +2779,7 @@ export class BattleView3D {
 
   fxMuzzle(simX: number, simY: number, tsimX: number, tsimY: number, color: number, kind: TowerKind): void {
     this.emitParticles(wx(simX), 0.95, wz(simY), color, 4, 1.6)
-    if (kind === 'arcane' || kind === 'flame') this.fxBeam(simX, simY, tsimX, tsimY, color, 0.16)
+    if (kind === 'arcane' || kind === 'flame' || kind === 'bloom' || kind === 'radiant') this.fxBeam(simX, simY, tsimX, tsimY, color, 0.16)
   }
 
   fxBeam(ax: number, ay: number, bx: number, by: number, color: number, life: number): void {
@@ -3354,7 +3363,7 @@ export class BattleView3D {
           if (s.emitAcc >= period) {
             s.emitAcc %= period
             const e = s.emitter
-            const col = e.type === 'mist' ? 0xcfeeff : e.type === 'embers' ? 0xff8a3c : e.type === 'sparks' ? 0xffe97a : 0xd6a6ff
+            const col = e.type === 'mist' ? 0xcfeeff : e.type === 'embers' ? 0xff8a3c : e.type === 'sparks' ? 0xffe97a : e.type === 'spores' ? 0xa4ff6a : 0xd6a6ff
             this.emitParticles(
               s.group.position.x + (Math.random() - 0.5) * 0.34, GROUND + e.y,
               s.group.position.z + (Math.random() - 0.5) * 0.34,

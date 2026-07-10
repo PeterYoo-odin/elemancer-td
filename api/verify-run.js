@@ -890,7 +890,10 @@ function finaleLevel(id, rg, realmOrder) {
 }
 var UNLOCK_AT = {
   emberwaste: { j: 5, tower: "storm" },
-  frostreach: { j: 4, tower: "arcane" }
+  frostreach: { j: 4, tower: "arcane" },
+  stormpeaks: { j: 5, tower: "bloom" },
+  verdant: { j: 5, tower: "radiant" },
+  lumen: { j: 5, tower: "shade" }
 };
 function buildCampaign(perWorld = LEVELS_PER_WORLD) {
   const count = Math.max(2, Math.min(GENERATOR_MAX_PER_WORLD, Math.floor(perWorld)));
@@ -2036,6 +2039,87 @@ var TOWERS = {
       // worth the slot without touching its support role.
       { key: "prism", name: "Prism", blurb: "Piercing beam \xB7 buffs AND blasts", damage: 66, range: 3, cooldown: 0.6, upgradeCost: 300, buffDamage: 0.4, buffRange: 0.12, dealsDamage: true, damageType: "Pierce", armorPen: 6 }
     ]
+  },
+  bloom: {
+    kind: "bloom",
+    name: "Bloom",
+    blurb: "Toxic splash \xB7 lingers and spreads",
+    cost: 85,
+    color: 9305930,
+    accent: 3108378,
+    projectile: false,
+    synergyDamage: true,
+    antiAir: false,
+    support: false,
+    damageType: "Magic",
+    element: "Nature",
+    status: "poison",
+    defaultTargeting: "Close",
+    levels: [
+      { damage: 7, range: 2, cooldown: 1.05, upgradeCost: 0, burnDps: 9, burnDuration: 3, splash: 1.15 },
+      { damage: 12, range: 2.3, cooldown: 0.95, upgradeCost: 78, burnDps: 15, burnDuration: 3.3, splash: 1.3 },
+      { damage: 19, range: 2.6, cooldown: 0.85, upgradeCost: 140, burnDps: 23, burnDuration: 3.6, splash: 1.5 }
+    ],
+    branches: [
+      // Thornspire reforges the bloom into a seeking, armour-piercing spike;
+      // Overgrowth leaves a wide toxic root zone — area denial, Nature-flavoured.
+      { key: "thornspire", name: "Thornspire", blurb: "Seeking piercing thorn \xB7 hunts armored prey", damage: 100, range: 4.1, cooldown: 0.85, upgradeCost: 300, burnDps: 34, burnDuration: 3.2, splash: 0, seeking: true, damageType: "Pierce", armorPen: 10 },
+      { key: "overgrowth", name: "Overgrowth", blurb: "Wide toxic root zone \xB7 area denial", damage: 30, range: 2.9, cooldown: 1.05, upgradeCost: 300, burnDps: 32, burnDuration: 3.4, splash: 1.7, zoneDps: 22, zoneDuration: 4, zoneRadius: 1.6 }
+    ]
+  },
+  radiant: {
+    kind: "radiant",
+    name: "Radiant",
+    blurb: "Holy burst \xB7 briefly stuns \xB7 hits flyers",
+    cost: 115,
+    color: 16769354,
+    accent: 9071120,
+    projectile: false,
+    synergyDamage: true,
+    antiAir: true,
+    support: false,
+    damageType: "Magic",
+    element: "Light",
+    status: "stun",
+    defaultTargeting: "First",
+    levels: [
+      { damage: 22, range: 2.8, cooldown: 1, upgradeCost: 0, splash: 0.6, stunDuration: 0.18 },
+      { damage: 34, range: 3.1, cooldown: 0.9, upgradeCost: 100, splash: 0.75, stunDuration: 0.22 },
+      { damage: 50, range: 3.4, cooldown: 0.8, upgradeCost: 165, splash: 0.9, stunDuration: 0.26 }
+    ],
+    branches: [
+      // Dawnbreaker widens the burst into a stunning nova; Judgment narrows it into
+      // one devastating smite that punches through armour.
+      { key: "dawnbreaker", name: "Dawnbreaker", blurb: "Wide radiant nova \xB7 stuns the pack", damage: 70, range: 3.6, cooldown: 0.85, upgradeCost: 340, splash: 1.6, stunDuration: 0.4 },
+      { key: "judgment", name: "Judgment", blurb: "One devastating smite \xB7 executes the strongest foe", damage: 230, range: 4.4, cooldown: 1.05, upgradeCost: 340, splash: 0, stunDuration: 0.3, armorPen: 10 }
+    ]
+  },
+  shade: {
+    kind: "shade",
+    name: "Shade",
+    blurb: "Curse bolt \xB7 shreds armor over time",
+    cost: 100,
+    color: 12610559,
+    accent: 3807836,
+    projectile: true,
+    synergyDamage: true,
+    antiAir: false,
+    support: false,
+    damageType: "Magic",
+    element: "Dark",
+    status: "armorTear",
+    defaultTargeting: "Strong",
+    levels: [
+      { damage: 20, range: 2.6, cooldown: 0.8, upgradeCost: 0, armorTear: 5, armorTearDuration: 3 },
+      { damage: 34, range: 2.9, cooldown: 0.72, upgradeCost: 95, armorTear: 7, armorTearDuration: 3.3 },
+      { damage: 54, range: 3.2, cooldown: 0.65, upgradeCost: 160, armorTear: 10, armorTearDuration: 3.6 }
+    ],
+    branches: [
+      // Wraithfang hunts one target with a seeking, armour-shredding execute bolt;
+      // Gloomspread bursts the curse outward to weaken the whole pack at once.
+      { key: "wraithfang", name: "Wraithfang", blurb: "Seeking curse bolt \xB7 shreds armor to the bone", damage: 180, range: 4.6, cooldown: 1.05, upgradeCost: 320, armorTear: 16, armorTearDuration: 4, seeking: true, damageType: "Pierce", armorPen: 6 },
+      { key: "gloomspread", name: "Gloomspread", blurb: "Curse bursts outward \xB7 shreds the whole pack", damage: 80, range: 3.4, cooldown: 0.85, upgradeCost: 320, splash: 1.4, armorTear: 10, armorTearDuration: 3.6 }
+    ]
   }
 };
 
@@ -2992,7 +3076,10 @@ var TOWER_AURA = {
   frost: "Water",
   storm: "Storm",
   arcane: "Arcane",
-  cannon: void 0
+  cannon: void 0,
+  bloom: "Nature",
+  radiant: "Light",
+  shade: "Dark"
 };
 var Sim = class {
   constructor(config) {
@@ -4283,12 +4370,13 @@ var Sim = class {
       t.cd = this.effCooldown(t);
       t.aimAngle = angleBetween(t.x, t.y, target.x, target.y);
       t.fireFlash = 0.12;
-      if (t.kind === "cannon") this.fireProjectile(t, target);
+      if (t.kind === "cannon" || t.kind === "shade") this.fireProjectile(t, target);
       else if (t.kind === "frost") this.frostZap(t, range);
-      else if (t.kind === "flame") {
+      else if (t.kind === "flame" || t.kind === "bloom") {
         if (this.stats(t).seeking) this.fireProjectile(t, target);
         else this.flameBurst(t, target);
       } else if (t.kind === "storm") this.stormBolt(t, target);
+      else if (t.kind === "radiant") this.radiantSmite(t, target);
       else this.arcaneZap(t, target);
       if (t.fusedElem !== "") t.auraFlip = !t.auraFlip;
     }
@@ -4372,7 +4460,9 @@ var Sim = class {
         sourceKind: "cannon",
         color: 16777215,
         burnDps: 0,
-        burnDur: 0
+        burnDur: 0,
+        tearAmount: 0,
+        tearDur: 0
       };
       this.projectiles.push(p);
     }
@@ -4390,6 +4480,8 @@ var Sim = class {
     p.color = t.def.color;
     p.burnDps = (s.burnDps ?? 0) * this.upgrades.burnDmgMult;
     p.burnDur = s.burnDuration ?? 0;
+    p.tearAmount = s.armorTear ?? 0;
+    p.tearDur = s.armorTearDuration ?? 0;
     this.emit({ t: "towerFire", x: t.x, y: t.y, tx: target.x, ty: target.y, color: t.def.color, kind: t.kind });
   }
   frostZap(t, range) {
@@ -4401,10 +4493,12 @@ var Sim = class {
       if (dist2(t.x, t.y, e3.x, e3.y) <= r2) this.dealDamage(e3, atk, t);
     }
   }
+  // Shared by Flame (burn) and Bloom (poison) — both are splash-DoT bursts that
+  // differ only in flavour/colour, so one function drives both kinds.
   flameBurst(t, target) {
     const s = this.stats(t);
     const splash = (s.splash ?? 1) * TILE * (1 + this.upgrades.splashBonus);
-    this.emit({ t: "aoe", x: target.x, y: target.y, radius: splash, color: 16747068, alpha: 0.6 });
+    this.emit({ t: "aoe", x: target.x, y: target.y, radius: splash, color: t.def.color, alpha: 0.6 });
     const r2 = splash * splash;
     const atk = this.towerAttack(t);
     const burnDps = (s.burnDps ?? 8) * this.upgrades.burnDmgMult;
@@ -4420,7 +4514,31 @@ var Sim = class {
     }
     const zoneDps = s.zoneDps ?? 0;
     if (zoneDps > 0) {
-      this.spawnZone(target.x, target.y, (s.zoneRadius ?? 1.2) * TILE, zoneDps * this.upgrades.burnDmgMult, s.zoneDuration ?? 3, 16742960);
+      this.spawnZone(target.x, target.y, (s.zoneRadius ?? 1.2) * TILE, zoneDps * this.upgrades.burnDmgMult, s.zoneDuration ?? 3, t.def.color);
+    }
+  }
+  // Radiant: an instant holy burst (small splash) that briefly stuns everything it hits.
+  radiantSmite(t, target) {
+    const s = this.stats(t);
+    const splash = (s.splash ?? 0) * TILE * (1 + this.upgrades.splashBonus);
+    const atk = this.towerAttack(t);
+    const stunDur = s.stunDuration ?? 0;
+    this.emit({ t: "towerFire", x: t.x, y: t.y, tx: target.x, ty: target.y, color: t.def.color, kind: t.kind });
+    const smite = (e3) => {
+      this.dealDamage(e3, atk, t);
+      if (stunDur > 0 && e3.active) e3.stunUntil = Math.max(e3.stunUntil, this.clock + stunDur);
+    };
+    if (splash > 0) {
+      this.emit({ t: "aoe", x: target.x, y: target.y, radius: splash, color: t.def.color, alpha: 0.55 });
+      const r2 = splash * splash;
+      for (const e3 of this.enemies) {
+        if (!this.canTarget(t, e3)) continue;
+        if (dist2(target.x, target.y, e3.x, e3.y) > r2) continue;
+        smite(e3);
+      }
+    } else {
+      this.emit({ t: "hit", x: target.x, y: target.y, color: t.def.color });
+      smite(target);
     }
   }
   // ---- burning ground (Scorch) ---------------------------------------------
@@ -4565,6 +4683,10 @@ var Sim = class {
     if (p.burnDps > 0 && e3.active) {
       e3.burnUntil = this.clock + Math.max(0.1, p.burnDur);
       e3.burnDps = Math.max(e3.burnDps, p.burnDps);
+    }
+    if (p.tearAmount > 0 && e3.active) {
+      e3.tearUntil = Math.max(e3.tearUntil, this.clock + Math.max(0.1, p.tearDur));
+      e3.tearAmount = Math.max(e3.tearAmount, p.tearAmount);
     }
   }
   // ---- damage pipeline (grid × wheel × combo × shield) --------------------

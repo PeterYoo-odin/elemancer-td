@@ -79,6 +79,7 @@ const FUSION_RNG = 1.15 // and see a little further
 // Aura an attacking tower paints (Arcane tags its OWN element so it combos with all).
 const TOWER_AURA: Record<TowerKind, AuraElement | undefined> = {
   flame: 'Fire', frost: 'Water', storm: 'Storm', arcane: 'Arcane', cannon: undefined,
+  bloom: 'Nature', radiant: 'Light', shade: 'Dark',
 }
 
 export type SimState = 'prep' | 'active' | 'draft' | 'won' | 'lost'
@@ -258,6 +259,9 @@ export interface SimProjectile {
   // Phoenix branch payload: burn applied on impact (0 = none)
   burnDps: number
   burnDur: number
+  // Shade payload: armor shred applied on impact (0 = none)
+  tearAmount: number
+  tearDur: number
 }
 
 // Semantic events — the VIEW decides the juice (shake/flash/particles) from these.
@@ -1683,14 +1687,15 @@ export class Sim {
       t.aimAngle = angleBetween(t.x, t.y, target.x, target.y)
       t.fireFlash = 0.12
 
-      if (t.kind === 'cannon') this.fireProjectile(t, target)
+      if (t.kind === 'cannon' || t.kind === 'shade') this.fireProjectile(t, target)
       else if (t.kind === 'frost') this.frostZap(t, range)
-      else if (t.kind === 'flame') {
-        // Phoenix branch: a seeking firebolt (homing projectile) instead of the burst.
+      else if (t.kind === 'flame' || t.kind === 'bloom') {
+        // Phoenix/Thornspire branch: a seeking bolt (homing projectile) instead of the burst.
         if (this.stats(t).seeking) this.fireProjectile(t, target)
         else this.flameBurst(t, target)
       }
       else if (t.kind === 'storm') this.stormBolt(t, target)
+      else if (t.kind === 'radiant') this.radiantSmite(t, target)
       else this.arcaneZap(t, target)
 
       // fusion: NEXT volley paints the other element (whole volley shares one aura)
@@ -1751,7 +1756,7 @@ export class Sim {
       p = {
         id: this.nextId++, active: false, x: 0, y: 0, tx: 0, ty: 0, targetId: -1, speed: PROJECTILE_SPEED,
         splash: 0, atk: { damage: 0, dmgType: 'Physical', armorPen: 0 }, synergy: false, sourceKind: 'cannon', color: 0xffffff,
-        burnDps: 0, burnDur: 0,
+        burnDps: 0, burnDur: 0, tearAmount: 0, tearDur: 0,
       }
       this.projectiles.push(p)
     }
@@ -1770,6 +1775,9 @@ export class Sim {
     // Phoenix payload: the seeking bolt sets its target ablaze on impact.
     p.burnDps = (s.burnDps ?? 0) * this.upgrades.burnDmgMult
     p.burnDur = s.burnDuration ?? 0
+    // Shade payload: the curse bolt shreds armor on impact.
+    p.tearAmount = s.armorTear ?? 0
+    p.tearDur = s.armorTearDuration ?? 0
     this.emit({ t: 'towerFire', x: t.x, y: t.y, tx: target.x, ty: target.y, color: t.def.color, kind: t.kind })
   }
 
@@ -1783,10 +1791,12 @@ export class Sim {
     }
   }
 
+  // Shared by Flame (burn) and Bloom (poison) — both are splash-DoT bursts that
+  // differ only in flavour/colour, so one function drives both kinds.
   private flameBurst(t: SimTower, target: SimEnemy): void {
     const s = this.stats(t)
     const splash = (s.splash ?? 1) * TILE * (1 + this.upgrades.splashBonus)
-    this.emit({ t: 'aoe', x: target.x, y: target.y, radius: splash, color: 0xff8a3c, alpha: 0.6 })
+    this.emit({ t: 'aoe', x: target.x, y: target.y, radius: splash, color: t.def.color, alpha: 0.6 })
     const r2 = splash * splash
     const atk = this.towerAttack(t)
     const burnDps = (s.burnDps ?? 8) * this.upgrades.burnDmgMult
@@ -1800,10 +1810,35 @@ export class Sim {
         e.burnDps = Math.max(e.burnDps, burnDps)
       }
     }
-    // Scorch branch: the impact leaves burning ground — area denial you can SEE.
+    // Scorch/Overgrowth branch: the impact leaves burning/toxic ground — area denial you can SEE.
     const zoneDps = s.zoneDps ?? 0
     if (zoneDps > 0) {
-      this.spawnZone(target.x, target.y, (s.zoneRadius ?? 1.2) * TILE, zoneDps * this.upgrades.burnDmgMult, s.zoneDuration ?? 3, 0xff7a30)
+      this.spawnZone(target.x, target.y, (s.zoneRadius ?? 1.2) * TILE, zoneDps * this.upgrades.burnDmgMult, s.zoneDuration ?? 3, t.def.color)
+    }
+  }
+
+  // Radiant: an instant holy burst (small splash) that briefly stuns everything it hits.
+  private radiantSmite(t: SimTower, target: SimEnemy): void {
+    const s = this.stats(t)
+    const splash = (s.splash ?? 0) * TILE * (1 + this.upgrades.splashBonus)
+    const atk = this.towerAttack(t)
+    const stunDur = s.stunDuration ?? 0
+    this.emit({ t: 'towerFire', x: t.x, y: t.y, tx: target.x, ty: target.y, color: t.def.color, kind: t.kind })
+    const smite = (e: SimEnemy): void => {
+      this.dealDamage(e, atk, t)
+      if (stunDur > 0 && e.active) e.stunUntil = Math.max(e.stunUntil, this.clock + stunDur)
+    }
+    if (splash > 0) {
+      this.emit({ t: 'aoe', x: target.x, y: target.y, radius: splash, color: t.def.color, alpha: 0.55 })
+      const r2 = splash * splash
+      for (const e of this.enemies) {
+        if (!this.canTarget(t, e)) continue
+        if (dist2(target.x, target.y, e.x, e.y) > r2) continue
+        smite(e)
+      }
+    } else {
+      this.emit({ t: 'hit', x: target.x, y: target.y, color: t.def.color })
+      smite(target)
     }
   }
 
@@ -1948,6 +1983,10 @@ export class Sim {
     if (p.burnDps > 0 && e.active) {
       e.burnUntil = this.clock + Math.max(0.1, p.burnDur)
       e.burnDps = Math.max(e.burnDps, p.burnDps)
+    }
+    if (p.tearAmount > 0 && e.active) {
+      e.tearUntil = Math.max(e.tearUntil, this.clock + Math.max(0.1, p.tearDur))
+      e.tearAmount = Math.max(e.tearAmount, p.tearAmount)
     }
   }
 

@@ -151,6 +151,16 @@ export const battleSfx = {
       case 'arcane':
         blip(ac, out, 'triangle', vary(500), 690, 0.1, 0.05)
         break
+      case 'bloom':
+        blip(ac, out, 'sine', vary(210), 130, 0.13, 0.05)
+        hiss(ac, out, 'lowpass', 900, 260, 0.11, 0.035)
+        break
+      case 'radiant':
+        blip(ac, out, 'triangle', vary(920), 1400, 0.09, 0.055)
+        break
+      case 'shade':
+        blip(ac, out, 'sawtooth', vary(220), 90, 0.14, 0.05)
+        break
       case 'hero':
         blip(ac, out, 'sine', vary(660), 880, 0.08, 0.04)
         break
