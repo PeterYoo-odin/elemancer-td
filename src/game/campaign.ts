@@ -37,13 +37,24 @@ export const GENERATOR_MAX_PER_WORLD = 150 // supported ceiling — bump LEVELS_
 const LANDMARK_EVERY = 10                  // a spectacle/mini-boss level roughly every Nth stop
 
 // Field palettes (per-realm ground identity). Campaign owns realm data.
+//
+// CHROMANCER #54 — retuned against the six concept paintings (palettes.json ground/
+// shadow/accent + measured mid-luma). BattleView3D's sculpted terrain now reads these
+// fields as ROCK, not grass: grassA/grassB = the two blended stone hues of the
+// highlands, build = the worked terrace stone the plaza/towers sit on, path = the
+// worn canyon-floor tread, pathEdge = the emissive accent (arena floor glow + vein).
+//
+// READABILITY RULE: every realm's grassA (ground) mid-luma is normalized into ~80-98
+// — hue carries identity, value does not. Radiant Sanctum is warm honey-stone (not
+// white marble); Umbral Void is deep slate-violet (not black) — both would otherwise
+// wreck unit contrast. Saturated colour is reserved for pathEdge/accent + gameplay.
 export const PAL: Record<string, FieldPalette> = {
-  meadow: { grassA: 0x53c66e, grassB: 0x49b862, build: 0x74d98a, path: 0xffcf5c, pathEdge: 0xe0a838 },
-  frost: { grassA: 0x6fb6d6, grassB: 0x5ea6c8, build: 0x9fd8ee, path: 0xe8f4ff, pathEdge: 0x9ac0e0 },
-  storm: { grassA: 0x3f8a96, grassB: 0x367c88, build: 0x5aa8b4, path: 0xffd54a, pathEdge: 0xc79a20 },
-  lumen: { grassA: 0xcdb468, grassB: 0xc1a75c, build: 0xe6d493, path: 0xfff3c8, pathEdge: 0xd9ae44 },
-  ember: { grassA: 0xc65c4a, grassB: 0xb84c3c, build: 0xe08070, path: 0xffb24c, pathEdge: 0xc76020 },
-  void: { grassA: 0x3a2c66, grassB: 0x322458, build: 0x5a4c86, path: 0xff6ad5, pathEdge: 0xc72a95 },
+  meadow: { grassA: 0x74622f, grassB: 0x555029, build: 0x93855d, path: 0x9e916d, pathEdge: 0xe4a956 }, // verdantwilds · ground luma 97.8
+  frost:  { grassA: 0x365781, grassB: 0x304763, build: 0x627c9d, path: 0x7289a7, pathEdge: 0x20caba }, // frostreach   · ground luma 81.7
+  storm:  { grassA: 0x495972, grassB: 0x3e4960, build: 0x717e91, path: 0x808b9c, pathEdge: 0x37e6d4 }, // stormpeaks   · ground luma 87.0
+  lumen:  { grassA: 0x7c5c34, grassB: 0x8f6b49, build: 0x998061, path: 0xa38d71, pathEdge: 0xfaec78 }, // radiantsanctum (honey-stone, NOT white) · ground luma 97.2
+  ember:  { grassA: 0x6d4c40, grassB: 0x533c36, build: 0x8d736a, path: 0x998279, pathEdge: 0xf27823 }, // emberwaste   · ground luma 84.6
+  void:   { grassA: 0x5c4f82, grassB: 0x3a335d, build: 0x80769e, path: 0x8d84a8, pathEdge: 0x5ae6dc }, // umbralvoid (slate-violet, NOT black) · ground luma 88.5
 }
 
 // --- wave construction helpers ---------------------------------------------

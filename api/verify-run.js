@@ -460,12 +460,18 @@ var LEVELS_PER_WORLD = 32;
 var GENERATOR_MAX_PER_WORLD = 150;
 var LANDMARK_EVERY = 10;
 var PAL = {
-  meadow: { grassA: 5490286, grassB: 4831330, build: 7657866, path: 16764764, pathEdge: 14723128 },
-  frost: { grassA: 7321302, grassB: 6203080, build: 10475758, path: 15267071, pathEdge: 10141920 },
-  storm: { grassA: 4164246, grassB: 3570824, build: 5941428, path: 16766282, pathEdge: 13081120 },
-  lumen: { grassA: 13481064, grassB: 12691292, build: 15127699, path: 16774088, pathEdge: 14265924 },
-  ember: { grassA: 12999754, grassB: 12078140, build: 14712944, path: 16757324, pathEdge: 13066272 },
-  void: { grassA: 3812454, grassB: 3286104, build: 5917830, path: 16739029, pathEdge: 13052565 }
+  meadow: { grassA: 7627311, grassB: 5591081, build: 9667933, path: 10391917, pathEdge: 14985558 },
+  // verdantwilds · ground luma 97.8
+  frost: { grassA: 3561345, grassB: 3164003, build: 6454429, path: 7506343, pathEdge: 2149050 },
+  // frostreach   · ground luma 81.7
+  storm: { grassA: 4807026, grassB: 4082016, build: 7437969, path: 8424348, pathEdge: 3663572 },
+  // stormpeaks   · ground luma 87.0
+  lumen: { grassA: 8150068, grassB: 9399113, build: 10059873, path: 10718577, pathEdge: 16444536 },
+  // radiantsanctum (honey-stone, NOT white) · ground luma 97.2
+  ember: { grassA: 7162944, grassB: 5454902, build: 9270122, path: 10060409, pathEdge: 15890467 },
+  // emberwaste   · ground luma 84.6
+  void: { grassA: 6049666, grassB: 3814237, build: 8418974, path: 9274536, pathEdge: 5957340 }
+  // umbralvoid (slate-violet, NOT black) · ground luma 88.5
 };
 function w(entries, clearBonus) {
   return { entries, clearBonus };

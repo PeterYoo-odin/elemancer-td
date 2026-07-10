@@ -40,6 +40,17 @@ const CY = MAP_Y + MAP_H / 2 // 640
 // a single pick plane at this height is WYSIWYG everywhere (no per-cell-height hack).
 const GROUND = 0.2
 
+// Terrain sculpt tuning: subdivisions per tile edge (smooth relief on a tiny 9×11
+// board is cheap) and how many extra tile-rings of cliff skirt fall away beyond the
+// board into the fog/haze.
+const TSUB = 3
+const TSKIRT = 3
+// Empirical: the scene's stacked lighting reads a flat-vertex-coloured surface
+// noticeably brighter than its input albedo — this compensates so the sculpted
+// terrain's ON-SCREEN mid-luma matches the per-realm design target, not a washed
+// grey/white regardless of hue.
+const TERRAIN_LIGHT_COMP = 0.55
+
 // sim px → world units
 function wx(simX: number): number { return (simX - CX) / TILE_PX }
 function wz(simY: number): number { return (simY - CY) / TILE_PX }
@@ -339,14 +350,23 @@ export class BattleView3D {
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GROUND)
   private hitPoint = new THREE.Vector3()
 
-  private boardMeshes: THREE.InstancedMesh[] = [] // grass + road instanced tiles
-  // Grey→colour reveal: as the realm is cleared (sim.colorProgress 0..1) the muted
-  // field regains its palette saturation — the board itself proves the thesis.
-  private groundInst?: THREE.InstancedMesh // === boardMeshes[0] (grass/build tiles)
-  private groundFull: THREE.Color[] = [] // per-instance target (full-saturation) colour
-  private groundGrey: THREE.Color[] = [] // per-instance desaturated floor colour
-  private groundHold: boolean[] = [] // terrain-hazard tiles: never mute (gameplay read)
+  private boardMeshes: THREE.Object3D[] = [] // the merged terrain mesh (kept as an array for teardown symmetry)
+  // ONE sculpted, vertex-coloured terrain mesh replaces the old Kenney tile-kit grid:
+  // a subdivided heightfield (flat plaza on build/path tiles — never moves a tower or
+  // the pick plane — rising into rocky highlands on blocked/scenery tiles, plus a
+  // perimeter skirt that falls away into haze). See computeTileRise()/buildTerrainMesh().
+  private terrainGeo?: THREE.BufferGeometry
+  private terrainMat?: THREE.MeshStandardMaterial
+  private tileRise: Float32Array = new Float32Array(0) // per-tile extra height above GROUND (blocked cells only), COLS*ROWS
+  // Grey→colour reveal: as the realm is cleared (sim.colorProgress 0..1) the ashen
+  // field regains its palette saturation — the board itself proves the thesis. Stored
+  // per vertex-write (flat-shaded quads: 6 writes/quad) so the re-tint is one buffer pass.
+  private terrainFull: Float32Array = new Float32Array(0) // full-saturation target colour (r,g,b per vertex-write)
+  private terrainGrey: Float32Array = new Float32Array(0) // ashen-monochrome colour (r,g,b per vertex-write)
+  private terrainHold: Uint8Array = new Uint8Array(0) // hazard quads: never mute (gameplay read)
   private groundRevealQ = -1 // last quantised reveal level (throttles the re-tint)
+  private ashenTint = new THREE.Color(0x4a4a5c) // cool desaturated "Limbo" grey — the Greying's target, not mud
+  private hazeTint = new THREE.Color(0x241a3c) // skirt fall-away colour (set to the realm fog tint in buildTerrainMesh)
   private boardLife?: BoardLife // on-board weather + prism-road shimmer
   private detailGroup = new THREE.Group()
   private buildHighlight = new THREE.Group()
@@ -608,9 +628,11 @@ export class BattleView3D {
     const arc = 150 * Math.PI / 180
     const geo = new THREE.CylinderGeometry(R, R, H, 48, 1, true, Math.PI - arc / 2, arc)
     this.disposables.push(geo)
-    // Dim, faintly biome-tinted multiply — keeps the painting recessive so the
-    // gameplay layer stays dominant and bloom doesn't blow it out.
-    const col = new THREE.Color(0x8f8f8f).lerp(new THREE.Color(this.backdrop.tint), 0.18)
+    // Biome-tinted multiply — present enough that the painted world and the sculpted
+    // terrain read as the SAME place (CHROMANCER #54), still dimmed below full bright
+    // so the gameplay layer (towers/enemies/HP bars) stays the most saturated thing
+    // on screen and bloom doesn't blow the painting out.
+    const col = new THREE.Color(0xa8a8a8).lerp(new THREE.Color(this.backdrop.tint), 0.3)
     const mat = new THREE.MeshBasicMaterial({
       color: col,
       side: THREE.DoubleSide, // visible whether the camera sits just inside or outside R
@@ -778,88 +800,277 @@ export class BattleView3D {
   }
 
   // ---------------------------------------------------------------- board
-  // Renders the near-flat Kenney board: one InstancedMesh for grass/build tiles
-  // (per-instance world tint) plus a small InstancedMesh per road-tile TYPE, each
-  // oriented by matching the tile's default open edges to the local path direction.
+  // ONE sculpted terrain mesh — the fix for the "asset-kit tile grid" read. Build
+  // and path tiles stay a perfectly flat plaza at y=GROUND (so towers, enemies, the
+  // pick plane and every other fixed-height placement are UNTOUCHED — the logical
+  // grid + WYSIWYG placement contract is identical to before). Blocked/scenery tiles
+  // rise into rocky highlands starting one tile OUTSIDE that plaza, so the lane and
+  // build footprint read as a carved plateau in a continuous landmass, not a grid of
+  // separate flat squares. See computeTileRise()/buildTerrainMesh() for the sculpt.
   private setupBoard(): void {
-    const groundGeo = models.geometry('tile')
-    if (groundGeo) {
-      const nonPath: Array<[number, number, string]> = []
-      for (let r = 0; r < ROWS; r++)
-        for (let c = 0; c < COLS; c++)
-          if (this.sim.grid[r][c] !== 'path') nonPath.push([c, r, this.sim.grid[r][c]])
-      const inst = new THREE.InstancedMesh(groundGeo, this.atlasBaseMat, nonPath.length)
-      const dummy = new THREE.Object3D()
-      // Tint the (green) atlas grass toward each world's palette, lifted toward white
-      // so the multiply stays bright and readable instead of muddying to brown.
-      const white = new THREE.Color(0xffffff)
-      const grassA = new THREE.Color(this.palette.grassA).lerp(white, 0.24)
-      const grassB = new THREE.Color(this.palette.grassB).lerp(white, 0.24)
-      const buildC = new THREE.Color(this.palette.build).lerp(white, 0.34)
-      this.groundFull = []
-      this.groundGrey = []
-      this.groundHold = []
-      nonPath.forEach(([c, r, kind], i) => {
-        dummy.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2), 0, wz(MAP_Y + r * TILE_PX + TILE_PX / 2))
-        dummy.rotation.set(0, 0, 0)
-        dummy.scale.setScalar(1)
-        dummy.updateMatrix()
-        inst.setMatrixAt(i, dummy.matrix)
-        // Terrain tiles read at a glance: blend the build colour toward the hazard hue
-        // (lava/high-ground/fog/…) so the tower-stat effect is visible on the board.
-        const terr = this.sim.terrainAt(c, r)
-        const base = kind === 'build' ? buildC : (c + r) % 2 === 0 ? grassA : grassB
-        const isTerr = kind === 'build' && terr !== '' && !!TERRAIN_META[terr]
-        const full = isTerr ? base.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55) : base.clone()
-        // desaturated floor: pull toward the tile's own luminance-grey (keeps it a
-        // MUTED field, never a dead one — legibility contract, per the reduce-motion pass)
-        const lum = full.r * 0.3 + full.g * 0.59 + full.b * 0.11
-        const grey = full.clone().lerp(new THREE.Color(lum, lum, lum), 0.72)
-        this.groundFull.push(full)
-        this.groundGrey.push(grey)
-        this.groundHold.push(isTerr) // hazard tiles hold full colour — never muted
-        inst.setColorAt(i, full) // reveal pass tints below (muted at start when motionOk)
-      })
-      inst.instanceMatrix.needsUpdate = true
-      if (inst.instanceColor) inst.instanceColor.needsUpdate = true
-      inst.frustumCulled = false
-      this.groundInst = inst
-      this.boardMeshes.push(inst)
-      this.scene.add(inst)
-      this.disposables.push(groundGeo)
-      // Paint the initial reveal state: muted when animation is on (it climbs back to
-      // full as the realm clears); snap to full colour under reduce-motion (static).
-      this.groundRevealQ = -1
-      this.applyGroundReveal(this.motionOk ? this.sim.colorProgress() : 1)
-    }
-
-    this.setupRoad()
+    this.computeTileRise()
+    this.buildTerrainMesh()
     this.setupEndpoints()
   }
 
-  // Re-tint the grass/build field toward its palette as the realm is cleared.
-  // reveal 0 → muted field (desaturated floor); reveal 1 → full palette colour.
-  // Hazard tiles are pinned to full colour so the terrain read never fades. Cheap:
-  // only touched when the quantised reveal changes (a handful of times per battle).
-  private applyGroundReveal(reveal: number): void {
-    const inst = this.groundInst
-    if (!inst || !inst.instanceColor) return
-    // at reveal 0 the field is clearly WASHED OUT (~40% toward its own grey) yet
-    // still ~60% colour — muted enough to read the thesis, legible enough to play
-    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.55
-    const tmp = new THREE.Color()
-    for (let i = 0; i < this.groundFull.length; i++) {
-      if (this.groundHold[i] || mute <= 0) tmp.copy(this.groundFull[i])
-      else tmp.copy(this.groundFull[i]).lerp(this.groundGrey[i], mute)
-      inst.setColorAt(i, tmp)
+  // BFS "clearance" (tile-steps to the nearest build/path tile) drives how far a
+  // blocked tile has risen into the highlands, plus an additive dais bump near the
+  // Wellspring so the base visibly emerges from a plinth of rock. Pure view data —
+  // never touches sim.grid/terrain, so simcheck and placement are unaffected.
+  private computeTileRise(): void {
+    const n = COLS * ROWS
+    const clear = new Int32Array(n).fill(-1)
+    const queue: number[] = []
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const idx = r * COLS + c
+      if (this.sim.grid[r][c] !== 'blocked') { clear[idx] = 0; queue.push(idx) }
     }
-    inst.instanceColor.needsUpdate = true
+    let qi = 0
+    const NB: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    while (qi < queue.length) {
+      const idx = queue[qi++]
+      const c = idx % COLS, r = (idx / COLS) | 0
+      const d = clear[idx]
+      for (const [dc, dr] of NB) {
+        const nc = c + dc, nr = r + dr
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue
+        const nidx = nr * COLS + nc
+        if (clear[nidx] === -1) { clear[nidx] = d + 1; queue.push(nidx) }
+      }
+    }
+    const base = this.sim.waypointFor('base')
+    const baseCol = (base.x - MAP_X) / TILE_PX - 0.5
+    const baseRow = (base.y - MAP_Y) / TILE_PX - 0.5
+    this.tileRise = new Float32Array(n)
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const idx = r * COLS + c
+      if (this.sim.grid[r][c] !== 'blocked') continue // plaza stays exactly GROUND
+      const cl = clear[idx]
+      const n1 = hash2(c * 3 + 11, r * 5 + 17)
+      const n2 = hash2(c * 7 + 2, r * 2 + 9)
+      let rise: number
+      if (cl <= 1) rise = 0.05 + n1 * 0.09       // shoulder — one tile out from the plaza
+      else if (cl === 2) rise = 0.16 + n1 * 0.14  // rising bank
+      else rise = 0.26 + n1 * 0.20                // highland interior
+      rise += (n2 - 0.5) * 0.05
+      // plinth: the land noticeably rises toward the Wellspring's plinth (base tile
+      // itself stays flat via the blocked-only rule above; this bumps its neighbours)
+      const dx = c - baseCol, dz = r - baseRow
+      const distToBase = Math.sqrt(dx * dx + dz * dz)
+      const plinth = Math.max(0, 1 - distToBase / 1.9)
+      rise += plinth * plinth * 0.24
+      this.tileRise[idx] = Math.max(0, rise)
+    }
+  }
+
+  // Average of the (up to 4) tiles touching interior corner (cx,cz), cx∈[0,COLS],
+  // cz∈[0,ROWS]. Forced flat (GROUND) the instant ANY touching tile is build/path —
+  // this is what guarantees a one-tile flat shoulder around the whole plaza.
+  private cornerHeightInterior(cx: number, cz: number): number {
+    let sum = 0, cnt = 0, flat = false
+    const offs: Array<[number, number]> = [[0, 0], [-1, 0], [0, -1], [-1, -1]]
+    for (const [dc, dr] of offs) {
+      const c = cx + dc, r = cz + dr
+      if (c < 0 || c >= COLS || r < 0 || r >= ROWS) continue
+      if (this.sim.grid[r][c] !== 'blocked') { flat = true; continue }
+      sum += this.tileRise[r * COLS + c]
+      cnt++
+    }
+    if (flat || cnt === 0) return GROUND
+    return GROUND + sum / cnt
+  }
+
+  // Extends cornerHeightInterior beyond the board into the cliff skirt: a short rim
+  // rise, then a sharp fall-away so the land recedes into the fog/haze at the frame's
+  // edge instead of stopping in a hard, dead-flat cutoff.
+  private cornerHeight(cx: number, cz: number): number {
+    const out = Math.max(0, -cx, cx - COLS, -cz, cz - ROWS)
+    const ccx = Math.min(COLS, Math.max(0, cx))
+    const ccz = Math.min(ROWS, Math.max(0, cz))
+    const base = this.cornerHeightInterior(ccx, ccz)
+    if (out <= 0) return base
+    if (out <= 1.15) return base + out * 0.2 // rim crest
+    const crest = base + 0.23
+    const d = out - 1.15
+    return crest - d * d * 1.35 // falls away
+  }
+
+  // Bilinear height sample at fractional grid coords (gx=c is tile c's left edge).
+  private heightAt(gx: number, gz: number): number {
+    const x0 = Math.floor(gx), z0 = Math.floor(gz)
+    const tx = gx - x0, tz = gz - z0
+    const h00 = this.cornerHeight(x0, z0)
+    const h10 = this.cornerHeight(x0 + 1, z0)
+    const h01 = this.cornerHeight(x0, z0 + 1)
+    const h11 = this.cornerHeight(x0 + 1, z0 + 1)
+    const a = h00 + (h10 - h00) * tx
+    const b = h01 + (h11 - h01) * tx
+    return a + (b - a) * tz
+  }
+
+  // Per-quad colour: worn tread on the lane, worked terrace stone on build tiles
+  // (with the hazard tint blended in, held at full colour), layered rock strata with
+  // AO in the seams/slopes elsewhere, fading to the realm's haze tint at the skirt.
+  private terrainQuadColor(
+    tc: number, tr: number, si: number, sj: number,
+    h00: number, h10: number, h01: number, h11: number,
+  ): [THREE.Color, boolean] {
+    const inBoard = tc >= 0 && tc < COLS && tr >= 0 && tr < ROWS
+    const kind = inBoard ? this.sim.grid[tr][tc] : 'blocked'
+    let hold = false
+    let col: THREE.Color
+    if (kind === 'path') {
+      col = new THREE.Color(this.palette.path)
+    } else if (kind === 'build') {
+      col = new THREE.Color(this.palette.build)
+      const terr = this.sim.terrainAt(tc, tr)
+      if (terr !== '' && TERRAIN_META[terr]) {
+        col = col.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55)
+        hold = true
+      }
+      // worn lip: darken the strip of build tile that actually touches the lane
+      const nKind = (dc: number, dr: number): string => {
+        const c = tc + dc, r = tr + dr
+        if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return 'blocked'
+        return this.sim.grid[r][c]
+      }
+      let edge = false
+      if (si === 0 && nKind(-1, 0) === 'path') edge = true
+      if (si === TSUB - 1 && nKind(1, 0) === 'path') edge = true
+      if (sj === 0 && nKind(0, -1) === 'path') edge = true
+      if (sj === TSUB - 1 && nKind(0, 1) === 'path') edge = true
+      if (edge) col = col.clone().multiplyScalar(0.86)
+    } else {
+      // rock: two grass-slot hues blended per-tile, a subtle strata band by elevation,
+      // and per-quad grain so the highlands never read as one flat colour.
+      const h1 = hash2(tc * 3 + 11, tr * 5 + 17)
+      const h2 = hash2(tc * 7 + si * 2 + 3, tr * 9 + sj * 2 + 5)
+      col = new THREE.Color(this.palette.grassA).lerp(new THREE.Color(this.palette.grassB), h1)
+      const avgH = (h00 + h10 + h01 + h11) / 4
+      const band = 0.5 + 0.5 * Math.sin(avgH * 30 + h1 * 5)
+      if (band > 0.68) col = col.lerp(new THREE.Color(this.palette.build), (band - 0.68) * 0.9)
+      col.offsetHSL(0, 0, (h2 - 0.5) * 0.1)
+    }
+    // slope AO: darken quads sitting on a height gradient (crevices, shoulders, rim)
+    const slope = Math.max(h00, h10, h01, h11) - Math.min(h00, h10, h01, h11)
+    const ao = Math.min(0.38, slope * 5.2)
+    if (ao > 0) col = col.clone().multiplyScalar(1 - ao * 0.6)
+    // skirt haze: recede into the realm's fog tint as the land falls away
+    const out = Math.max(0, -tc, tc - COLS + 1, -tr, tr - ROWS + 1)
+    if (out > 0) {
+      const t = Math.min(1, out / TSKIRT)
+      col = col.clone().lerp(this.hazeTint, t * t * 0.9)
+    }
+    // LIGHT COMPENSATION: the board's stacked rig (hemi + ambient + 3 directional +
+    // a point accent) reads a flat vertex-coloured surface noticeably brighter than
+    // its input — uncompensated, every realm washed toward pale grey/white on screen
+    // regardless of hue (the exact failure the readability rule forbids). Pull the fed
+    // albedo down so the LIT result lands in the intended mid-luma band.
+    col = col.clone().multiplyScalar(TERRAIN_LIGHT_COMP)
+    return [col, hold]
+  }
+
+  // Ashen target for the Greying's wave-1 state: NOT a per-tile luminance-grey (that
+  // reads as mud on a warm palette) — a shared cool "Limbo" tint so the pre-colour
+  // board is a deliberately gorgeous monochrome, and reclaiming colour is a reward.
+  private ashenColorFor(full: THREE.Color): THREE.Color {
+    const lum = full.r * 0.3 + full.g * 0.59 + full.b * 0.11
+    const lumGrey = new THREE.Color(lum, lum, lum)
+    return full.clone().lerp(lumGrey, 0.5).lerp(this.ashenTint, 0.45)
+  }
+
+  // Build the merged, non-indexed (flat-shaded) terrain BufferGeometry: the whole
+  // board + a cliff-skirt apron, one draw call, vertex-coloured per quad. Non-indexed
+  // so computeVertexNormals() yields clean per-facet lighting (the low-poly look the
+  // rest of the board already uses) without the complexity of a shared-vertex mesh.
+  private buildTerrainMesh(): void {
+    this.hazeTint = new THREE.Color(this.fogColor())
+    const cols = COLS + 2 * TSKIRT
+    const rows = ROWS + 2 * TSKIRT
+    const quads = cols * TSUB * rows * TSUB
+    const verts = quads * 6
+    const pos = new Float32Array(verts * 3)
+    const full = new Float32Array(verts * 3)
+    const grey = new Float32Array(verts * 3)
+    const hold = new Uint8Array(verts)
+    let vi = 0
+    const _full = new THREE.Color()
+    for (let tr = -TSKIRT; tr < ROWS + TSKIRT; tr++) {
+      for (let tc = -TSKIRT; tc < COLS + TSKIRT; tc++) {
+        for (let sj = 0; sj < TSUB; sj++) {
+          for (let si = 0; si < TSUB; si++) {
+            const gx0 = tc + si / TSUB, gx1 = tc + (si + 1) / TSUB
+            const gz0 = tr + sj / TSUB, gz1 = tr + (sj + 1) / TSUB
+            const h00 = this.heightAt(gx0, gz0), h10 = this.heightAt(gx1, gz0)
+            const h01 = this.heightAt(gx0, gz1), h11 = this.heightAt(gx1, gz1)
+            const x0 = wx(MAP_X + gx0 * TILE_PX), x1 = wx(MAP_X + gx1 * TILE_PX)
+            const z0 = wz(MAP_Y + gz0 * TILE_PX), z1 = wz(MAP_Y + gz1 * TILE_PX)
+            const [c, hd] = this.terrainQuadColor(tc, tr, si, sj, h00, h10, h01, h11)
+            _full.copy(c)
+            const g = this.ashenColorFor(_full)
+            const quad: Array<[number, number, number]> = [
+              [x0, h00, z0], [x1, h10, z0], [x1, h11, z1],
+              [x0, h00, z0], [x1, h11, z1], [x0, h01, z1],
+            ]
+            for (const [x, y, z] of quad) {
+              pos[vi * 3] = x; pos[vi * 3 + 1] = y; pos[vi * 3 + 2] = z
+              full[vi * 3] = _full.r; full[vi * 3 + 1] = _full.g; full[vi * 3 + 2] = _full.b
+              grey[vi * 3] = g.r; grey[vi * 3 + 1] = g.g; grey[vi * 3 + 2] = g.b
+              hold[vi] = hd ? 1 : 0
+              vi++
+            }
+          }
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    geo.setAttribute('color', new THREE.BufferAttribute(full.slice(), 3))
+    geo.computeVertexNormals()
+    this.terrainFull = full
+    this.terrainGrey = grey
+    this.terrainHold = hold
+    this.terrainGeo = geo
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.03 })
+    this.terrainMat = mat
+    this.disposables.push(geo, mat)
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.frustumCulled = false
+    this.scene.add(mesh)
+    this.boardMeshes.push(mesh)
+    // Paint the initial reveal state: ashen when animation is on (climbs to full
+    // colour as the realm clears); snap to full colour under reduce-motion (static).
+    this.groundRevealQ = -1
+    this.applyGroundReveal(this.motionOk ? this.sim.colorProgress() : 1)
+  }
+
+  // Re-tint the terrain toward its palette as the realm is cleared. reveal 0 → ashen
+  // monochrome; reveal 1 → full palette colour. Hazard quads are pinned to full
+  // colour so the terrain read never fades. Cheap: only touched when the quantised
+  // reveal changes (a handful of times per battle).
+  private applyGroundReveal(reveal: number): void {
+    const geo = this.terrainGeo
+    if (!geo) return
+    const colAttr = geo.getAttribute('color') as THREE.BufferAttribute
+    const arr = colAttr.array as Float32Array
+    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.85
+    for (let i = 0; i < this.terrainHold.length; i++) {
+      const o = i * 3
+      if (this.terrainHold[i] || mute <= 0) {
+        arr[o] = this.terrainFull[o]; arr[o + 1] = this.terrainFull[o + 1]; arr[o + 2] = this.terrainFull[o + 2]
+      } else {
+        arr[o] = this.terrainFull[o] + (this.terrainGrey[o] - this.terrainFull[o]) * mute
+        arr[o + 1] = this.terrainFull[o + 1] + (this.terrainGrey[o + 1] - this.terrainFull[o + 1]) * mute
+        arr[o + 2] = this.terrainFull[o + 2] + (this.terrainGrey[o + 2] - this.terrainFull[o + 2]) * mute
+      }
+    }
+    colAttr.needsUpdate = true
   }
 
   // Per-frame: drive the reveal off battle progress, throttled to ~2% steps so the
   // full-board re-tint only fires when the clear fraction actually advances.
   private updateGroundReveal(): void {
-    if (!this.groundInst || !this.motionOk) return // static (already full) when reduced
+    if (!this.terrainGeo || !this.motionOk) return // static (already full) when reduced
     const prog = this.sim.colorProgress()
     const q = Math.round(prog * 50)
     if (q === this.groundRevealQ) return
@@ -889,84 +1100,6 @@ export class BattleView3D {
     }
   }
 
-  // Classify each ordered path cell → tile type + Y-rotation, then batch by type.
-  private setupRoad(): void {
-    const geos: Record<string, THREE.BufferGeometry | null> = {
-      straight: models.geometry('tile-straight'),
-      corner: models.geometry('tile-corner-round'),
-      spawn: models.geometry('tile-spawn'),
-      end: models.geometry('tile-end'),
-    }
-    for (const g of Object.values(geos)) if (g) this.disposables.push(g)
-
-    const path = this.pathCells
-    if (!path.length) return
-    const buckets: Record<string, Array<{ x: number; z: number; theta: number }>> = {
-      straight: [], corner: [], spawn: [], end: [],
-    }
-    const V = (x: number, z: number) => new THREE.Vector3(x, 0, z)
-    const dirTo = (from: [number, number], to: [number, number]) =>
-      V(Math.sign(to[0] - from[0]), Math.sign(to[1] - from[1]))
-    const ROT = [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]
-    const rot = (v: THREE.Vector3, th: number) => {
-      const c = Math.cos(th), s = Math.sin(th)
-      return V(v.x * c + v.z * s, -v.x * s + v.z * c)
-    }
-    const eq = (a: THREE.Vector3, b: THREE.Vector3) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.z - b.z) < 0.01
-    // find θ mapping default open-edge set → required set (pair, unordered)
-    const solvePair = (d1: THREE.Vector3, d2: THREE.Vector3, r1: THREE.Vector3, r2: THREE.Vector3) => {
-      for (const th of ROT) {
-        const a = rot(d1, th), b = rot(d2, th)
-        if ((eq(a, r1) && eq(b, r2)) || (eq(a, r2) && eq(b, r1))) return th
-      }
-      return 0
-    }
-    const solveSingle = (d: THREE.Vector3, r: THREE.Vector3) => {
-      for (const th of ROT) if (eq(rot(d, th), r)) return th
-      return 0
-    }
-    const PZ = V(0, 1), NZ = V(0, -1), PX = V(1, 0)
-
-    for (let i = 0; i < path.length; i++) {
-      const cell = path[i]
-      const x = wx(MAP_X + cell[0] * TILE_PX + TILE_PX / 2)
-      const z = wz(MAP_Y + cell[1] * TILE_PX + TILE_PX / 2)
-      const toNext = i < path.length - 1 ? dirTo(cell, path[i + 1]) : null
-      const toPrev = i > 0 ? dirTo(cell, path[i - 1]) : null
-      if (i === 0 && toNext) {
-        // spawn: road passes straight through (off-board entry is opposite `next`)
-        buckets.spawn.push({ x, z, theta: solvePair(PZ, NZ, toNext, rot(toNext, Math.PI)) })
-      } else if (i === path.length - 1 && toPrev) {
-        // base: road enters from the previous cell and terminates
-        buckets.end.push({ x, z, theta: solveSingle(PZ, toPrev) })
-      } else if (toPrev && toNext) {
-        if (eq(toPrev, rot(toNext, Math.PI))) {
-          buckets.straight.push({ x, z, theta: solvePair(PZ, NZ, toPrev, toNext) })
-        } else {
-          buckets.corner.push({ x, z, theta: solvePair(PX, PZ, toPrev, toNext) })
-        }
-      }
-    }
-
-    const dummy = new THREE.Object3D()
-    for (const type of ['straight', 'corner', 'spawn', 'end'] as const) {
-      const geo = geos[type]
-      const list = buckets[type]
-      if (!geo || !list.length) continue
-      const inst = new THREE.InstancedMesh(geo, this.atlasBaseMat, list.length)
-      list.forEach((t, i) => {
-        dummy.position.set(t.x, 0, t.z)
-        dummy.rotation.set(0, t.theta, 0)
-        dummy.scale.setScalar(1)
-        dummy.updateMatrix()
-        inst.setMatrixAt(i, dummy.matrix)
-      })
-      inst.instanceMatrix.needsUpdate = true
-      inst.frustumCulled = false
-      this.boardMeshes.push(inst)
-      this.scene.add(inst)
-    }
-  }
 
   // Scatter per-realm props on non-play (blocked) cells so the board reads as a
   // populated diorama, not a bare lane. Kept OFF gameplay tiles (build/path) and
@@ -1005,7 +1138,10 @@ export class BattleView3D {
         // jitter within the cell so scatter doesn't look grid-locked
         const jx = (hash2(c, r * 2) - 0.5) * 0.4
         const jz = (hash2(c * 2, r) - 0.5) * 0.4
-        g.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2) + jx, GROUND, wz(MAP_Y + r * TILE_PX + TILE_PX / 2) + jz)
+        // seat the prop on the sculpted terrain's actual height at this cell (the
+        // land now rises under blocked/scenery tiles — see computeTileRise())
+        const propY = GROUND + (this.tileRise[r * COLS + c] ?? 0)
+        g.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2) + jx, propY, wz(MAP_Y + r * TILE_PX + TILE_PX / 2) + jz)
         this.detailGroup.add(g)
       }
     }
@@ -3548,9 +3684,8 @@ export class BattleView3D {
     }
     this.disposables = []
 
-    // board instanced meshes (dispose instance buffers; their cloned geometry is
-    // also tracked in `disposables` above — dispose is idempotent)
-    for (const m of this.boardMeshes) { this.scene.remove(m); m.dispose() }
+    // board mesh(es) — geometry/material are already disposed via `disposables` above
+    for (const m of this.boardMeshes) this.scene.remove(m)
     this.boardMeshes = []
 
     // composer render targets + passes
