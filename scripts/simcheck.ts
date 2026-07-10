@@ -17,6 +17,7 @@ import {
 import { weeklyPlan, activeEvent, weekIndex, weeklyMutator, EVENTS } from '../src/game/events'
 import { NEUTRAL } from '../src/game/workshop'
 import { LEVELS, pathCellsFor, pathPlanFor, type LevelDef } from '../src/game/levels'
+import { LEVEL_STORY } from '../src/game/story'
 import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
 import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
@@ -588,6 +589,32 @@ if (eliteLevels.size === 0) fail('elite never spawns anywhere in the live campai
 if (armoredLevels.has('l1')) fail('armored spawns in l1 (the tutorial) — must gate in later')
 if (eliteLevels.has('l1')) fail('elite spawns in l1 (the tutorial) — must gate in later')
 console.log(`  armored/elite reach the ladder: armored in ${armoredLevels.size} levels, elite in ${eliteLevels.size} levels (neither in l1)`)
+
+// ---------------------------------------------------------------------------
+//  CHROMANCER #52 — WAYPOINTS: 18 hand-authored set-piece levels (3/realm),
+//  taking authored content from 6 → 24 (l1-l6 + 18 waypoints). They REPLACE
+//  specific generated slots — the 192-level total and index contiguity (already
+//  asserted above) must hold — and every one must carry an authored flavor
+//  bark (routed through the same story.ts system as l1-l6), not a generated
+//  fallback line.
+// ---------------------------------------------------------------------------
+console.log('\nwaypoints — 18 hand-authored set-pieces (3/realm) …')
+const WAYPOINT_IDS: string[] = []
+for (let realmOrder = 0; realmOrder < 6; realmOrder++) {
+  for (const j of [8, 16, 24]) WAYPOINT_IDS.push(`w${realmOrder}_${j}`)
+}
+const levelById = new Map(LEVELS.map((l) => [l.id, l]))
+let waypointsFound = 0
+for (const id of WAYPOINT_IDS) {
+  const lvl = levelById.get(id)
+  if (!lvl) { fail(`waypoint ${id} missing from the live campaign ladder`); continue }
+  waypointsFound++
+  if (lvl.landmark !== 'landmark') fail(`waypoint ${id} (${lvl.name}) is not flagged as a landmark stop`)
+  if (!LEVEL_STORY[id]) fail(`waypoint ${id} (${lvl.name}) has no authored LEVEL_STORY entry`)
+}
+const AUTHORED_IDS = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', ...WAYPOINT_IDS]
+if (AUTHORED_IDS.length !== 24) fail(`expected 24 hand-authored ids (l1-l6 + 18 waypoints), counted ${AUTHORED_IDS.length}`)
+if (waypointsFound === 18) console.log(`  all 18 waypoints present, landmark-flagged, and authored-story-backed (24/${LEVELS.length} hand-authored, up from 6)`)
 
 // beatability: the fair, MIN-RESOURCE bot must WIN every live level using only the
 // towers actually unlocked by that point in the ladder + starter heroes.

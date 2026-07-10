@@ -25,7 +25,7 @@ import { RNG } from '../sim/rng'
 import type { EnemyKind } from './enemies'
 import type { TowerKind } from './towers'
 import {
-  buildPathPlan, computeBuildCandidates,
+  buildPathPlan, computeBuildCandidates, connectAnchors,
   SIMPLE_ARCHETYPES, COMPLEX_ARCHETYPES, MULTI_TOPOLOGIES,
   type PathArchetype, type PathTopology, type TerrainKind, type TerrainCell,
 } from './paths'
@@ -511,6 +511,275 @@ function finaleLevel(id: string, rg: RealmGen, realmOrder: number): LevelDef {
   }
 }
 
+// ---------------------------------------------------------------------------
+// WAYPOINTS — CHROMANCER #52: 3 hand-authored set-piece levels per realm
+// (18 total, 6→24 authored), REPLACING specific generated slots so level
+// `index` stays contiguous and the 192-level total is untouched. Each waypoint
+// carries a genuine gimmick — never a reskin of the procedural HP curve:
+//   · MINI-BOSS  — a single named foe (an existing enemy archetype, hugely
+//     buffed, alone) flanked by an escort, introduced by an authored bark.
+//   · FIXED LANE — a bespoke hand-drawn route (via connectAnchors) that no
+//     procedural archetype produces, place ONCE, never regenerated.
+//   · MID-WAVE EVENT — a scripted ambush wave at a fixed point in the level
+//     that nudges the player toward a specific elemental reaction using the
+//     towers they already own at that depth.
+// Difficulty stays on the SAME curve as the generator (difficultyHp(prog) at
+// this waypoint's exact realm/depth), so beatability is proven the same way
+// (the simcheck auto-player), not hand-waved.
+// ---------------------------------------------------------------------------
+// Waypoints sit at local index 8/16/24 (~1/4, ~1/2, ~3/4 depth of each 32-stop
+// realm) — see the `WAYPOINTS` keys below for the exact per-realm placement.
+interface WaypointSpec {
+  name: string
+  blurb: string
+  lanes?: number[]
+  path?: Array<[number, number]>
+  waves: (baseHp: number) => Wave[]
+}
+
+// Compact wave builders shared by every waypoint table below. `mul` is a
+// fraction of this waypoint's REAL difficultyHp(prog) baseline (same curve the
+// generator uses), so magnitude always tracks the ladder's actual depth.
+function stdWave(baseHp: number, mul: number, clearBonus: number, entries: Array<[EnemyKind, number, number]>): Wave {
+  return w(entries.map(([kind, count, spacing]) => e(kind, count, spacing, +(baseHp * mul).toFixed(3))), clearBonus)
+}
+function bossWave(
+  baseHp: number, bossMul: number, escortMul: number, clearBonus: number,
+  boss: [EnemyKind, number, number], escorts: Array<[EnemyKind, number, number]>,
+): Wave {
+  return w([
+    e(boss[0], boss[1], boss[2], +(baseHp * bossMul).toFixed(3)),
+    ...escorts.map(([kind, count, spacing]) => e(kind, count, spacing, +(baseHp * escortMul).toFixed(3))),
+  ], clearBonus)
+}
+
+const WAYPOINTS: Record<string, Partial<Record<number, WaypointSpec>>> = {
+  emberwaste: {
+    8: { // MINI-BOSS — Grask the Cinderback
+      name: 'The Cinderback Trial', blurb: 'Emberwaste waypoint · Grask the Cinderback blocks the vein',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 30, [['runner', 14, 0.42], ['grunt', 6, 0.58]]),
+        stdWave(hp, 0.70, 34, [['grunt', 10, 0.58], ['runner', 10, 0.42]]),
+        stdWave(hp, 0.85, 38, [['runner', 16, 0.4], ['grunt', 8, 0.55]]),
+        stdWave(hp, 1.00, 44, [['grunt', 12, 0.55], ['runner', 14, 0.38], ['brute', 3, 1.0]]),
+        bossWave(hp, 1.90, 1.05, 90, ['brute', 1, 1], [['grunt', 8, 0.55], ['runner', 10, 0.42]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Split Forge (hand-drawn comb path)
+      name: 'The Split Forge', blurb: 'Emberwaste waypoint · a comb of kilns, hand-cut into the rock',
+      path: connectAnchors([[4, 0], [1, 1], [1, 3], [7, 3], [7, 5], [1, 5], [1, 7], [7, 7], [7, 9], [4, 9], [4, 10]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 32, [['runner', 16, 0.4], ['grunt', 8, 0.55]]),
+        stdWave(hp, 0.75, 36, [['grunt', 12, 0.55], ['swarm', 18, 0.14]]),
+        stdWave(hp, 0.90, 40, [['runner', 20, 0.36], ['brute', 3, 1.0]]),
+        stdWave(hp, 1.05, 46, [['grunt', 14, 0.5], ['swarm', 22, 0.13], ['runner', 10, 0.38]]),
+        stdWave(hp, 1.25, 100, [['brute', 4, 0.95], ['grunt', 14, 0.5], ['runner', 16, 0.36]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches FLASHOVER (Fire+Storm: flame+storm)
+      name: 'The Second Kiln', blurb: 'Emberwaste waypoint · the kiln floor cracks — meet fire with lightning',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 34, [['runner', 18, 0.38], ['grunt', 10, 0.55]]),
+        stdWave(hp, 0.75, 38, [['grunt', 14, 0.5], ['flyer', 6, 0.68]]),
+        stdWave(hp, 1.05, 55, [['shielded', 6, 0.8], ['brute', 4, 0.95], ['grunt', 10, 0.5]]), // EVENT: the second brood ignites
+        stdWave(hp, 1.00, 48, [['flyer', 8, 0.62], ['swarm', 24, 0.13], ['grunt', 12, 0.5]]),
+        stdWave(hp, 1.25, 110, [['brute', 5, 0.9], ['shielded', 6, 0.75], ['runner', 16, 0.36], ['flyer', 6, 0.62]]),
+      ],
+    },
+  },
+  frostreach: {
+    8: { // MINI-BOSS — the Rime Sentinel (Fortified: teaches Siege/Magic vs armor)
+      name: "The Sentinel's Causeway", blurb: 'Frostreach waypoint · the Rime Sentinel holds the ice bridge',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 32, [['grunt', 12, 0.55], ['shielded', 4, 0.8]]),
+        stdWave(hp, 0.70, 36, [['shielded', 6, 0.75], ['swarm', 20, 0.13]]),
+        stdWave(hp, 0.85, 40, [['flyer', 8, 0.65], ['grunt', 14, 0.5]]),
+        stdWave(hp, 1.00, 46, [['shielded', 8, 0.7], ['brute', 4, 0.95], ['swarm', 22, 0.13]]),
+        bossWave(hp, 1.90, 1.05, 100, ['armored', 1, 1], [['shielded', 6, 0.75], ['grunt', 10, 0.5]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Frozen Maze (hand-drawn nested box)
+      name: 'The Frozen Maze', blurb: 'Frostreach waypoint · a glacier maze cut in concentric rings',
+      path: connectAnchors([[0, 0], [8, 0], [8, 8], [2, 8], [2, 2], [6, 2], [6, 6], [4, 6], [4, 4]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 34, [['grunt', 14, 0.5], ['shielded', 6, 0.75]]),
+        stdWave(hp, 0.75, 38, [['swarm', 24, 0.12], ['flyer', 8, 0.62]]),
+        stdWave(hp, 0.90, 42, [['armored', 4, 0.75], ['grunt', 12, 0.5]]),
+        stdWave(hp, 1.05, 48, [['shielded', 8, 0.68], ['brute', 5, 0.9], ['swarm', 26, 0.12]]),
+        stdWave(hp, 1.30, 105, [['flyer', 10, 0.6], ['armored', 5, 0.72], ['grunt', 16, 0.46]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches SHATTER (Water+Storm: frost+storm)
+      name: 'Avalanche', blurb: 'Frostreach waypoint · the ice shelf gives way — shatter it before it lands',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 36, [['grunt', 16, 0.48], ['flyer', 8, 0.6]]),
+        stdWave(hp, 0.75, 40, [['shielded', 8, 0.68], ['swarm', 26, 0.12]]),
+        stdWave(hp, 1.05, 58, [['brute', 6, 0.85], ['flyer', 10, 0.58], ['armored', 4, 0.72]]), // EVENT: the ice shelf breaks loose
+        stdWave(hp, 1.00, 50, [['shielded', 10, 0.62], ['grunt', 16, 0.46], ['swarm', 28, 0.11]]),
+        stdWave(hp, 1.30, 115, [['armored', 6, 0.68], ['brute', 6, 0.82], ['flyer', 10, 0.56], ['grunt', 14, 0.46]]),
+      ],
+    },
+  },
+  stormpeaks: {
+    8: { // MINI-BOSS — Squall, the Gale Wraith (solo flyer: commits anti-air)
+      name: "The Wraith's Gale", blurb: 'Stormpeaks waypoint · Squall the Gale Wraith circles the ridge',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 34, [['flyer', 10, 0.65], ['runner', 14, 0.4]]),
+        stdWave(hp, 0.70, 38, [['grunt', 14, 0.52], ['flyer', 8, 0.62]]),
+        stdWave(hp, 0.85, 42, [['armored', 5, 0.72], ['runner', 16, 0.36]]),
+        stdWave(hp, 1.00, 48, [['flyer', 12, 0.58], ['elite', 2, 1.05], ['grunt', 14, 0.48]]),
+        bossWave(hp, 1.90, 1.05, 110, ['flyer', 1, 1], [['flyer', 8, 0.6], ['runner', 16, 0.36]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Thunder Cross (hand-drawn crossing corridors)
+      name: 'The Thunder Cross', blurb: 'Stormpeaks waypoint · two gales cross the summit at once',
+      path: connectAnchors([[0, 0], [3, 0], [3, 5], [8, 5], [8, 2], [5, 2], [5, 9], [0, 9], [0, 10], [4, 10]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 36, [['flyer', 12, 0.6], ['grunt', 16, 0.46]]),
+        stdWave(hp, 0.75, 40, [['armored', 6, 0.68], ['runner', 18, 0.34]]),
+        stdWave(hp, 0.90, 44, [['elite', 3, 1.0], ['flyer', 10, 0.56]]),
+        stdWave(hp, 1.05, 50, [['brute', 6, 0.82], ['flyer', 12, 0.54], ['grunt', 16, 0.44]]),
+        stdWave(hp, 1.30, 112, [['elite', 4, 0.95], ['armored', 6, 0.65], ['flyer', 14, 0.52]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches WILDFIRE (Fire+Nature: flame+bloom)
+      name: 'The Overgrown Squall', blurb: 'Stormpeaks waypoint · vines ride the thunderhead — burn it clean',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 38, [['flyer', 14, 0.56], ['grunt', 18, 0.42]]),
+        stdWave(hp, 0.75, 42, [['armored', 7, 0.64], ['brute', 6, 0.78]]),
+        stdWave(hp, 1.05, 60, [['elite', 4, 0.9], ['flyer', 12, 0.52], ['grunt', 16, 0.42]]), // EVENT: a green squall rides the thunderhead
+        stdWave(hp, 1.00, 52, [['brute', 7, 0.76], ['armored', 6, 0.62], ['flyer', 14, 0.5]]),
+        stdWave(hp, 1.30, 118, [['elite', 5, 0.88], ['flyer', 16, 0.48], ['armored', 8, 0.6]]),
+      ],
+    },
+  },
+  verdant: {
+    8: { // MINI-BOSS — Old Man Bramble (solo elite: commits Physical/cannon vs Warded)
+      name: "Old Man Bramble's Root", blurb: 'Verdant waypoint · Old Man Bramble roots the crossing',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 36, [['swarm', 26, 0.12], ['healer', 3, 1.2]]),
+        stdWave(hp, 0.70, 40, [['shielded', 8, 0.68], ['runner', 18, 0.36]]),
+        stdWave(hp, 0.85, 44, [['healer', 4, 1.1], ['swarm', 28, 0.11]]),
+        stdWave(hp, 1.00, 50, [['shielded', 10, 0.62], ['elite', 3, 1.0], ['runner', 16, 0.36]]),
+        bossWave(hp, 1.90, 1.05, 118, ['elite', 1, 1], [['healer', 4, 1.1], ['swarm', 26, 0.12]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Vine Labyrinth (hand-drawn wide switchbacks)
+      name: 'The Vine Labyrinth', blurb: 'Verdant waypoint · roots have grown their own maze',
+      path: connectAnchors([[4, 0], [4, 3], [0, 3], [0, 6], [8, 6], [8, 3], [6, 3], [6, 8], [2, 8], [2, 10], [4, 10]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 38, [['swarm', 28, 0.11], ['shielded', 8, 0.65]]),
+        stdWave(hp, 0.75, 42, [['healer', 5, 1.0], ['runner', 20, 0.34]]),
+        stdWave(hp, 0.90, 46, [['elite', 4, 0.95], ['swarm', 30, 0.11]]),
+        stdWave(hp, 1.05, 52, [['shielded', 12, 0.6], ['healer', 5, 1.0], ['runner', 18, 0.34]]),
+        stdWave(hp, 1.30, 122, [['elite', 5, 0.9], ['swarm', 32, 0.1], ['shielded', 10, 0.58]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches OVERGROW (Water+Nature: frost+bloom)
+      name: 'The Weeping Bog', blurb: 'Verdant waypoint · the bog swells — root it before it swallows the path',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 40, [['swarm', 30, 0.11], ['healer', 5, 1.0]]),
+        stdWave(hp, 0.75, 44, [['shielded', 10, 0.6], ['elite', 4, 0.9]]),
+        stdWave(hp, 1.05, 62, [['healer', 6, 0.95], ['swarm', 34, 0.1], ['shielded', 10, 0.58]]), // EVENT: the bog swells and swallows the path
+        stdWave(hp, 1.00, 54, [['elite', 5, 0.85], ['shielded', 12, 0.56], ['runner', 18, 0.34]]),
+        stdWave(hp, 1.30, 126, [['elite', 6, 0.82], ['healer', 6, 0.92], ['swarm', 34, 0.1]]),
+      ],
+    },
+  },
+  lumen: {
+    8: { // MINI-BOSS — The Undying Choir (solo healer: teaches focus-fire priority)
+      name: 'The Undying Choir', blurb: 'Lumen waypoint · a mender that will not stop singing',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 40, [['swarm', 30, 0.11], ['flyer', 10, 0.6]]),
+        stdWave(hp, 0.70, 44, [['shielded', 10, 0.6], ['healer', 5, 0.95]]),
+        stdWave(hp, 0.85, 48, [['elite', 4, 0.88], ['flyer', 12, 0.56]]),
+        stdWave(hp, 1.00, 54, [['shielded', 12, 0.56], ['swarm', 32, 0.1], ['healer', 5, 0.92]]),
+        bossWave(hp, 1.70, 1.10, 126, ['healer', 1, 1], [['elite', 4, 0.85], ['shielded', 10, 0.58], ['swarm', 28, 0.1]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Sunken Aisle (hand-drawn ring loop)
+      name: 'The Sunken Aisle', blurb: 'Lumen waypoint · a ring of pillars sunk in gold-lit water',
+      path: connectAnchors([[0, 1], [0, 9], [8, 9], [8, 1], [2, 1], [2, 7], [6, 7], [6, 3], [4, 3], [4, 10]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 42, [['flyer', 14, 0.54], ['shielded', 10, 0.58]]),
+        stdWave(hp, 0.75, 46, [['elite', 5, 0.82], ['swarm', 32, 0.1]]),
+        stdWave(hp, 0.90, 50, [['healer', 6, 0.9], ['flyer', 12, 0.52]]),
+        stdWave(hp, 1.05, 56, [['shielded', 14, 0.54], ['elite', 5, 0.8], ['swarm', 34, 0.1]]),
+        stdWave(hp, 1.30, 130, [['elite', 6, 0.78], ['flyer', 16, 0.48], ['healer', 6, 0.88]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches ECLIPSE (Light+Dark: radiant+shade)
+      name: 'The Choir Ascendant', blurb: 'Lumen waypoint · light and shadow collide in the nave — eclipse them',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 44, [['flyer', 16, 0.52], ['shielded', 12, 0.56]]),
+        stdWave(hp, 0.75, 48, [['elite', 6, 0.76], ['swarm', 34, 0.1]]),
+        stdWave(hp, 1.05, 66, [['healer', 7, 0.86], ['elite', 5, 0.78], ['flyer', 14, 0.5]]), // EVENT: the choir's light and shadow collide
+        stdWave(hp, 1.00, 58, [['shielded', 14, 0.52], ['swarm', 36, 0.1], ['flyer', 14, 0.5]]),
+        stdWave(hp, 1.30, 134, [['elite', 7, 0.74], ['healer', 7, 0.84], ['shielded', 14, 0.5]]),
+      ],
+    },
+  },
+  hollow: {
+    8: { // MINI-BOSS — Nyx, the Unraveled Shade (solo armored: deep-game Fortified check)
+      name: "Nyx's Unraveling", blurb: 'The Hollow waypoint · Nyx the Unraveled Shade guards the throne road',
+      waves: (hp) => [
+        stdWave(hp, 0.55, 44, [['swarm', 32, 0.1], ['flyer', 14, 0.52]]),
+        stdWave(hp, 0.70, 48, [['shielded', 12, 0.56], ['brute', 6, 0.78]]),
+        stdWave(hp, 0.85, 52, [['healer', 6, 0.9], ['elite', 5, 0.78]]),
+        stdWave(hp, 1.00, 58, [['armored', 7, 0.62], ['swarm', 34, 0.1], ['flyer', 14, 0.5]]),
+        bossWave(hp, 1.90, 1.05, 130, ['armored', 1, 1], [['elite', 5, 0.78], ['shielded', 12, 0.54], ['swarm', 30, 0.1]]),
+      ],
+    },
+    16: { // FIXED UNUSUAL LANE — The Mirror Rift (hand-drawn hourglass crossing)
+      name: 'The Mirror Rift', blurb: 'The Hollow waypoint · the road forks and rejoins itself, over and over',
+      path: connectAnchors([[0, 0], [8, 0], [0, 4], [8, 4], [0, 8], [8, 8], [4, 8], [4, 10]]),
+      waves: (hp) => [
+        stdWave(hp, 0.60, 46, [['flyer', 16, 0.5], ['shielded', 14, 0.52]]),
+        stdWave(hp, 0.75, 50, [['brute', 7, 0.74], ['healer', 6, 0.86]]),
+        stdWave(hp, 0.90, 54, [['armored', 8, 0.58], ['elite', 6, 0.74]]),
+        stdWave(hp, 1.05, 60, [['swarm', 36, 0.09], ['flyer', 16, 0.48], ['shielded', 14, 0.5]]),
+        stdWave(hp, 1.30, 136, [['elite', 7, 0.72], ['armored', 8, 0.56], ['brute', 7, 0.72]]),
+      ],
+    },
+    24: { // SCRIPTED MID-WAVE EVENT — teaches BLIGHT (Nature+Dark: bloom+shade)
+      name: 'The Blight Choir', blurb: 'The Hollow waypoint · the void chorus opens beneath the throne road',
+      waves: (hp) => [
+        stdWave(hp, 0.60, 48, [['flyer', 18, 0.48], ['shielded', 14, 0.5]]),
+        stdWave(hp, 0.75, 52, [['armored', 8, 0.56], ['brute', 7, 0.7]]),
+        stdWave(hp, 1.05, 70, [['healer', 7, 0.82], ['elite', 6, 0.7], ['swarm', 36, 0.09]]), // EVENT: the void chorus opens
+        stdWave(hp, 1.00, 62, [['shielded', 16, 0.48], ['armored', 8, 0.54], ['flyer', 16, 0.46]]),
+        stdWave(hp, 1.30, 140, [['elite', 8, 0.68], ['armored', 9, 0.52], ['brute', 8, 0.68]]),
+      ],
+    },
+  },
+}
+
+// Build ONE waypoint level. Same difficulty curve as the generator
+// (difficultyHp(prog) at this exact realm/depth) so beatability is proven the
+// same way — the simcheck auto-player treats it identically to a generated stop.
+function waypointLevel(
+  id: string, rg: RealmGen, realmOrder: number, j: number, count: number,
+  wp: WaypointSpec, unlockTower?: TowerKind,
+): LevelDef {
+  const localDepth = count <= 1 ? 0 : j / (count - 1)
+  const prog = realmOrder + localDepth
+  const globalDepth = prog / REALM_GEN.length
+  const baseHp = difficultyHp(prog)
+  const opener = localDepth < 0.25 ? Math.round((0.25 - localDepth) * 180) : 0
+  const startGold = Math.round(240 + prog * 45 + opener + 40) // landmark cushion, same as generated landmarks
+  const startLives = Math.max(12, Math.round(20 - globalDepth * 6))
+  const baseCoins = Math.round(30 + globalDepth * 130 + 20)
+  return {
+    id, index: 0, name: wp.name, blurb: wp.blurb,
+    lanes: wp.lanes ?? [3, 6, 9],
+    path: wp.path,
+    landmark: 'landmark',
+    startGold, startLives, baseCoins, palette: rg.palette,
+    unlockTower,
+    waves: wp.waves(baseHp),
+  }
+}
+
 // Which local index of a realm grants a new tower. Storm/arcane are spread EARLY
 // so players aren't gated behind a keeper for basic towers (both land before
 // flyers appear); the reaction-complete trio (bloom/radiant/shade) lands one per
@@ -536,10 +805,15 @@ export function buildCampaign(perWorld = LEVELS_PER_WORLD): BuiltCampaign {
     for (let j = 0; j < count; j++) {
       const isFinale = j === count - 1
       let lvl: LevelDef
+      const waypoint = !isFinale ? WAYPOINTS[rg.id]?.[j] : undefined
       if (j === 0 && rg.id === 'emberwaste') {
         lvl = { ...L1_TUTORIAL } // the tutorial opener keeps id 'l1'
       } else if (isFinale && rg.finaleId !== 'w0_finale' && FINALE_WAVES[rg.finaleId]) {
         lvl = finaleLevel(rg.finaleId, rg, realmOrder) // reuse the hand-authored keeper level
+      } else if (waypoint) {
+        const id = `w${realmOrder}_${j}`
+        const unlock = UNLOCK_AT[rg.id]?.j === j ? UNLOCK_AT[rg.id].tower : undefined
+        lvl = waypointLevel(id, rg, realmOrder, j, count, waypoint, unlock) // hand-authored set-piece (replaces a generated slot)
       } else {
         const id = isFinale ? rg.finaleId : `w${realmOrder}_${j}`
         const unlock = UNLOCK_AT[rg.id]?.j === j ? UNLOCK_AT[rg.id].tower : undefined

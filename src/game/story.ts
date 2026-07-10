@@ -126,4 +126,82 @@ export const LEVEL_STORY: Record<string, LevelStory> = {
     flavor: 'The Hollow Throne. He is expecting you. He set out chairs.',
     bark: { speaker: 'morose', text: 'Come in, little brush. Put down the wanting. See how I stopped hurting.' },
   },
+
+  // -------------------------------------------------------------------------
+  // WAYPOINTS — CHROMANCER #52: 18 hand-authored set-pieces (3/realm), routed
+  // through the same flavor-bark system as l1-l6. Each line matches its
+  // waypoint's gimmick (mini-boss / fixed lane / mid-wave event, campaign.ts).
+  // -------------------------------------------------------------------------
+  w0_8: {
+    flavor: 'A cinder-choked vein, and something huge breathing in the dark of it.',
+    bark: { speaker: 'ember', text: 'Grask was a good forge once. Wake him up right, or put him back to sleep.' },
+  },
+  w0_16: {
+    flavor: 'Someone cut a comb of kilns into the rock, on purpose. Every turn is a choice.',
+    bark: { speaker: 'ember', text: 'Whoever built this wanted you to think at every corner. So think.' },
+  },
+  w0_24: {
+    flavor: 'The kiln floor is thin here. Something is about to come up through it.',
+    bark: { speaker: 'ember', text: "When the second brood breaks loose, don't just burn it. Call the storm down on it too." },
+  },
+  w1_8: {
+    flavor: 'A causeway of blue ice, and a Sentinel that has forgotten how to kneel.',
+    bark: { speaker: 'glacia', text: 'Its plate turns aside an honest blade. Bring something with more insistence.' },
+  },
+  w1_16: {
+    flavor: 'Concentric rings of glacier, cut so precisely they must be a warning.',
+    bark: { speaker: 'glacia', text: 'Rings within rings. The Deep Ice always did like its little jokes.' },
+  },
+  w1_24: {
+    flavor: 'The whole ice shelf groans. It is deciding whether to still be a shelf.',
+    bark: { speaker: 'glacia', text: 'When it comes down, meet the water with the storm. Together they shatter — apart, they only get you wet.' },
+  },
+  w2_8: {
+    flavor: 'A single gale wraith circles the ridge, patient as weather.',
+    bark: { speaker: 'zephyra', text: "Squall doesn't land. So you'd better be able to reach up and get her." },
+  },
+  w2_16: {
+    flavor: 'Two gales cross the summit at once — read the crossing before it reads you.',
+    bark: { speaker: 'zephyra', text: 'Watch both winds. The one you ignore is the one that gets through!' },
+  },
+  w2_24: {
+    flavor: 'Vines have hitched a ride on the thunderhead. That should not be possible. It is happening anyway.',
+    bark: { speaker: 'zephyra', text: 'Green riding my thunder — ha! Burn the ride, keep the wind.' },
+  },
+  w3_8: {
+    flavor: 'An old root has grown teeth and planted itself across the crossing.',
+    bark: { speaker: 'sylvan', text: 'Old Man Bramble wards off magic like bark sheds rain. Hit him plainly, with steel.' },
+  },
+  w3_16: {
+    flavor: 'The roots have grown their own maze here, wide and patient and endless.',
+    bark: { speaker: 'sylvan', text: 'Nothing here is lost. It is all exactly where the roots meant it to be.' },
+  },
+  w3_24: {
+    flavor: 'The bog is swelling. In a minute there will be no path left to defend, only water.',
+    bark: { speaker: 'sylvan', text: 'Cold and green, together, and the whole bog holds still. Try it.' },
+  },
+  w4_8: {
+    flavor: 'A mender sings the same note over and over, and nothing near it will stay dead.',
+    bark: { speaker: 'aurelia', text: 'Silence the choir first. Everything else is just an echo after that.' },
+  },
+  w4_16: {
+    flavor: 'A ring of pillars, sunk in gold-lit water, circling something the Sanctum forgot to lose.',
+    bark: { speaker: 'aurelia', text: 'Walk the ring. The dawn keeps its promises in order, one pillar at a time.' },
+  },
+  w4_24: {
+    flavor: 'Light and shadow are arguing in the nave, loudly, and neither will yield first.',
+    bark: { speaker: 'aurelia', text: 'Let them collide. An eclipse held on purpose is still a kind of dawn.' },
+  },
+  w5_8: {
+    flavor: 'Nyx stands where the throne road narrows, unraveling and reweaving, over and over.',
+    bark: { speaker: 'vex', text: "She's plated against your plain hits, sugar. Bring your nastiest trick." },
+  },
+  w5_16: {
+    flavor: 'The road forks and rejoins itself here, over and over, like a held breath repeating.',
+    bark: { speaker: 'vex', text: 'A mirror maze, in the dark. Morose does love repeating himself.' },
+  },
+  w5_24: {
+    flavor: 'The void chorus opens beneath the throne road — a sound shaped like every color that got taken.',
+    bark: { speaker: 'vex', text: 'Root magic and my kind of dark, together — that unravels even a chorus this deep.' },
+  },
 }
