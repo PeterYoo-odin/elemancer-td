@@ -15,7 +15,8 @@ import {
   reactionFor, type AuraElement, type ReactionKey,
 } from '../src/sim/index'
 import { weeklyPlan, activeEvent, weekIndex, weeklyMutator, EVENTS } from '../src/game/events'
-import { NEUTRAL } from '../src/game/workshop'
+import { NEUTRAL, WORKSHOP_NODES, aggregateRunModifiers, aggregateMetaModifiers, type RunModifiers } from '../src/game/workshop'
+import type { SaveData } from '../src/game/save'
 import { LEVELS, pathCellsFor, pathPlanFor, type LevelDef } from '../src/game/levels'
 import { LEVEL_STORY } from '../src/game/story'
 import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
@@ -139,11 +140,11 @@ function botSpend(sim: Sim, placeRef: { i: number }, allowed: string[]): void {
 // `allowed` = only the towers the player would actually OWN by this point in the
 // ladder (base cannon/frost/flame + whatever earlier levels unlocked). This makes
 // the beatability proof a MIN-RESOURCE lower bound, not "beatable with endgame kit".
-function autoPlay(level: LevelDef, allowed: string[]): { won: boolean; lives: number; wave: number } {
+function autoPlay(level: LevelDef, allowed: string[], mods: RunModifiers = NEUTRAL): { won: boolean; lives: number; wave: number } {
   const seed = (0xA5EED ^ (level.index * 40503) ^ 0x1234) >>> 0
   const sim = new Sim({
-    level, mods: { ...NEUTRAL }, seed, endless: false,
-    startGold: level.startGold, startLives: level.startLives, party: BOT_PARTY,
+    level, mods: { ...mods }, seed, endless: false,
+    startGold: level.startGold + mods.startGoldBonus, startLives: level.startLives + mods.startLivesBonus, party: BOT_PARTY,
   })
   deployParty(sim)
   const placeRef = { i: 0 }
@@ -684,6 +685,55 @@ for (const lvl of LEVELS) {
   if (lvl.unlockTower) owned.add(lvl.unlockTower) // its reward is available on the NEXT level
 }
 if (beatFails === 0) console.log(`  all ${LEVELS.length} live levels beatable (base towers + unlocks only) — tightest: ${hardest.id} @ ${hardest.lives} lives`)
+
+// ---------------------------------------------------------------------------
+//  CHROMANCER #55 — WORKSHOP RESCALE: maxLevel raised (+taperLevel tail taper)
+//  on every coin node so the ~6,714-coin board isn't fully spent by map 21.
+//  Prove: (1) a save with every coin node at its NEW maxLevel produces finite,
+//  sanely-bounded RunModifiers/MetaModifiers (no NaN/blowup at the extended
+//  cap); (2) a campaign run under those maxed modifiers still plays cleanly —
+//  no NaN/out-of-range entity state — on a spread of levels; (3) total coins
+//  to max the whole board is in the intended "whole campaign" ballpark, not
+//  trivially small (map-21-exhausted) or absurdly unreachable.
+// ---------------------------------------------------------------------------
+console.log('\nworkshop rescale — maxed-node modifiers stay finite + a maxed run stays clean…')
+{
+  const maxedSave = { workshop: {} as Record<string, number> } as SaveData
+  for (const n of WORKSHOP_NODES) maxedSave.workshop[n.id] = n.maxLevel
+  const mods = aggregateRunModifiers(maxedSave)
+  const meta = aggregateMetaModifiers(maxedSave)
+  for (const [k, v] of Object.entries(mods)) if (!finite(v as number)) fail(`workshop: maxed RunModifiers.${k} non-finite: ${v}`)
+  for (const [k, v] of Object.entries(meta)) if (!finite(v as number)) fail(`workshop: maxed MetaModifiers.${k} non-finite: ${v}`)
+  if (mods.cooldownMult < 0.4 - 1e-9) fail(`workshop: maxed cooldownMult broke the 0.4 floor: ${mods.cooldownMult}`)
+  if (mods.spellCooldownMult < 0.4 - 1e-9) fail(`workshop: maxed spellCooldownMult broke the 0.4 floor: ${mods.spellCooldownMult}`)
+  if (mods.towerCostMult < 0.5 - 1e-9) fail(`workshop: maxed towerCostMult broke the 0.5 floor: ${mods.towerCostMult}`)
+  if (mods.towerDamageMult <= 1 || mods.towerDamageMult > 3) fail(`workshop: maxed towerDamageMult out of sane range: ${mods.towerDamageMult}`)
+
+  // A maxed-workshop run is a STRICT power-up over NEUTRAL, so replay the same
+  // fair auto-player under maxed mods on a spread of levels (opener, the
+  // tightest live level, and the realm finale) and prove it stays clean.
+  const spreadIds = ['l1', 'w0_20', 'w0_finale']
+  for (const id of spreadIds) {
+    const lvl = LEVELS.find((l) => l.id === id)
+    if (!lvl) { fail(`workshop spread-check: level ${id} missing`); continue }
+    const ownedHere = new Set<string>(['cannon', 'frost', 'flame'])
+    for (const p of LEVELS.slice(0, lvl.index)) if (p.unlockTower) ownedHere.add(p.unlockTower)
+    const allowed = TOWER_ORDER.filter((k) => ownedHere.has(k))
+    const r = autoPlay(lvl, allowed, mods)
+    if (!r.won) fail(`workshop: maxed-modifier run failed to win ${id} (a strict power-up over the already-beatable NEUTRAL run) — wave ${r.wave}, ${r.lives} lives`)
+  }
+
+  // total-to-max sanity: "tens of thousands", paced for most of a 192-level
+  // campaign — not the old ~6.7k (map-21-exhausted) and not an unreachable wall.
+  let totalToMax = 0
+  for (const n of WORKSHOP_NODES) {
+    if (n.currency !== 'coins') continue
+    for (let lvl = 0; lvl < n.maxLevel; lvl++) totalToMax += Math.round(n.baseCost * Math.pow(n.costGrowth, lvl))
+  }
+  if (totalToMax < 30000) fail(`workshop: total-to-max (${totalToMax}) is still too close to the old exhausted-by-map-21 total`)
+  if (totalToMax > 200000) fail(`workshop: total-to-max (${totalToMax}) risks being unreachable across the campaign`)
+  console.log(`  maxed modifiers finite + in-range, spread-check clean, total-to-max-all-coin-nodes = ${totalToMax} coins (was 6,714)`)
+}
 
 // ---------------------------------------------------------------------------
 //  ROGUELIKE ENDLESS — the live-ops spine. Prove: (1) RANKED PURITY — with NO

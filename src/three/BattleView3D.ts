@@ -432,6 +432,8 @@ export class BattleView3D {
 
   // particle system (single pooled Points)
   private particles!: THREE.Points
+  private particlesMat!: THREE.PointsMaterial
+  private particleAlive = 0 // live count, refreshed each frame — drives the #55 density budget
   private pPos!: Float32Array
   private pCol!: Float32Array
   private pVel: Float32Array
@@ -1364,6 +1366,7 @@ export class BattleView3D {
     // toward white. Exempting them keeps every spark vivid + saturated ("units pop").
     const mat = new THREE.PointsMaterial({ size: 0.22, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false })
     this.disposables.push(mat)
+    this.particlesMat = mat
     this.particles = new THREE.Points(geo, mat)
     this.particles.frustumCulled = false
     this.scene.add(this.particles)
@@ -1440,7 +1443,21 @@ export class BattleView3D {
     }
   }
 
+  // CHROMANCER #55 — peak-density readability: a density-aware budget on burst
+  // SIZE (not just the frame's overall opacity, set in updateParticles below).
+  // A single reaction at a quiet moment gets its full, punchy particle count;
+  // when many bursts are already alive on screen (a chained-reaction peak),
+  // each NEW burst is scaled down so the total stays a readable flurry instead
+  // of compositing into an opaque additive wall over the lane.
+  private densityScaleFor(): number {
+    if (this.particleAlive > 550) return 0.3
+    if (this.particleAlive > 320) return 0.55
+    if (this.particleAlive > 160) return 0.8
+    return 1
+  }
+
   private emitParticles(x: number, y: number, z: number, color: number, count: number, speed: number): void {
+    count = Math.max(1, Math.round(count * this.densityScaleFor()))
     const c = new THREE.Color(color)
     for (let n = 0; n < count; n++) {
       const i = this.pHead
@@ -1464,9 +1481,11 @@ export class BattleView3D {
 
   private updateParticles(dt: number): void {
     let any = false
+    let alive = 0
     for (let i = 0; i < MAX_PARTICLES; i++) {
       if (this.pLife[i] <= 0) continue
       any = true
+      alive++
       this.pLife[i] -= dt
       if (this.pLife[i] <= 0) {
         this.pPos[i * 3 + 1] = -999
@@ -1477,6 +1496,14 @@ export class BattleView3D {
       this.pPos[i * 3 + 1] += this.pVel[i * 3 + 1] * dt
       this.pPos[i * 3 + 2] += this.pVel[i * 3 + 2] * dt
     }
+    this.particleAlive = alive
+    // CHROMANCER #55: at high concurrent-particle density, pull the shared
+    // material's opacity down a touch — many additive bursts overlapping at
+    // full opacity compose into a bright wall; slightly dimmer bursts still
+    // read as punchy flashes (untouched at low/normal density — the single-
+    // reaction punch is never nerfed when the board is calm).
+    const densOpacity = alive > 550 ? 0.62 : alive > 320 ? 0.78 : 0.95
+    if (this.particlesMat.opacity !== densOpacity) this.particlesMat.opacity = densOpacity
     if (any) {
       ;(this.particles.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
       // colours are written per-emit; flag them too or every burst renders black

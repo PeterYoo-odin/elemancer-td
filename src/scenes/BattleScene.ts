@@ -529,7 +529,7 @@ export class BattleScene extends Phaser.Scene {
     // the ahead/behind pill (it races the same seed on the same clock as you).
     if (this.ghost) { this.ghost.advance(simDt); this.updateGhostPill() }
 
-    for (const ev of this.sim.drainEvents()) this.handleEvent(ev)
+    this.drainAndMergeEvents()
 
     // wave-start flourish on the prep→active transition
     if (this.sim.state === 'active' && this.lastSimState === 'prep') {
@@ -1809,23 +1809,61 @@ export class BattleScene extends Phaser.Scene {
   // ======================================================================
   //  SIM EVENTS → JUICE
   // ======================================================================
-  private floatAt(simX: number, simY: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm', h = 0.8): void {
+  // CHROMANCER #55 — peak-density readability: default float height raised
+  // (0.8→1.3 world units) so numbers clear the enemy/HP-bar band instead of
+  // spawning right on top of the thing the player is trying to read.
+  private floatAt(simX: number, simY: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm', h = 1.3): void {
     const s = this.view.projectToScreen(simX, simY, h)
     if (s.visible) this.hud.floatText(s.x, s.y, msg, color, size, style)
   }
 
+  // CHROMANCER #55 — MERGE every 'damage' event landing on (roughly) the same
+  // target within a single drained frame into ONE rolling number instead of
+  // spawning one floater per tick. A reaction chain that ticks a target 6x in
+  // one frame used to spawn 6 stacked numbers piling onto the enemy/HP-bar;
+  // now it spawns exactly 1 with the summed total. Bucketed by rounded
+  // sim-pixel position — the same target's hits land at (near-)identical
+  // coordinates within a single frame, distinct targets don't.
+  private drainAndMergeEvents(): void {
+    let dmgBuckets: Map<string, { x: number; y: number; amount: number; combo: number; strong: boolean; weak: boolean }> | null = null
+    for (const ev of this.sim.drainEvents()) {
+      if (ev.t === 'damage') {
+        dmgBuckets ??= new Map()
+        const key = `${Math.round(ev.x / 10)},${Math.round(ev.y / 10)}`
+        const b = dmgBuckets.get(key)
+        if (b) {
+          b.amount += ev.amount
+          b.combo = Math.max(b.combo, ev.combo)
+          if (ev.eff === 'strong') b.strong = true
+          else if (ev.eff === 'weak' && !b.strong) b.weak = true
+        } else {
+          dmgBuckets.set(key, { x: ev.x, y: ev.y, amount: ev.amount, combo: ev.combo, strong: ev.eff === 'strong', weak: ev.eff === 'weak' })
+        }
+        continue
+      }
+      this.handleEvent(ev)
+    }
+    if (!dmgBuckets || dmgBuckets.size === 0) return
+    // dense: many distinct targets hit this same frame, or the floater band is
+    // already near its cap — either way, a small non-crit/non-combo hit adds
+    // clutter without adding information, so it's dropped rather than drawn.
+    const dense = dmgBuckets.size > 4 || this.hud.floatersActive >= this.hud.FLOAT_CAP - 1
+    for (const b of dmgBuckets.values()) this.showDamageFloat(b.x, b.y, b.amount, b.strong, b.weak, b.combo, dense)
+  }
+
+  private showDamageFloat(x: number, y: number, amount: number, strong: boolean, weak: boolean, combo: number, dense: boolean): void {
+    const n = Math.max(1, Math.round(amount))
+    if (dense && !strong && combo === 0 && n < 15) return
+    const color = strong ? 0x8dff4a : weak ? 0xb8b0d0 : 0xffffff
+    const arrow = strong ? ' ↑' : weak ? ' ↓' : ''
+    // numbers GROW with the blow: base by effectiveness, plus combo and raw amount
+    const size = (strong ? 24 : 20) + Math.min(26, combo * 3) + Math.min(10, Math.round(n / 12))
+    const style = strong ? 'crit' : combo > 0 ? 'combo' : 'norm'
+    this.floatAt(x, y, `${n}${arrow}`, color, size, style)
+  }
+
   private handleEvent(ev: SimEvent): void {
     switch (ev.t) {
-      case 'damage': {
-        const n = Math.max(1, Math.round(ev.amount))
-        const color = ev.eff === 'strong' ? 0x8dff4a : ev.eff === 'weak' ? 0xb8b0d0 : 0xffffff
-        const arrow = ev.eff === 'strong' ? ' ↑' : ev.eff === 'weak' ? ' ↓' : ''
-        // numbers GROW with the blow: base by effectiveness, plus combo and raw amount
-        const size = (ev.eff === 'strong' ? 24 : 20) + Math.min(26, ev.combo * 3) + Math.min(10, Math.round(n / 12))
-        const style = ev.eff === 'strong' ? 'crit' : ev.combo > 0 ? 'combo' : 'norm'
-        this.floatAt(ev.x, ev.y, `${n}${arrow}`, color, size, style)
-        break
-      }
       case 'death':
         this.view.fxDeath(ev.x, ev.y, ev.color, ev.boss, ev.kind, ev.elite)
         battleSfx.kill(this.sim.comboCount, ev.boss, panFor(ev.x))

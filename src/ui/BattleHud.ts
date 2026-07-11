@@ -1880,27 +1880,39 @@ export class BattleHud {
   }
 
   // Live count of on-screen floaters so a big AoE can't spawn hundreds of DOM
-  // nodes at once (perf) — new ones past the cap are simply dropped.
+  // nodes at once (perf) — new ones past the cap are simply dropped. CHROMANCER
+  // #55: the cap dropped from 22→6 (8→4 reduced-motion) — at peak reaction
+  // density the caller (BattleScene) also MERGES same-target hits into one
+  // rolling number before ever calling this, so the cap now bounds genuinely
+  // distinct targets rather than a pile of one-per-tick numbers.
   private floatCount = 0
+  readonly FLOAT_CAP = 6
+  readonly FLOAT_CAP_REDUCED = 4
+  /** Current on-screen floater count — callers use this to decide whether the
+   * board is already busy enough to suppress a merely-small hit number. */
+  get floatersActive(): number { return this.floatCount }
   floatText(x: number, y: number, msg: string, color: number, size: number, style: 'norm' | 'combo' | 'crit' = 'norm'): void {
     const reduced = appSettings.reducedMotion()
     // reduce-motion: keep only the meaningful hits (crit / combo). Plain damage
     // numbers arc and fly the most, so they're the ones we suppress — "fewer/none".
     if (reduced && style === 'norm') return
-    if (this.floatCount >= (reduced ? 8 : 22)) return
+    if (this.floatCount >= (reduced ? this.FLOAT_CAP_REDUCED : this.FLOAT_CAP)) return
     this.floatCount++
     // clamp the spawn into the board band so numbers arc off the target without
     // flying up into the top bar / combo chip or landing under the dock + HUD.
     x = Math.max(24, Math.min(window.innerWidth - 24, x))
     y = Math.max(this.fxTop, Math.min(this.fxBottom, y))
+    // shrunk + faster-fading than pre-#55 so a busy wave reads as quick, small
+    // callouts rather than lingering numbers stacking over the enemies/lane.
+    const shrink = style === 'norm' ? 0.78 : 0.88
     const d = el('div', 'eld-float' + (style === 'crit' ? ' crit' : ''), msg)
     d.style.left = `${x}px`
     d.style.top = `${y}px`
-    d.style.fontSize = `${size}px`
+    d.style.fontSize = `${Math.round(size * shrink)}px`
     d.style.color = hex(color)
     d.style.setProperty('--dx', `${Math.round((Math.random() - 0.5) * 56)}px`)
     const anim = style === 'combo' ? 'eldcombo' : style === 'crit' ? 'eldcrit' : 'eldfloat'
-    const dur = style === 'norm' ? 0.9 : 1
+    const dur = style === 'norm' ? 0.6 : 0.68
     d.style.animation = `${anim} ${dur}s ease-out forwards`
     this.fxLayer.append(d)
     window.setTimeout(() => { d.remove(); this.floatCount-- }, dur * 1000 + 60)
@@ -1954,21 +1966,37 @@ export class BattleHud {
   // ELEMENTAL REACTION slam — its own channel, independent of the center-banner
   // queue (reactions are frequent + fast). Up to TWO can coexist, the second nudged
   // up ~8% so a boss-wave combo can slam two reactions ~0.4s apart without one
-  // erasing the other; a third rolls the oldest off.
-  private reactEls: HTMLElement[] = []
+  // erasing the other; a third rolls the oldest off. Peak-density readability
+  // (CHROMANCER #55): a repeat of the SAME name while it's still on screen does
+  // NOT stack a second banner — it bumps a "×N" suffix on the existing one and
+  // resets its timer, so a chain of five SHATTERs reads as one "SHATTER ×5"
+  // instead of five overlapping words walling off the lane.
+  private reactEls: Array<{ root: HTMLElement; nameEl: HTMLElement; name: string; count: number; timer: number }> = []
   reactionCallout(name: string, color: number, sub = 'ELEMENTAL REACTION'): void {
-    if (this.reactEls.length >= 2) this.reactEls.shift()?.remove()
-    const d = el('div', 'eld-react', name)
+    const top = this.reactEls[this.reactEls.length - 1]
+    if (top && top.name === name) {
+      top.count++
+      top.nameEl.textContent = `${name} ×${top.count}`
+      window.clearTimeout(top.timer)
+      top.timer = window.setTimeout(() => this.removeReact(top), 1050)
+      return
+    }
+    if (this.reactEls.length >= 2) this.removeReact(this.reactEls[0])
+    const d = el('div', 'eld-react')
+    const nameEl = el('span', '', name)
     d.style.color = hex(color)
     if (this.reactEls.length === 1) d.style.top = '19%' // second slot sits above the first
-    d.append(el('span', 'rx-sub', sub))
+    d.append(nameEl, el('span', 'rx-sub', sub))
     this.fxLayer.append(d)
-    this.reactEls.push(d)
-    window.setTimeout(() => {
-      const i = this.reactEls.indexOf(d)
-      if (i >= 0) this.reactEls.splice(i, 1)
-      d.remove()
-    }, 1050)
+    const entry = { root: d, nameEl, name, count: 1, timer: 0 }
+    entry.timer = window.setTimeout(() => this.removeReact(entry), 1050)
+    this.reactEls.push(entry)
+  }
+
+  private removeReact(entry: { root: HTMLElement }): void {
+    const i = this.reactEls.findIndex((r) => r === entry)
+    if (i >= 0) this.reactEls.splice(i, 1)
+    entry.root.remove()
   }
 
   // -------- center-banner queue (wave banners + generic notifications) --------
@@ -2030,7 +2058,10 @@ export class BattleHud {
   }
 
   flash(color: number, alpha = 0.45, dur = 240): void {
-    const d = el('div', 'eld-float')
+    // its own class (not '.eld-float' — that's the damage-number floaters' cap-
+    // counted selector; this full-screen tint used to share the name, which made
+    // it invisible to floatCount but ALSO polluted any '.eld-float' query/telemetry)
+    const d = el('div', 'eld-flash')
     d.style.cssText = `position:absolute;inset:0;transform:none;background:${hex(color)};opacity:${alpha};transition:opacity ${dur}ms ease-out;`
     this.fxLayer.append(d)
     // next frame → fade to 0
