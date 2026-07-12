@@ -128,7 +128,9 @@ export class RankedPage {
 
   // --- seed + period for the active mode ---
   private seedFor(mode: RankedMode): { seed: number | undefined; code: string | null; period: number } {
-    if (mode === 'daily') { const t = todaysDaily(); return { seed: t.seed, code: t.code, period: t.day } }
+    // PathForge shares the DAILY seed pattern — everyone forges the same maze
+    // puzzle that UTC day (see rankedPeriod()) — but is its own board (mode).
+    if (mode === 'daily' || mode === 'pathforge') { const t = todaysDaily(); return { seed: t.seed, code: t.code, period: t.day } }
     if (mode === 'weekly') { const w = weekIndexFor(); const s = weeklyRankedSeed(w); return { seed: s, code: seedToCode(s), period: w } }
     return { seed: undefined, code: null, period: 0 } // endless: a per-player seed
   }
@@ -143,6 +145,7 @@ export class RankedPage {
         <button class="erk-tab" data-tab="daily">DAILY</button>
         <button class="erk-tab" data-tab="weekly">WEEKLY</button>
         <button class="erk-tab" data-tab="endless">ENDLESS</button>
+        <button class="erk-tab" data-tab="pathforge">PATHFORGE</button>
       </div>
       <div class="erk-body"><div class="erk-inner" data-inner></div></div>`
     this.root.querySelector('[data-back]')!.addEventListener('click', () => this.leave())
@@ -174,10 +177,11 @@ export class RankedPage {
 
     const kick = mode === 'daily' ? "TODAY'S SEED · EVERYONE, EVERYWHERE"
       : mode === 'weekly' ? "THIS WEEK'S SEED · SHARED BY ALL"
+      : mode === 'pathforge' ? "TODAY'S MAZE · SAME PUZZLE FOR EVERYONE"
       : 'ENDLESS · YOUR OWN SEED, ALL-TIME HIGH SCORES'
     const seedBlock = code
       ? `<div class="erk-code">${esc(code.split('-').join(' · '))}</div>
-         <div class="erk-sub">Same waves, same rolls — the only variable is you.</div>`
+         <div class="erk-sub">${mode === 'pathforge' ? 'Paint the same open grid everyone forges today — the replay is re-verified.' : 'Same waves, same rolls — the only variable is you.'}</div>`
       : `<div class="erk-code" style="font-size:22px">ALL-TIME</div>
          <div class="erk-sub">A fresh seed each run. Climb the endless ladder — every score re-run-verified.</div>`
 
@@ -186,7 +190,7 @@ export class RankedPage {
         <div class="erk-kick">${esc(kick)}</div>
         ${seedBlock}
         <div class="erk-actions">
-          <button class="erk-play" data-play>${iconMarkup('storm', { color: '#143007' })}${mode === 'endless' ? 'Play Endless' : "Play this seed"}</button>
+          <button class="erk-play" data-play>${iconMarkup('storm', { color: '#143007' })}${mode === 'endless' ? 'Play Endless' : mode === 'pathforge' ? 'Open the Forge' : 'Play this seed'}</button>
           ${code ? `<button class="erk-copy" data-copy>${iconMarkup('link', { size: 14 })}<span data-copylabel>Copy link</span></button>` : ''}
         </div>
       </div>
@@ -199,7 +203,7 @@ export class RankedPage {
         <div class="pb">${mine ? `${mine.score.toLocaleString()}<br><span style="opacity:.7;font-size:10px">wave ${mine.wave}</span>` : ''}</div>
       </div>
 
-      <div class="erk-h2"><span>TOP RUNS${mode === 'endless' ? '' : ' · THIS ' + (mode === 'daily' ? 'DAY' : 'WEEK')}</span></div>
+      <div class="erk-h2"><span>TOP RUNS${mode === 'endless' ? '' : ' · THIS ' + (mode === 'daily' || mode === 'pathforge' ? 'DAY' : 'WEEK')}</span></div>
       <div data-board><div class="erk-empty connecting">${rankedConfigured() ? 'Loading the board…' : 'Connecting to ranked servers…'}</div></div>
 
       <div class="erk-h2"><span>YOUR PB HISTORY</span></div>
@@ -300,7 +304,7 @@ export class RankedPage {
 export { registerHandle, localHandle }
 
 function labelForMode(mode: RankedMode): string {
-  return mode === 'daily' ? 'today' : mode === 'weekly' ? 'this week' : 'all-time'
+  return mode === 'daily' ? 'today' : mode === 'weekly' ? 'this week' : mode === 'pathforge' ? "today's maze" : 'all-time'
 }
 
 function boardRow(r: BoardRow, i: number, mode: RankedMode): string {
@@ -327,7 +331,7 @@ function historyRow(h: RankedLocalBest, _mode: RankedMode): string {
 }
 
 function periodLabel(mode: RankedMode, period: number): string {
-  if (mode === 'daily') {
+  if (mode === 'daily' || mode === 'pathforge') {
     const ms = period * 86_400_000
     return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
   }

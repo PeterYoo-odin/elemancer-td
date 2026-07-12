@@ -18,30 +18,43 @@ import { NEUTRAL } from './workshop'
 import { LEVELS, type LevelDef } from './levels'
 import { RANKED_WYRM_LEVEL } from './wyrms'
 import { canonicalSeed, dailySeed, utcDayIndex } from './seedcode'
+import { pathforgeLayout, pathforgeLevel, validateMaze, pfKey, type PFCell } from './pathforge'
 import type { TowerKind } from './towers'
 import type { SpellKey } from './spells'
 
 // ---------------------------------------------------------------------------
-//  Version gate — BUMP whenever any sim math changes. A submitted log carries
-//  the version it was recorded under; the server rejects logs whose version no
-//  longer reproduces (an old log can't be re-run by new sim code). This keeps
-//  the board honest across balance patches instead of silently mis-verifying.
+//  Version gate — BUMP whenever any sim math changes OR the record shape
+//  changes. A submitted log carries the version it was recorded under; the
+//  server rejects logs whose version no longer reproduces (an old log can't be
+//  re-run by new sim code, or may be missing a field the new replay needs).
+//  This keeps the board honest across balance patches instead of silently
+//  mis-verifying.
 // ---------------------------------------------------------------------------
 // v2: the Prism Wellspring — leak damage is now strength-scaled per archetype
 // (was flat 1 / boss 5), so run outcomes shift; bump to invalidate old replays.
 // v3: difficulty overhaul (balance pass 19) — the endless ramp now ACCELERATES
 // (quadratic HP + tougher bosses) and the campaign curve was retuned, so endless
 // run outcomes shift; bump to invalidate old replays under the old ramp.
-export const SIM_VERSION = 4
+// v4: (baseline before PathForge joined ranked)
+// v5: PathForge joins the ranked spine — RankedRunRecord gained the optional
+// `route` field the server needs to rebuild a player-built maze's LevelDef.
+// Old records never carry a route, so bump to force a clean re-record instead
+// of silently replaying a pathforge-shaped record under the old field set.
+export const SIM_VERSION = 5
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift
-// ranked strength). Endless/daily/weekly all share this normalized envelope.
+// ranked strength). Endless/daily/weekly/pathforge all share this normalized
+// envelope.
 export const RANKED_HERO_LEVEL = 5
 export const ENDLESS_START_GOLD = 300
 export const ENDLESS_START_LIVES = 20
 
-export type RankedMode = 'daily' | 'weekly' | 'endless'
+// 'pathforge' = the player-built-maze board (Chromancer#56): same normalized
+// envelope + replay-verify path as every other mode, just a different LevelDef
+// (baked from the player's committed, server-revalidated route instead of the
+// fixed endless arena).
+export type RankedMode = 'daily' | 'weekly' | 'endless' | 'pathforge'
 
 /** A ranked loadout entry as DECLARED by the client. Only the CHOICE of hero +
  *  bonded wyrm is player-supplied; the server re-normalizes every level, so a
@@ -87,10 +100,22 @@ export function normalizeRankedParty(party: readonly DeclaredHero[] | undefined)
 
 /** Build the canonical ranked SimConfig. `seed` is the FINAL seed the sim runs
  *  (already in the shareable code space); no re-folding here so client + server
- *  agree exactly. mode only affects which seed you feed in — the arena is one. */
-export function rankedConfig(_mode: RankedMode, seed: number, party: readonly DeclaredHero[] | undefined): SimConfig {
+ *  agree exactly. Every mode but 'pathforge' shares one fixed arena; pathforge
+ *  bakes the COMMITTED route (already server-revalidated by the caller — see
+ *  verifyRun) into its own LevelDef via pathforgeLevel(), same as every other
+ *  ranked arena is a pure function of (mode, seed, party). `route` is REQUIRED
+ *  for mode === 'pathforge' and ignored otherwise. */
+export function rankedConfig(
+  mode: RankedMode,
+  seed: number,
+  party: readonly DeclaredHero[] | undefined,
+  route?: readonly PFCell[],
+): SimConfig {
+  const level = mode === 'pathforge' && route && route.length >= 2
+    ? pathforgeLevel(route as PFCell[])
+    : rankedLevelDef()
   return {
-    level: rankedLevelDef(),
+    level,
     mods: { ...NEUTRAL }, // ranked is provably fair: no meta modifiers, ever
     seed: seed >>> 0,
     endless: true, // ranked reuses the endless wave curve; rogue layer stays OFF
@@ -116,10 +141,12 @@ export function weeklyRankedSeed(week: number): number {
   return canonicalSeed((Math.imul(week, 40503) ^ 0x51ed270b) >>> 0)
 }
 
-/** The board-partition period for a run: UTC day (daily), UTC week (weekly), or
- *  0 (endless — an all-time high-score board across per-run seeds). */
+/** The board-partition period for a run: UTC day (daily; pathforge reuses the
+ *  same UTC-day bucket — everyone forges the SAME maze puzzle that day), UTC
+ *  week (weekly), or 0 (endless — an all-time high-score board across per-run
+ *  seeds). */
 export function rankedPeriod(mode: RankedMode, nowMs: number = Date.now()): number {
-  if (mode === 'daily') return utcDayIndex(nowMs)
+  if (mode === 'daily' || mode === 'pathforge') return utcDayIndex(nowMs)
   if (mode === 'weekly') return weekIndexFor(nowMs)
   return 0
 }
@@ -162,7 +189,10 @@ export interface RankedLog {
 }
 
 /** The full submittable run record — everything the server needs to re-run and
- *  confirm, and nothing it must trust: score/wave are CLAIMS, verified by replay. */
+ *  confirm, and nothing it must trust: score/wave are CLAIMS, verified by replay.
+ *  `route` is the PathForge run's committed spawn→base road (absent/ignored for
+ *  every other mode) — a CLAIM too: verifyRun re-validates it with the same
+ *  validateMaze() the client's editor enforces before trusting it. */
 export interface RankedRunRecord {
   v: number // SIM_VERSION the log was recorded under
   mode: RankedMode
@@ -172,6 +202,7 @@ export interface RankedRunRecord {
   score: number // CLAIMED score
   wave: number // CLAIMED wave reached (waveIndex + 1)
   log: RankedLog
+  route?: PFCell[] // PathForge only: the committed maze route
 }
 
 /** Records a live ranked run into a replayable log. Call one method per
@@ -237,9 +268,15 @@ export class RunRecorder {
     return { c: this.c.slice(), d: this.d.slice() }
   }
 
-  /** Assemble the full submittable record from the finished sim's own numbers. */
-  record(mode: RankedMode, seed: number, period: number, party: DeclaredHero[], score: number, wave: number): RankedRunRecord {
-    return { v: SIM_VERSION, mode, seed: seed >>> 0, period, party: party.slice(), score, wave, log: this.log() }
+  /** Assemble the full submittable record from the finished sim's own numbers.
+   *  `route` is required (and only meaningful) for mode === 'pathforge'. */
+  record(
+    mode: RankedMode, seed: number, period: number, party: DeclaredHero[], score: number, wave: number,
+    route?: readonly PFCell[],
+  ): RankedRunRecord {
+    const rec: RankedRunRecord = { v: SIM_VERSION, mode, seed: seed >>> 0, period, party: party.slice(), score, wave, log: this.log() }
+    if (route && route.length) rec.route = route.map(([c, r]) => [c, r] as PFCell)
+    return rec
   }
 }
 
@@ -306,7 +343,7 @@ export interface ReplayResult {
 /** Re-run a recorded log and read the final score + wave. Deterministic: the
  *  same record always yields the same numbers on any V8 runtime. */
 export function replayRun(rec: RankedRunRecord): ReplayResult {
-  const sim = new Sim(rankedConfig(rec.mode, rec.seed, rec.party))
+  const sim = new Sim(rankedConfig(rec.mode, rec.seed, rec.party, rec.route))
   const cmds = rec.log?.c ?? []
   const drafts = rec.log?.d ?? []
   let ci = 0
@@ -351,8 +388,11 @@ export class GhostRunner {
   private tick = 0
   private acc = 0
 
-  constructor(mode: RankedMode, seed: number, party: readonly DeclaredHero[] | undefined, log: RankedLog) {
-    this.sim = new Sim(rankedConfig(mode, seed, party))
+  constructor(
+    mode: RankedMode, seed: number, party: readonly DeclaredHero[] | undefined, log: RankedLog,
+    route?: readonly PFCell[],
+  ) {
+    this.sim = new Sim(rankedConfig(mode, seed, party, route))
     this.cmds = log?.c ?? []
     this.drafts = log?.d ?? []
   }
@@ -401,9 +441,39 @@ export interface VerifyResult {
   fingerprint: string
 }
 
+/** PATHFORGE anti-exploit re-check: NEVER trust a client-submitted route. Treat
+ *  the submitted cells as the painted road and re-derive spawn/base from the
+ *  SEED alone (never from the client), then re-run the exact same
+ *  validateMaze() the editor enforces live. The recomputed canonical route must
+ *  match the submission cell-for-cell — any mismatch (disconnected road, a
+ *  route that isn't the true BFS-shortest one for its own cell set, wrong
+ *  spawn/base) is rejected. Returns the trusted route to replay with, or null. */
+function revalidatedPathforgeRoute(seed: number, submitted: unknown): PFCell[] | null {
+  if (!Array.isArray(submitted) || submitted.length < 2) return null
+  const route: PFCell[] = []
+  for (const cell of submitted) {
+    if (!Array.isArray(cell) || cell.length !== 2) return null
+    const [c, r] = cell
+    if (!Number.isInteger(c) || !Number.isInteger(r)) return null
+    route.push([c, r])
+  }
+  const { spawn, base } = pathforgeLayout(seed)
+  const road = new Set<number>(route.map(([c, r]) => pfKey(c, r)))
+  const mv = validateMaze(road, spawn, base)
+  if (!mv.ok || !mv.route) return null
+  if (mv.route.length !== route.length) return null
+  for (let i = 0; i < route.length; i++) {
+    if (mv.route[i][0] !== route[i][0] || mv.route[i][1] !== route[i][1]) return null
+  }
+  return mv.route
+}
+
 /** THE MOAT. Re-run a submitted record and accept it ONLY if the replay's
- *  integer score AND wave match the claim under the current sim version. This is
- *  what the server calls before a run is allowed onto the board. */
+ *  integer score AND wave match the claim under the current sim version. This
+ *  is what the server calls before a run is allowed onto the board — the SAME
+ *  single code path for every mode, including PathForge (no parallel verifier:
+ *  a maze run is just a record whose LevelDef comes from a re-validated route
+ *  instead of the fixed endless arena; everything downstream is identical). */
 export function verifyRun(rec: RankedRunRecord): VerifyResult {
   if (!rec || typeof rec !== 'object') {
     return { ok: false, score: 0, wave: 0, reason: 'invalid', fingerprint: '' }
@@ -414,9 +484,18 @@ export function verifyRun(rec: RankedRunRecord): VerifyResult {
   if (!Number.isFinite(rec.seed) || !Number.isFinite(rec.score) || !Number.isFinite(rec.wave)) {
     return { ok: false, score: 0, wave: 0, reason: 'invalid', fingerprint: '' }
   }
+  let route: PFCell[] | undefined
+  if (rec.mode === 'pathforge') {
+    // THE ANTI-EXPLOIT HARD RULE, RE-RUN SERVER-SIDE: a client-submitted maze
+    // is never trusted as-is — only the seed-derived spawn/base + the same
+    // validateMaze() the live editor enforces decide whether a route is legal.
+    const revalidated = revalidatedPathforgeRoute(rec.seed, rec.route)
+    if (!revalidated) return { ok: false, score: 0, wave: 0, reason: 'invalid', fingerprint: '' }
+    route = revalidated
+  }
   let res: ReplayResult
   try {
-    res = replayRun(rec)
+    res = replayRun(route ? { ...rec, route } : rec)
   } catch {
     return { ok: false, score: 0, wave: 0, reason: 'invalid', fingerprint: '' }
   }

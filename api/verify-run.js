@@ -6243,9 +6243,90 @@ var WORDS_B = [
   "MOUSE"
 ];
 var SEED_SPACE = WORDS_A.length * WORDS_B.length * 100;
+function canonicalSeed(n) {
+  return ((n >>> 0) % SEED_SPACE + SEED_SPACE) % SEED_SPACE;
+}
+
+// src/game/pathforge.ts
+var PF_COLS = GRID_COLS;
+var PF_ROWS = GRID_ROWS;
+var pfKey = (col, row) => row * PF_COLS + col;
+var pfCol = (k2) => k2 % PF_COLS;
+var pfRow = (k2) => Math.floor(k2 / PF_COLS);
+var pfInBounds = (col, row) => col >= 0 && col < PF_COLS && row >= 0 && row < PF_ROWS;
+function pathforgeLayout(seed) {
+  const s = canonicalSeed(seed) >>> 0;
+  const spawnRow = s % PF_ROWS;
+  const baseRow = Math.floor(s / PF_ROWS) % PF_ROWS;
+  return { spawn: [0, spawnRow], base: [PF_COLS - 1, baseRow] };
+}
+var PF_DIRS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+function bfsRoute(road, spawn, base) {
+  const startK = pfKey(spawn[0], spawn[1]);
+  const goalK = pfKey(base[0], base[1]);
+  if (!road.has(startK) || !road.has(goalK)) return null;
+  if (startK === goalK) return [[spawn[0], spawn[1]]];
+  const prev = /* @__PURE__ */ new Map();
+  const seen = /* @__PURE__ */ new Set([startK]);
+  let frontier = [startK];
+  while (frontier.length) {
+    const next = [];
+    for (const k2 of frontier) {
+      const c = pfCol(k2), r = pfRow(k2);
+      for (const [dc, dr] of PF_DIRS) {
+        const nc = c + dc, nr = r + dr;
+        if (!pfInBounds(nc, nr)) continue;
+        const nk = pfKey(nc, nr);
+        if (!road.has(nk) || seen.has(nk)) continue;
+        seen.add(nk);
+        prev.set(nk, k2);
+        next.push(nk);
+      }
+    }
+    if (seen.has(goalK)) break;
+    frontier = next;
+  }
+  if (!seen.has(goalK)) return null;
+  const out = [];
+  let cur = goalK;
+  while (cur !== startK) {
+    out.push([pfCol(cur), pfRow(cur)]);
+    cur = prev.get(cur);
+  }
+  out.push([spawn[0], spawn[1]]);
+  out.reverse();
+  return out;
+}
+function validateMaze(road, spawn, base) {
+  const startK = pfKey(spawn[0], spawn[1]);
+  const goalK = pfKey(base[0], base[1]);
+  if (!road.has(startK) || !road.has(goalK)) {
+    return { ok: false, route: null, reason: "Paint road on both the Portal and the Wellspring." };
+  }
+  const route = bfsRoute(road, spawn, base);
+  if (!route) return { ok: false, route: null, reason: "Connect the road \u2014 enemies have no way through." };
+  return { ok: true, route, reason: "" };
+}
+function pathforgeLevel(route) {
+  const palette = (LEVELS[3] ?? LEVELS[0]).palette;
+  return {
+    id: "pathforge",
+    index: 98,
+    name: "Pathforge",
+    blurb: "Your maze. Hold the line.",
+    lanes: [1, 3, 5, 7, 9],
+    path: route.map(([c, r]) => [c, r]),
+    openBuild: true,
+    startGold: 300,
+    startLives: 20,
+    baseCoins: 0,
+    palette,
+    waves: []
+  };
+}
 
 // src/game/ranked.ts
-var SIM_VERSION = 4;
+var SIM_VERSION = 5;
 var RANKED_HERO_LEVEL = 5;
 var ENDLESS_START_GOLD = 300;
 var ENDLESS_START_LIVES = 20;
@@ -6278,9 +6359,10 @@ function normalizeRankedParty(party) {
   }
   return out;
 }
-function rankedConfig(_mode, seed, party) {
+function rankedConfig(mode, seed, party, route) {
+  const level = mode === "pathforge" && route && route.length >= 2 ? pathforgeLevel(route) : rankedLevelDef();
   return {
-    level: rankedLevelDef(),
+    level,
     mods: { ...NEUTRAL },
     // ranked is provably fair: no meta modifiers, ever
     seed: seed >>> 0,
@@ -6346,7 +6428,7 @@ function applyCmd(sim, cmd) {
   }
 }
 function replayRun(rec) {
-  const sim = new Sim(rankedConfig(rec.mode, rec.seed, rec.party));
+  const sim = new Sim(rankedConfig(rec.mode, rec.seed, rec.party, rec.route));
   const cmds = rec.log?.c ?? [];
   const drafts = rec.log?.d ?? [];
   let ci = 0;
@@ -6372,6 +6454,25 @@ function replayRun(rec) {
     fingerprint: `${sim.state}|${sim.waveIndex}|${sim.gold}|${sim.lives}|${sim.runStats.kills}|${sim.runStats.reactions}`
   };
 }
+function revalidatedPathforgeRoute(seed, submitted) {
+  if (!Array.isArray(submitted) || submitted.length < 2) return null;
+  const route = [];
+  for (const cell of submitted) {
+    if (!Array.isArray(cell) || cell.length !== 2) return null;
+    const [c, r] = cell;
+    if (!Number.isInteger(c) || !Number.isInteger(r)) return null;
+    route.push([c, r]);
+  }
+  const { spawn, base } = pathforgeLayout(seed);
+  const road = new Set(route.map(([c, r]) => pfKey(c, r)));
+  const mv = validateMaze(road, spawn, base);
+  if (!mv.ok || !mv.route) return null;
+  if (mv.route.length !== route.length) return null;
+  for (let i = 0; i < route.length; i++) {
+    if (mv.route[i][0] !== route[i][0] || mv.route[i][1] !== route[i][1]) return null;
+  }
+  return mv.route;
+}
 function verifyRun(rec) {
   if (!rec || typeof rec !== "object") {
     return { ok: false, score: 0, wave: 0, reason: "invalid", fingerprint: "" };
@@ -6382,9 +6483,15 @@ function verifyRun(rec) {
   if (!Number.isFinite(rec.seed) || !Number.isFinite(rec.score) || !Number.isFinite(rec.wave)) {
     return { ok: false, score: 0, wave: 0, reason: "invalid", fingerprint: "" };
   }
+  let route;
+  if (rec.mode === "pathforge") {
+    const revalidated = revalidatedPathforgeRoute(rec.seed, rec.route);
+    if (!revalidated) return { ok: false, score: 0, wave: 0, reason: "invalid", fingerprint: "" };
+    route = revalidated;
+  }
   let res;
   try {
-    res = replayRun(rec);
+    res = replayRun(route ? { ...rec, route } : rec);
   } catch {
     return { ok: false, score: 0, wave: 0, reason: "invalid", fingerprint: "" };
   }
@@ -6542,7 +6649,7 @@ async function handler(req, res) {
         await sbFetch("run_inputs?on_conflict=run_id", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates" },
-          body: JSON.stringify({ run_id: runId, log: rec.log, party: rec.party })
+          body: JSON.stringify({ run_id: runId, log: rec.log, party: rec.party, route: rec.route ?? null })
         });
       }
     }

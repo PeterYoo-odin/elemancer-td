@@ -75,11 +75,14 @@ export default async function handler(req: any, res: any): Promise<void> {
         runId = (Array.isArray(rows) ? rows[0]?.id : rows?.id) || runId
       }
       // 4) store the replay log (ghost source). run_id is the PK → on_conflict ok.
+      //    `route` is PathForge-only (null for every other mode) — safe to store
+      //    as submitted: verifyRun() above already rejected any run whose route
+      //    didn't match the server's own re-derived canonical route exactly.
       if (runId) {
         await sbFetch('run_inputs?on_conflict=run_id', {
           method: 'POST',
           headers: { Prefer: 'resolution=merge-duplicates' },
-          body: JSON.stringify({ run_id: runId, log: rec.log, party: rec.party }),
+          body: JSON.stringify({ run_id: runId, log: rec.log, party: rec.party, route: rec.route ?? null }),
         })
       }
     }

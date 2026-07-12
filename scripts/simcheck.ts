@@ -32,7 +32,7 @@ import {
 import type { TowerKind } from '../src/game/towers'
 import type { SpellKey } from '../src/game/spells'
 import {
-  PF_COLS, PF_ROWS, pfKey, validateMaze, pathforgeLevel, type PFCell,
+  PF_COLS, PF_ROWS, pfKey, pathforgeLayout, validateMaze, pathforgeLevel, type PFCell,
 } from '../src/game/pathforge'
 
 // Stress runs are DECOUPLED from the campaign ladder: we build a bespoke max-size
@@ -1024,6 +1024,107 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
   if (logHash(run.rec) === logHash(trimmed)) fail('logHash collides across different logs')
 
   console.log(`  ranked replay ✓ — recorded ${run.rec.log.c.length} cmds + ${run.rec.log.d.length} drafts, re-ran to score ${run.score}/wave ${run.wave}; tamper + version + drop all rejected`)
+}
+
+// ---------------------------------------------------------------------------
+// (7) PATHFORGE JOINS THE RANKED SPINE (Chromancer#56) — THE MOAT, maze edition.
+// Proves the SAME single verification path (verifyRun/replayRun) that just proved
+// itself above for 'endless' also holds for 'pathforge': (a) record → replay →
+// IDENTICAL score/wave; (b) an honest pathforge record is ACCEPTED; (c) the
+// server-side maze re-validation REJECTS a route that doesn't reach the
+// seed-derived spawn/base (the anti-trap rule, re-run server-side, never
+// trusting the client's claimed route); (d) a tampered/reordered route is
+// REJECTED even when every individual cell is legal; (e) a tampered score is
+// still REJECTED exactly like every other mode.
+// ---------------------------------------------------------------------------
+console.log('\npathforge ranked replay — server-side re-validate + rebuild + replay (Chromancer#56)…')
+{
+  const seed = codeToSeed('AZURE-KOI-07') ?? 12345
+  const { spawn, base } = pathforgeLayout(seed)
+  // An L-corridor that ALWAYS connects this seed's spawn/base: spawn's full row,
+  // then base's column from spawn's row down/up to base's row (spawn is col 0,
+  // base is col COLS-1 for every seed — see pathforgeLayout).
+  const road = new Set<number>()
+  for (let c = 0; c < PF_COLS; c++) road.add(pfKey(c, spawn[1]))
+  const rLo = Math.min(spawn[1], base[1]), rHi = Math.max(spawn[1], base[1])
+  for (let r = rLo; r <= rHi; r++) road.add(pfKey(base[0], r))
+  const mv = validateMaze(road, spawn, base)
+  if (!mv.ok || !mv.route) {
+    fail('pathforge ranked test: the constructed L-corridor maze was unexpectedly invalid')
+  } else {
+  const route = mv.route
+
+  function drivePathforge(seed: number, route: PFCell[]): { rec: RankedRunRecord; score: number; wave: number; state: string } {
+    const party: DeclaredHero[] = [{ heroId: 'ember' }, { heroId: 'glacia' }, { heroId: 'sylvan' }]
+    const sim = new Sim(rankedConfig('pathforge', seed, party, route))
+    const rec = new RunRecorder()
+    const cells = sim.buildCells()
+    const towerIds: number[] = []
+    const TOWER_CAP = 3
+    let tick = 0
+    while (sim.state !== 'won' && sim.state !== 'lost' && tick <= REPLAY_TICK_CAP) {
+      if (sim.state === 'draft') {
+        const idx = sim.draftsTaken % Math.max(1, sim.draftOffer.length)
+        if (sim.chooseDraft(idx)) rec.draft(idx)
+        else sim.chooseDraft(0)
+        continue
+      }
+      const clock = sim.clock
+      // build a thin, frozen board (wave 10 and on) — the endless curve overruns it,
+      // so this proves replay-to-a-NATURAL-death, not replay-to-cap.
+      const building = sim.waveIndex < 10
+      if (building && tick % 24 === 12 && towerIds.length < TOWER_CAP && towerIds.length < cells.length) {
+        const cell = cells[towerIds.length]
+        const kind: TowerKind = (['cannon', 'frost', 'flame'] as TowerKind[])[towerIds.length % 3]
+        const t = sim.placeTower(kind, cell.col, cell.row)
+        if (t) { rec.place(clock, kind, cell.col, cell.row); towerIds.push(t.id) }
+      }
+      if (sim.state === 'prep' && tick % 41 === 7) { sim.startWave(); rec.startWave(clock) }
+      sim.step()
+      tick++
+    }
+    return { rec: rec.record('pathforge', seed, 0, party, sim.score(), sim.waveIndex + 1, route), score: sim.score(), wave: sim.waveIndex + 1, state: sim.state }
+  }
+
+  const run = drivePathforge(seed, route)
+  if (run.state !== 'lost') fail(`pathforge ranked driver did NOT die naturally (ended '${run.state}' at wave ${run.wave})`)
+  if (!run.rec.route || run.rec.route.length !== route.length) fail('pathforge ranked record did not carry the committed route')
+
+  // POSITIVE: replay reproduces the claimed score + wave EXACTLY, twice (determinism)
+  const r1 = replayRun(run.rec)
+  if (r1.score !== run.score || r1.wave !== run.wave) fail(`pathforge ranked replay mismatch: replay ${r1.score}/${r1.wave} vs live ${run.score}/${run.wave}`)
+  const r2 = replayRun(run.rec)
+  if (r1.fingerprint !== r2.fingerprint) fail(`pathforge ranked replay non-deterministic: ${r1.fingerprint} vs ${r2.fingerprint}`)
+
+  // GATE: an honest pathforge record is ACCEPTED through the SAME verifyRun() —
+  // no second/parallel verification path for this mode.
+  const vOk = verifyRun(run.rec)
+  if (!vOk.ok || vOk.reason !== '') fail(`verifyRun rejected an HONEST pathforge run (reason '${vOk.reason}')`)
+
+  // NEGATIVE (anti-trap, server-side): a route walled off from the seed's base
+  // (never reaches it) is REJECTED — the client's claimed route is NEVER trusted.
+  const walledRoute: PFCell[] = route.slice(0, Math.max(2, Math.floor(route.length / 2)))
+  const vWalled = verifyRun({ ...run.rec, route: walledRoute })
+  if (vWalled.ok || vWalled.reason !== 'invalid') fail(`verifyRun ACCEPTED a route that never reaches the base (reason '${vWalled.reason}')`)
+
+  // NEGATIVE: a route reordered/reversed (every cell individually legal, but not
+  // the canonical BFS-shortest order for its own cell set) is REJECTED.
+  const reversedRoute = route.slice().reverse()
+  if (JSON.stringify(reversedRoute) !== JSON.stringify(route)) {
+    const vRev = verifyRun({ ...run.rec, route: reversedRoute })
+    if (vRev.ok || vRev.reason !== 'invalid') fail(`verifyRun ACCEPTED a reordered route (reason '${vRev.reason}')`)
+  }
+
+  // NEGATIVE: a tampered claimed score is REJECTED, exactly like every other mode.
+  const vHi = verifyRun({ ...run.rec, score: run.rec.score + 1_000_000 })
+  if (vHi.ok || vHi.reason !== 'mismatch') fail(`verifyRun ACCEPTED a tampered pathforge score (reason '${vHi.reason}')`)
+
+  // VERSION GATE still applies to pathforge records.
+  const vVer = verifyRun({ ...run.rec, v: SIM_VERSION + 1 })
+  if (vVer.ok || vVer.reason !== 'version') fail(`verifyRun ACCEPTED a stale sim_version pathforge record (reason '${vVer.reason}')`)
+
+  console.log(`  pathforge ranked replay ✓ — mode wired into verifyRun/replayRun, route ${route.length} tiles, re-ran to score ${run.score}/wave ${run.wave}; walled/reordered/tampered/version all rejected`)
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@
 // ============================================================================
 
 import type { RankedMode, RankedRunRecord, RankedLog, DeclaredHero } from './ranked'
+import type { PFCell } from './pathforge'
 
 const URL = (import.meta.env.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
 const ANON = (import.meta.env.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
@@ -182,13 +183,18 @@ export async function fetchRank(mode: RankedMode, period: number, score: number)
   }
 }
 
-/** Download a run's replay log for GHOST racing. null when unavailable. */
-export async function fetchGhost(runId: string): Promise<{ log: RankedLog; party: DeclaredHero[]; seed: number; mode: RankedMode } | null> {
-  const rows = await sbGet(`run_inputs?select=log,party,runs(seed,mode)&run_id=eq.${encodeURIComponent(runId)}`)
+/** Download a run's replay log for GHOST racing. null when unavailable. `route`
+ *  is present only for PathForge runs — the ghost's own maze, needed to rebuild
+ *  the exact LevelDef it ran on (a fixed-arena ghost can't race a maze run). */
+export async function fetchGhost(runId: string): Promise<{ log: RankedLog; party: DeclaredHero[]; seed: number; mode: RankedMode; route?: PFCell[] } | null> {
+  const rows = await sbGet(`run_inputs?select=log,party,route,runs(seed,mode)&run_id=eq.${encodeURIComponent(runId)}`)
   const row = Array.isArray(rows) && rows[0] ? rows[0] : null
   if (!row?.log) return null
   const run = row.runs || {}
-  return { log: row.log as RankedLog, party: (row.party as DeclaredHero[]) || [], seed: Number(run.seed) >>> 0, mode: (run.mode as RankedMode) || 'endless' }
+  return {
+    log: row.log as RankedLog, party: (row.party as DeclaredHero[]) || [], seed: Number(run.seed) >>> 0,
+    mode: (run.mode as RankedMode) || 'endless', route: Array.isArray(row.route) ? (row.route as PFCell[]) : undefined,
+  }
 }
 
 // ---------------------------------------------------------------------------

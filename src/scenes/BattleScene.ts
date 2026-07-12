@@ -202,8 +202,9 @@ export class BattleScene extends Phaser.Scene {
     // the Ranked ladder (endlessBest), so the provably-fair board stays pure.
     this.roguelike = !this.demoMode && !!data?.roguelike
     // PATHFORGE reuses the endless scaffolding (seeded infinite waves) on the player's
-    // OWN maze, with a local per-seed board — never the Ranked ladder (its maze isn't
-    // in the replay log), so the provably-fair board stays pure.
+    // OWN maze. Its committed route rides the SAME ranked ladder as every other pure
+    // mode (Chromancer#56) — the server re-validates the maze + re-runs the log before
+    // it ever touches the board, so a tampered/illegal maze can't board a fake score.
     this.pathforge = !this.demoMode && !!data?.pathforge
     this.pathforgeMaze = (this.pathforge && data?.pathforgeMaze && data.pathforgeMaze.length >= 2)
       ? data.pathforgeMaze.map(([c, r]) => [c, r] as [number, number])
@@ -219,8 +220,11 @@ export class BattleScene extends Phaser.Scene {
     this.isDaily = !!data?.daily
     // RANKED (provably-fair) = the pure normalized modes only. Roguelike is endless
     // but carries mutators/relics, so it rides its OWN weekly board, not this one.
-    this.ranked = this.endless && !this.roguelike && !this.attract && !this.demoMode && !this.pathforge
-    this.rankedMode = this.isDaily ? 'daily' : data?.weekly ? 'weekly' : 'endless'
+    // PathForge only rides the ladder when it has a committed route to submit — an
+    // invalid/missing maze (shouldn't happen from the real editor, but never trust
+    // launch data) just plays locally instead of attempting a route-less ranked run.
+    this.ranked = this.endless && !this.roguelike && !this.attract && !this.demoMode && (!this.pathforge || !!this.pathforgeMaze)
+    this.rankedMode = this.isDaily ? 'daily' : data?.weekly ? 'weekly' : this.pathforge ? 'pathforge' : 'endless'
     this.ghostRunId = data?.ghostRunId
     // reset per-run ranked state (the scene instance is reused across restarts)
     this.recorder = null
@@ -294,10 +298,12 @@ export class BattleScene extends Phaser.Scene {
       // Route the ranked Sim through the SAME canonical builder the SERVER uses,
       // so the config the player runs is byte-identical to the one we re-run to
       // verify — zero drift, zero chance of an honest run failing verification.
+      // PathForge threads its committed route through too (ignored by every
+      // other mode) so its LevelDef matches the server's rebuild exactly.
       this.declaredParty = party.map((p) => ({ heroId: p.heroId, wyrmId: (p as { wyrm?: { wyrmId: string } }).wyrm?.wyrmId }))
       this.boardPeriod = rankedPeriod(this.rankedMode)
       this.recorder = new RunRecorder()
-      this.sim = new Sim(rankedConfig(this.rankedMode, this.seed, this.declaredParty))
+      this.sim = new Sim(rankedConfig(this.rankedMode, this.seed, this.declaredParty, this.pathforgeMaze ?? undefined))
       if (this.ghostRunId) void this.loadGhost(this.ghostRunId)
     } else {
       this.sim = new Sim({ level: this.level, mods, seed: this.seed, endless: this.endless, rogue: this.roguePlan?.rogue, startGold, startLives, party, towerCap: towerCapForMode(this.runMode) })
@@ -1614,9 +1620,10 @@ export class BattleScene extends Phaser.Scene {
         this.hud.showResult({ win: false, title: 'RUN OVER', color: 0xc06bff, stars: 0, coins: res.coins, diamonds: 0, shards, unlocked: null, sub: `Reached wave ${this.sim.waveIndex + 1}${bestTag}`, endless: true, share: this.buildShare(false) })
         window.setTimeout(() => this.showRunSummary(), 480)
       } else if (this.pathforge) {
-        // PATHFORGE: purely-local per-seed best (the fair board — no endlessBest, no
-        // ranked submit). Hero shards still accrue (meta progression never touches the
-        // fair run itself). Score = waves survived on the player's own maze.
+        // PATHFORGE: local per-seed best (never endlessBest — meta progression never
+        // touches the fair run itself) PLUS, when the maze committed cleanly, the
+        // ranked ladder submit (server re-validates the maze + re-runs the log before
+        // it boards). Score = waves survived on the player's own maze.
         const wave = this.sim.waveIndex + 1
         const pb = recordPathforgeBest(this.seed, wave)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
@@ -1625,6 +1632,7 @@ export class BattleScene extends Phaser.Scene {
           unlocked: null, sub: `Reached wave ${wave}${pb ? ' · NEW BEST FOR THIS SEED!' : ''}`,
           endless: true, share: this.buildShare(false),
         })
+        this.submitRankedRun()
       } else if (this.endless) {
         const res = economy.awardEndless(this.sim.waveIndex)
         const shards = this.awardHeroes(this.endlessShards(), this.endlessXp())
@@ -1657,7 +1665,7 @@ export class BattleScene extends Phaser.Scene {
     const score = this.sim.score()
     const wave = this.sim.waveIndex + 1
     recordRankedLocal(this.rankedMode, this.boardPeriod, score, wave, this.seed)
-    const rec = this.recorder.record(this.rankedMode, this.seed, this.boardPeriod, this.declaredParty, score, wave)
+    const rec = this.recorder.record(this.rankedMode, this.seed, this.boardPeriod, this.declaredParty, score, wave, this.pathforgeMaze ?? undefined)
     void submitRun(rec).then((r) => {
       if (!r) return // offline / unwired — local PB already banked
       if (r.ok && typeof r.rank === 'number') {
@@ -1677,7 +1685,7 @@ export class BattleScene extends Phaser.Scene {
     const g = await fetchGhost(runId)
     if (!g || !this.sim || this.sim.state === 'won' || this.sim.state === 'lost') return
     try {
-      this.ghost = new GhostRunner(g.mode, this.seed, g.party, g.log)
+      this.ghost = new GhostRunner(g.mode, this.seed, g.party, g.log, g.route)
     } catch { return }
     const el = document.createElement('div')
     el.style.cssText =
