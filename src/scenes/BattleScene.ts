@@ -2281,6 +2281,7 @@ export class BattleScene extends Phaser.Scene {
       currentReaction: qa.lastReaction,
       frame: qa.frame,
       driven: qa.driven,
+      boardTexture: this.view.boardTextureState(),
     }
   }
 

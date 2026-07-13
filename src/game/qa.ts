@@ -39,6 +39,16 @@ export interface QaTowerState {
   level: number
 }
 
+// Runtime read of what's actually bound to the ground/path terrain materials'
+// `.map` right now — NOT an optimistically-set flag. 'realm-png'/'path-png' only
+// when the painted texture load genuinely resolved; 'fallback-atlas' whenever the
+// board is (still, or permanently) rendering the old Kenney kit atlas instead.
+export interface QaBoardTexture {
+  realm: string
+  ground: 'realm-png' | 'fallback-atlas'
+  path: 'path-png' | 'fallback-atlas'
+}
+
 export interface QaState {
   wave: number // 1-based, as the HUD shows it
   waveTotal: number // Infinity for endless
@@ -55,6 +65,7 @@ export interface QaState {
   currentReaction: string | null // most-recent reaction name this run (view-side)
   frame: number
   driven: boolean
+  boardTexture: QaBoardTexture
 }
 
 // The controlled surface a BattleScene hands to the drive. Keeps the scene's

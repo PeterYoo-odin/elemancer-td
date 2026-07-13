@@ -45,6 +45,11 @@ const GROUND = 0.2
 // board into the fog/haze.
 const TSUB = 3
 const TSKIRT = 3
+// Ground/path texture tiling: repeats per BOARD TILE (not per quad) — high enough
+// that several painted slabs read across one tile rather than one giant stretched
+// copy, computed from a continuous tile-space UV so there are no seams anywhere
+// on the merged mesh regardless of this value.
+const GROUND_TEX_REPEAT = 2
 // Empirical: the scene's stacked lighting reads a flat-vertex-coloured surface
 // noticeably brighter than its input albedo — this compensates so the sculpted
 // terrain's ON-SCREEN mid-luma matches the per-realm design target, not a washed
@@ -356,7 +361,17 @@ export class BattleView3D {
   // the pick plane — rising into rocky highlands on blocked/scenery tiles, plus a
   // perimeter skirt that falls away into haze). See computeTileRise()/buildTerrainMesh().
   private terrainGeo?: THREE.BufferGeometry
-  private terrainMat?: THREE.MeshStandardMaterial
+  // Ground/path/blocked each get their own material (CHROMANCER #58 — a painted
+  // cel-shaded ground texture instead of one flat vertex-coloured kit tint) so the
+  // three tile roles read as instantly distinct materials, not just a vertex tint.
+  private pathMat?: THREE.MeshStandardMaterial
+  private groundMat?: THREE.MeshStandardMaterial
+  private rockMat?: THREE.MeshStandardMaterial
+  // The SPECIFIC loaded painted textures — compared by reference at QA-query time
+  // against each material's live `.map` so boardTexture() reports reality (loaded
+  // vs fell back to the kit atlas), never an optimistically-set flag.
+  private realmGroundTex: THREE.Texture | null = null
+  private pathRoadTex: THREE.Texture | null = null
   private tileRise: Float32Array = new Float32Array(0) // per-tile extra height above GROUND (blocked cells only), COLS*ROWS
   // Grey→colour reveal: as the realm is cleared (sim.colorProgress 0..1) the ashen
   // field regains its palette saturation — the board itself proves the thesis. Stored
@@ -366,6 +381,9 @@ export class BattleView3D {
   private terrainHold: Uint8Array = new Uint8Array(0) // hazard quads: never mute (gameplay read)
   private groundRevealQ = -1 // last quantised reveal level (throttles the re-tint)
   private ashenTint = new THREE.Color(0x4a4a5c) // cool desaturated "Limbo" grey — the Greying's target, not mud
+  // Hard floor on how far the grey reveal may pull the board toward ashenTint — at
+  // colorProgress 0 the terrain must still read as the realm's OWN colour, never mud.
+  private static readonly GREY_CLAMP = 0.45
   private hazeTint = new THREE.Color(0x241a3c) // skirt fall-away colour (set to the realm fog tint in buildTerrainMesh)
   private boardLife?: BoardLife // on-board weather + prism-road shimmer
   private detailGroup = new THREE.Group()
@@ -910,21 +928,30 @@ export class BattleView3D {
     return a + (b - a) * tz
   }
 
-  // Per-quad colour: worn tread on the lane, worked terrace stone on build tiles
-  // (with the hazard tint blended in, held at full colour), layered rock strata with
-  // AO in the seams/slopes elsewhere, fading to the realm's haze tint at the skirt.
+  // matIndex 0=path, 1=build(ground), 2=blocked(rock) — one geometry group per
+  // material below. Path/build quads now carry the realm's PAINTED texture (see
+  // buildTerrainMesh); the colour returned here is a MODULATION tint multiplied
+  // over that texture, so it's kept near-white (worn-lip/hazard/AO only) rather
+  // than the old flat palette albedo — that albedo now lives in the PNG, and
+  // re-tinting it away from white is exactly the "washed beige" bug we're fixing.
+  // Rock/blocked quads have no painted texture (they read as a darker, desaturated
+  // highland — the readability contrast against the bright buildable ground) so
+  // they keep the original flat-vertex-coloured strata treatment untouched.
   private terrainQuadColor(
     tc: number, tr: number, si: number, sj: number,
     h00: number, h10: number, h01: number, h11: number,
-  ): [THREE.Color, boolean] {
+  ): [THREE.Color, boolean, number] {
     const inBoard = tc >= 0 && tc < COLS && tr >= 0 && tr < ROWS
     const kind = inBoard ? this.sim.grid[tr][tc] : 'blocked'
     let hold = false
     let col: THREE.Color
+    let matIndex: number
     if (kind === 'path') {
-      col = new THREE.Color(this.palette.path)
+      matIndex = 0
+      col = new THREE.Color(0xffffff)
     } else if (kind === 'build') {
-      col = new THREE.Color(this.palette.build)
+      matIndex = 1
+      col = new THREE.Color(0xffffff)
       const terr = this.sim.terrainAt(tc, tr)
       if (terr !== '' && TERRAIN_META[terr]) {
         col = col.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55)
@@ -943,6 +970,7 @@ export class BattleView3D {
       if (sj === TSUB - 1 && nKind(0, 1) === 'path') edge = true
       if (edge) col = col.clone().multiplyScalar(0.86)
     } else {
+      matIndex = 2
       // rock: two grass-slot hues blended per-tile, a subtle strata band by elevation,
       // and per-quad grain so the highlands never read as one flat colour.
       const h1 = hash2(tc * 3 + 11, tr * 5 + 17)
@@ -952,12 +980,18 @@ export class BattleView3D {
       const band = 0.5 + 0.5 * Math.sin(avgH * 30 + h1 * 5)
       if (band > 0.68) col = col.lerp(new THREE.Color(this.palette.build), (band - 0.68) * 0.9)
       col.offsetHSL(0, 0, (h2 - 0.5) * 0.1)
+      // darker/desaturated vs. the now-bright painted ground: blocked/unbuildable
+      // must read as visibly OFF-LIMITS at a glance (CHROMANCER #58 hierarchy fix).
+      col.offsetHSL(0, -0.12, 0)
+      col.multiplyScalar(0.78)
     }
     // slope AO: darken quads sitting on a height gradient (crevices, shoulders, rim)
     const slope = Math.max(h00, h10, h01, h11) - Math.min(h00, h10, h01, h11)
     const ao = Math.min(0.38, slope * 5.2)
     if (ao > 0) col = col.clone().multiplyScalar(1 - ao * 0.6)
-    // skirt haze: recede into the realm's fog tint as the land falls away
+    // skirt haze: recede into the realm's fog tint as the land falls away (skirt
+    // rings are always outside the board, i.e. always matIndex 2 — never touches
+    // the textured path/build modulation)
     const out = Math.max(0, -tc, tc - COLS + 1, -tr, tr - ROWS + 1)
     if (out > 0) {
       const t = Math.min(1, out / TSKIRT)
@@ -965,20 +999,21 @@ export class BattleView3D {
     }
     // LIGHT COMPENSATION: the board's stacked rig (hemi + ambient + 3 directional +
     // a point accent) reads a flat vertex-coloured surface noticeably brighter than
-    // its input — uncompensated, every realm washed toward pale grey/white on screen
-    // regardless of hue (the exact failure the readability rule forbids). Pull the fed
-    // albedo down so the LIT result lands in the intended mid-luma band.
-    col = col.clone().multiplyScalar(TERRAIN_LIGHT_COMP)
-    return [col, hold]
+    // its input — uncompensated, the rock highlands would wash toward pale grey/white
+    // on screen regardless of hue. Only the UNTEXTURED rock material needs this; the
+    // painted path/build textures are already contrast-gated to their on-screen target.
+    if (matIndex === 2) col = col.clone().multiplyScalar(TERRAIN_LIGHT_COMP)
+    return [col, hold, matIndex]
   }
 
-  // Ashen target for the Greying's wave-1 state: NOT a per-tile luminance-grey (that
-  // reads as mud on a warm palette) — a shared cool "Limbo" tint so the pre-colour
-  // board is a deliberately gorgeous monochrome, and reclaiming colour is a reward.
+  // Ashen target for the Greying's wave-1 state: a single CLAMPED lerp toward the
+  // cool "Limbo" tint, capped at GREY_CLAMP (0.45) — never a full desaturate-to-
+  // luminance-then-tint stack, which was eating the realm's own colour down to
+  // ~27% at colorProgress 0 (the "bottoms out into mud" bug). At the clamp, the
+  // board still reads as its own hue at HALF-plus strength; full colour still
+  // rewards clearing the realm.
   private ashenColorFor(full: THREE.Color): THREE.Color {
-    const lum = full.r * 0.3 + full.g * 0.59 + full.b * 0.11
-    const lumGrey = new THREE.Color(lum, lum, lum)
-    return full.clone().lerp(lumGrey, 0.5).lerp(this.ashenTint, 0.45)
+    return full.clone().lerp(this.ashenTint, BattleView3D.GREY_CLAMP)
   }
 
   // Build the merged, non-indexed (flat-shaded) terrain BufferGeometry: the whole
@@ -995,8 +1030,12 @@ export class BattleView3D {
     const full = new Float32Array(verts * 3)
     const grey = new Float32Array(verts * 3)
     const hold = new Uint8Array(verts)
+    const uv = new Float32Array(verts * 2)
     let vi = 0
     const _full = new THREE.Color()
+    const geo = new THREE.BufferGeometry()
+    let groupStart = 0
+    let groupMatIndex = -1
     for (let tr = -TSKIRT; tr < ROWS + TSKIRT; tr++) {
       for (let tc = -TSKIRT; tc < COLS + TSKIRT; tc++) {
         for (let sj = 0; sj < TSUB; sj++) {
@@ -1007,36 +1046,66 @@ export class BattleView3D {
             const h01 = this.heightAt(gx0, gz1), h11 = this.heightAt(gx1, gz1)
             const x0 = wx(MAP_X + gx0 * TILE_PX), x1 = wx(MAP_X + gx1 * TILE_PX)
             const z0 = wz(MAP_Y + gz0 * TILE_PX), z1 = wz(MAP_Y + gz1 * TILE_PX)
-            const [c, hd] = this.terrainQuadColor(tc, tr, si, sj, h00, h10, h01, h11)
+            const [c, hd, matIndex] = this.terrainQuadColor(tc, tr, si, sj, h00, h10, h01, h11)
+            // One geometry group per contiguous run of same-material quads (path /
+            // build / blocked each render with their OWN textured material below —
+            // still just 3 draw calls total for the whole board, not per-tile).
+            if (matIndex !== groupMatIndex) {
+              if (groupMatIndex >= 0) geo.addGroup(groupStart, vi - groupStart, groupMatIndex)
+              groupStart = vi
+              groupMatIndex = matIndex
+            }
             _full.copy(c)
             const g = this.ashenColorFor(_full)
-            const quad: Array<[number, number, number]> = [
-              [x0, h00, z0], [x1, h10, z0], [x1, h11, z1],
-              [x0, h00, z0], [x1, h11, z1], [x0, h01, z1],
+            const quad: Array<[number, number, number, number, number]> = [
+              [x0, h00, z0, gx0, gz0], [x1, h10, z0, gx1, gz0], [x1, h11, z1, gx1, gz1],
+              [x0, h00, z0, gx0, gz0], [x1, h11, z1, gx1, gz1], [x0, h01, z1, gx0, gz1],
             ]
-            for (const [x, y, z] of quad) {
+            for (const [x, y, z, gx, gz] of quad) {
               pos[vi * 3] = x; pos[vi * 3 + 1] = y; pos[vi * 3 + 2] = z
               full[vi * 3] = _full.r; full[vi * 3 + 1] = _full.g; full[vi * 3 + 2] = _full.b
               grey[vi * 3] = g.r; grey[vi * 3 + 1] = g.g; grey[vi * 3 + 2] = g.b
               hold[vi] = hd ? 1 : 0
+              // Continuous tile-space coords (never reset per-tile) → seamless
+              // RepeatWrapping tiling across the whole merged mesh, no per-quad seams.
+              uv[vi * 2] = gx * GROUND_TEX_REPEAT
+              uv[vi * 2 + 1] = gz * GROUND_TEX_REPEAT
               vi++
             }
           }
         }
       }
     }
-    const geo = new THREE.BufferGeometry()
+    if (groupMatIndex >= 0) geo.addGroup(groupStart, vi - groupStart, groupMatIndex)
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
     geo.setAttribute('color', new THREE.BufferAttribute(full.slice(), 3))
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
     geo.computeVertexNormals()
     this.terrainFull = full
     this.terrainGrey = grey
     this.terrainHold = hold
     this.terrainGeo = geo
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.03 })
-    this.terrainMat = mat
-    this.disposables.push(geo, mat)
-    const mesh = new THREE.Mesh(geo, mat)
+
+    const kitAtlas = models.atlas()
+    // Buildable ground: the realm's painted cel-shaded texture. Falls back to the
+    // old kit atlas (never a blank/white board) if the PNG 404s — see loadGroundTex.
+    this.groundMat = new THREE.MeshStandardMaterial({
+      map: null, color: kitAtlas ? 0xffffff : this.palette.build,
+      vertexColors: true, roughness: 0.92, metalness: 0.03,
+    })
+    // Path: its own lighter/warmer/more-neutral texture — the deliberate contrast
+    // against every realm's ground IS the buildable/path readability cue.
+    this.pathMat = new THREE.MeshStandardMaterial({
+      map: null, color: kitAtlas ? 0xffffff : this.palette.path,
+      vertexColors: true, roughness: 0.88, metalness: 0.02,
+    })
+    // Blocked/highland: unchanged flat vertex-coloured rock (see terrainQuadColor) —
+    // no painted texture, so it never fights the ground/path readability contrast.
+    this.rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.03 })
+    this.disposables.push(geo, this.groundMat, this.pathMat, this.rockMat)
+    this.loadGroundTextures(kitAtlas)
+
+    const mesh = new THREE.Mesh(geo, [this.pathMat, this.groundMat, this.rockMat])
     mesh.frustumCulled = false
     this.scene.add(mesh)
     this.boardMeshes.push(mesh)
@@ -1044,6 +1113,73 @@ export class BattleView3D {
     // colour as the realm clears); snap to full colour under reduce-motion (static).
     this.groundRevealQ = -1
     this.applyGroundReveal(this.motionOk ? this.sim.colorProgress() : 1)
+  }
+
+  // Fail-soft PNG load for the ground/path textures: on success, swap the live
+  // material's `.map` to the painted texture (colour stays 0xffffff so the PNG's
+  // OWN saturated palette survives); on 404/failure, fall back to the shared kit
+  // atlas (or a flat palette tint if even that's missing) — the board must never
+  // render blank. boardTextureState() reads back whichever actually landed.
+  private loadGroundTextures(kitAtlas: THREE.Texture | null): void {
+    const realmKey = this.backdrop?.key ?? ''
+    const loader = new THREE.TextureLoader()
+    const groundUrl = `${import.meta.env.BASE_URL}textures/realms/${realmKey}-ground.png`
+    loader.load(
+      groundUrl,
+      (tex) => {
+        if (this.disposed || !this.groundMat) { tex.dispose(); return }
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.wrapS = THREE.RepeatWrapping
+        tex.wrapT = THREE.RepeatWrapping
+        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+        this.disposables.push(tex)
+        this.realmGroundTex = tex
+        this.groundMat.map = tex
+        this.groundMat.color.set(0xffffff)
+        this.groundMat.needsUpdate = true
+      },
+      undefined,
+      () => {
+        if (this.disposed || !this.groundMat) return
+        this.groundMat.map = kitAtlas ?? null
+        this.groundMat.color.set(kitAtlas ? 0xffffff : this.palette.build)
+        this.groundMat.needsUpdate = true
+      },
+    )
+    const pathUrl = `${import.meta.env.BASE_URL}textures/path-road.png`
+    loader.load(
+      pathUrl,
+      (tex) => {
+        if (this.disposed || !this.pathMat) { tex.dispose(); return }
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.wrapS = THREE.RepeatWrapping
+        tex.wrapT = THREE.RepeatWrapping
+        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+        this.disposables.push(tex)
+        this.pathRoadTex = tex
+        this.pathMat.map = tex
+        this.pathMat.color.set(0xffffff)
+        this.pathMat.needsUpdate = true
+      },
+      undefined,
+      () => {
+        if (this.disposed || !this.pathMat) return
+        this.pathMat.map = kitAtlas ?? null
+        this.pathMat.color.set(kitAtlas ? 0xffffff : this.palette.path)
+        this.pathMat.needsUpdate = true
+      },
+    )
+  }
+
+  // ?qa=1 drive-API surface (see qa.ts QaBoardTexture): reads the LIVE material's
+  // bound `.map` reference back against the specific textures we loaded above —
+  // never an optimistic flag — so a silent texture 404 can't report as success.
+  boardTextureState(): { realm: string; ground: 'realm-png' | 'fallback-atlas'; path: 'path-png' | 'fallback-atlas' } {
+    return {
+      realm: this.backdrop?.key ?? '',
+      ground: this.groundMat && this.groundMat.map === this.realmGroundTex && this.realmGroundTex ? 'realm-png' : 'fallback-atlas',
+      path: this.pathMat && this.pathMat.map === this.pathRoadTex && this.pathRoadTex ? 'path-png' : 'fallback-atlas',
+    }
   }
 
   // Re-tint the terrain toward its palette as the realm is cleared. reveal 0 → ashen
@@ -1123,30 +1259,49 @@ export class BattleView3D {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         if (this.sim.grid[r][c] !== 'blocked') continue
-        const h = hash2(c * 3 + 1, r * 5 + 2)
-        if (h > 0.62) continue // populate ~62% of blocked cells (denser diorama)
-        const pick = hash2(c * 7 + 3, r * 2 + 9)
-        let name: string, mat: THREE.Material, blob: number, scale: number
-        if (pick < rp.tree) { name = h < 0.25 ? 'detail-tree-large' : 'detail-tree'; mat = this.atlasBaseMat; blob = 0.28; scale = 0.9 + h }
-        else if (pick < rp.rocks) { name = h < 0.25 ? 'detail-rocks-large' : 'detail-rocks'; mat = this.atlasBaseMat; blob = 0.32; scale = 0.85 + h * 0.5 }
-        else { name = h < 0.2 ? 'detail-crystal-large' : 'detail-crystal'; mat = this.detailCrystalMat; blob = 0.22; scale = 0.9 + h }
-        const g = new THREE.Group()
-        const obj = models.clone(name)
-        this.paint(obj, mat)
-        obj.scale.setScalar(scale)
-        obj.rotation.y = pick * Math.PI * 2
-        g.add(obj)
-        if (name.indexOf('rocks') < 0) this.addBlob(g, blob)
-        // jitter within the cell so scatter doesn't look grid-locked
-        const jx = (hash2(c, r * 2) - 0.5) * 0.4
-        const jz = (hash2(c * 2, r) - 0.5) * 0.4
-        // seat the prop on the sculpted terrain's actual height at this cell (the
-        // land now rises under blocked/scenery tiles — see computeTileRise())
         const propY = GROUND + (this.tileRise[r * COLS + c] ?? 0)
-        g.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2) + jx, propY, wz(MAP_Y + r * TILE_PX + TILE_PX / 2) + jz)
-        this.detailGroup.add(g)
+        this.scatterProp(c, r, propY, rp, 0.78) // ~78% of blocked cells populated (denser diorama)
       }
     }
+    // BORDER ring — the level's outer edge (one skirt tile beyond the play board)
+    // gets its own sparser scatter pass so it reads as inhabited land continuing
+    // past the frame, not a bare cutoff. Always outside sim.grid, so this can
+    // never overlap a path/build tile or occlude a tower.
+    for (let r = -1; r <= ROWS; r++) {
+      for (let c = -1; c <= COLS; c++) {
+        if (r >= 0 && r < ROWS && c >= 0 && c < COLS) continue // interior already scattered above
+        const propY = this.heightAt(c + 0.5, r + 0.5)
+        this.scatterProp(c, r, propY, rp, 0.6)
+      }
+    }
+  }
+
+  // One deterministically-seeded prop draw for cell (c,r) — shared by the interior
+  // blocked-tile scatter and the outer border-ring pass. `density` is the fraction
+  // of cells populated (kept lower on the border so it frames rather than crowds).
+  private scatterProp(
+    c: number, r: number, propY: number,
+    rp: { tree: number; rocks: number; glow: number }, density: number,
+  ): void {
+    const h = hash2(c * 3 + 1, r * 5 + 2)
+    if (h > density) return
+    const pick = hash2(c * 7 + 3, r * 2 + 9)
+    let name: string, mat: THREE.Material, blob: number, scale: number
+    if (pick < rp.tree) { name = h < 0.25 ? 'detail-tree-large' : 'detail-tree'; mat = this.atlasBaseMat; blob = 0.28; scale = 0.9 + h }
+    else if (pick < rp.rocks) { name = h < 0.25 ? 'detail-rocks-large' : 'detail-rocks'; mat = this.atlasBaseMat; blob = 0.32; scale = 0.85 + h * 0.5 }
+    else { name = h < 0.2 ? 'detail-crystal-large' : 'detail-crystal'; mat = this.detailCrystalMat; blob = 0.22; scale = 0.9 + h }
+    const g = new THREE.Group()
+    const obj = models.clone(name)
+    this.paint(obj, mat)
+    obj.scale.setScalar(scale)
+    obj.rotation.y = pick * Math.PI * 2
+    g.add(obj)
+    if (name.indexOf('rocks') < 0) this.addBlob(g, blob)
+    // jitter within the cell so scatter doesn't look grid-locked
+    const jx = (hash2(c, r * 2) - 0.5) * 0.4
+    const jz = (hash2(c * 2, r) - 0.5) * 0.4
+    g.position.set(wx(MAP_X + c * TILE_PX + TILE_PX / 2) + jx, propY, wz(MAP_Y + r * TILE_PX + TILE_PX / 2) + jz)
+    this.detailGroup.add(g)
   }
 
   // Buildable-cell highlight (shown while placing a tower) using selection markers.
