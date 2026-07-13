@@ -603,8 +603,18 @@ LEVELS.forEach((lvl, i) => {
   let sharedBase: [number, number] | null = null
   plan.forEach((cells, ri) => {
     if (cells.length < 2) fail(`level ${lvl.id} route ${ri} too short (${cells.length})`)
+    // HARD INVARIANT (chromancer-57): no route may revisit a cell, and therefore
+    // no route may reverse direction back onto the tile it just came from — that
+    // revisit-then-double-back is exactly the "monsters walk in, then back out,
+    // then continue" spur (merge-trunk collisions + spiral/coil self-crossings).
+    // Enforced across every realm/archetype/lane-count in the live ladder so a
+    // future generator change can never reintroduce it unnoticed.
+    const seenCells = new Set<string>()
     for (let ci = 0; ci < cells.length; ci++) {
       const [c, r] = cells[ci]
+      const key = `${c},${r}`
+      if (seenCells.has(key)) fail(`level ${lvl.id} route ${ri} revisits cell @${ci}: ${c},${r} — back-and-forth spur`)
+      seenCells.add(key)
       if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) fail(`level ${lvl.id} route ${ri} cell off-grid @${ci}: ${c},${r}`)
       if (ci > 0) {
         const [pc, pr] = cells[ci - 1]

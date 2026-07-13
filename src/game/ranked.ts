@@ -40,7 +40,16 @@ import type { SpellKey } from './spells'
 // `route` field the server needs to rebuild a player-built maze's LevelDef.
 // Old records never carry a route, so bump to force a clean re-record instead
 // of silently replaying a pathforge-shaped record under the old field set.
-export const SIM_VERSION = 5
+// v6: chromancer-57 — fixed the merge-trunk / spiral-coil back-and-forth spur in
+// `src/game/paths.ts` (convergeTrunk's multi-lane merge could re-tread a lane's
+// entry stub; spiral/coil could coil tight enough to cross an earlier ring).
+// Generated campaign routes changed shape (still deterministic, never revisit a
+// cell now), so old logs replay a route the current generator no longer
+// produces — bump to reject them instead of mis-verifying against a route that
+// no longer exists. PathForge's baked `route` field is untouched (it never went
+// through convergeTrunk), so pathforge records are unaffected by the route
+// change itself but still carry the old version tag and must re-record.
+export const SIM_VERSION = 6
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift

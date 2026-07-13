@@ -24,7 +24,9 @@ const clampCol = (c: number): number => Math.max(0, Math.min(GRID_COLS - 1, Math
 const clampRow = (r: number): number => Math.max(0, Math.min(GRID_ROWS - 1, Math.round(r)))
 
 // --- serpentine path builder (kept for compatibility + the endless mode) -------
-// Contiguous by construction (each cell is grid-adjacent to the next).
+// Contiguous by construction (each cell is grid-adjacent to the next). Routed
+// through stripRevisits too (defined below) so a malformed/non-monotonic `lanes`
+// list can never smuggle a revisited cell past the no-backtrack invariant.
 export function serpentine(lanes: number[], cols = GRID_COLS): Cell[] {
   const cells: Cell[] = []
   for (let i = 0; i < lanes.length; i++) {
@@ -41,14 +43,43 @@ export function serpentine(lanes: number[], cols = GRID_COLS): Cell[] {
       for (let r = row + 1; r < nextRow; r++) cells.push([endCol, r])
     }
   }
-  return cells
+  return stripRevisits(cells)
+}
+
+// Splice out back-and-forth spurs: if a walk steps onto a cell it has already
+// visited (a merge-trunk anchor sequence looping back over a lane's entry stub,
+// a spiral/coil coiling tight enough to cross its own earlier ring, etc.), cut
+// the loop between the two visits rather than keep it. This is safe because the
+// cell right after the SECOND visit was, in the raw walk, grid-adjacent to the
+// cell right after the FIRST visit (same coordinates) — so splicing preserves
+// contiguity while guaranteeing the walk never revisits a cell and therefore
+// never reverses back onto the tile it just came from.
+function stripRevisits(cells: Cell[]): Cell[] {
+  const out: Cell[] = []
+  const indexOf = new Map<string, number>()
+  for (const cell of cells) {
+    const key = `${cell[0]},${cell[1]}`
+    const prior = indexOf.get(key)
+    if (prior !== undefined) {
+      out.length = prior + 1
+      for (const [k, v] of indexOf) if (v > prior) indexOf.delete(k)
+      continue
+    }
+    indexOf.set(key, out.length)
+    out.push(cell)
+  }
+  return out
 }
 
 // --- connectAnchors: the universal contiguous-fill primitive --------------------
 // Walk a list of anchor cells; between consecutive anchors step one cell at a time
 // (columns first, then rows) so every emitted cell is grid-adjacent to the prior.
 // Consecutive duplicates are collapsed. All anchors are clamped in-bounds, so the
-// resulting path (and thus the sim's waypoints) can never leave the map.
+// resulting path (and thus the sim's waypoints) can never leave the map. The walk
+// is also REVISIT-FREE by construction (see stripRevisits) — every caller (single
+// archetypes AND the multi-lane merge trunk) inherits the no-backtrack invariant
+// for free, so no route this module emits can ever contain the back-and-forth
+// spur where a lane's entry stub re-treads the trunk's first leg.
 export function connectAnchors(anchors: Cell[]): Cell[] {
   const out: Cell[] = []
   const push = (c: number, r: number): void => {
@@ -69,7 +100,7 @@ export function connectAnchors(anchors: Cell[]): Cell[] {
     while (c !== tc) { c += tc > c ? 1 : -1; push(c, r) }
     while (r !== tr) { r += tr > r ? 1 : -1; push(c, r) }
   }
-  return out
+  return stripRevisits(out)
 }
 
 // ---------------------------------------------------------------------------

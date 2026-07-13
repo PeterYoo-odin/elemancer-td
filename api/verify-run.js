@@ -90,7 +90,23 @@ function serpentine(lanes, cols = GRID_COLS) {
       for (let r = row + 1; r < nextRow; r++) cells.push([endCol, r]);
     }
   }
-  return cells;
+  return stripRevisits(cells);
+}
+function stripRevisits(cells) {
+  const out = [];
+  const indexOf = /* @__PURE__ */ new Map();
+  for (const cell of cells) {
+    const key = `${cell[0]},${cell[1]}`;
+    const prior = indexOf.get(key);
+    if (prior !== void 0) {
+      out.length = prior + 1;
+      for (const [k2, v] of indexOf) if (v > prior) indexOf.delete(k2);
+      continue;
+    }
+    indexOf.set(key, out.length);
+    out.push(cell);
+  }
+  return out;
 }
 function connectAnchors(anchors) {
   const out = [];
@@ -118,7 +134,7 @@ function connectAnchors(anchors) {
       push(c, r);
     }
   }
-  return out;
+  return stripRevisits(out);
 }
 var SIMPLE_ARCHETYPES = ["straight", "lbend", "ushape", "corridor"];
 var COMPLEX_ARCHETYPES = ["spiral", "hairpin", "coil", "switchback", "zigzag"];
@@ -819,7 +835,8 @@ function genLevel(rg, realmOrder, j, count, id, unlockTower) {
   for (let wi = 0; wi < waveCount; wi++) {
     const waveFrac = waveCount <= 1 ? 1 : wi / (waveCount - 1);
     const openFloor = Math.max(0.6, Math.min(0.85, 0.85 - 0.045 * prog));
-    const hpMul = +(baseHp * (openFloor + (1.35 - openFloor) * waveFrac)).toFixed(3);
+    const multiSoften = paths ? 0.32 : 0;
+    const hpMul = +(baseHp * (openFloor + (1.35 - openFloor) * waveFrac) * (1 - multiSoften)).toFixed(3);
     const entries = [];
     const used = [];
     const primary = pickKind(rng, unlocked, rg.roster);
@@ -6326,7 +6343,7 @@ function pathforgeLevel(route) {
 }
 
 // src/game/ranked.ts
-var SIM_VERSION = 5;
+var SIM_VERSION = 6;
 var RANKED_HERO_LEVEL = 5;
 var ENDLESS_START_GOLD = 300;
 var ENDLESS_START_LIVES = 20;

@@ -429,7 +429,22 @@ function genLevel(rg: RealmGen, realmOrder: number, j: number, count: number, id
     // any defence is built (else a 25× opener is an unavoidable death, not a fair
     // fight). The peak (last wave) stays ~1.35× baseHp at every realm.
     const openFloor = Math.max(0.6, Math.min(0.85, 0.85 - 0.045 * prog))
-    const hpMul = +(baseHp * (openFloor + (1.35 - openFloor) * waveFrac)).toFixed(3)
+    // MULTI-SPAWN RETUNE (chromancer-57): fixing the merge-trunk back-and-forth
+    // spur (paths.ts convergeTrunk/connectAnchors — a lane could re-tread its own
+    // entry stub before joining the shared trunk) shortened every multi-spawn
+    // route's real tower exposure, some by a lot. Most of the ladder's 13
+    // multi-spawn stops had slack (min-resource sim still cleared with 17-19/19
+    // lives) and absorb that fine, but w0_20 and w1_13 were already the TIGHTEST
+    // levels in the whole 192-stop ladder even under the old (bugged, longer)
+    // routes — simcheck's pre-fix "tightest" reading was w0_20 itself at 11
+    // lives — so losing that free extra exposure tipped them to an outright loss.
+    // A flat, modest HP discount across every multi-spawn level's full curve
+    // (not just the opener — the bleed compounds wave over wave, so a taper that
+    // zeroes out early doesn't reach it) restores the SAME 11-lives difficulty
+    // floor the ladder already had elsewhere (now held by w4_16, untouched by
+    // this multiplier) instead of leaving 11 levels slack or 2 unbeatable.
+    const multiSoften = paths ? 0.32 : 0
+    const hpMul = +(baseHp * (openFloor + (1.35 - openFloor) * waveFrac) * (1 - multiSoften)).toFixed(3)
     const entries: WaveEntry[] = []
     const used: EnemyKind[] = []
     const primary = pickKind(rng, unlocked, rg.roster)
