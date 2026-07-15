@@ -19,6 +19,7 @@ import { attachTip, dismissTip, type TipContent, type TipRow } from './tooltip'
 import { renderShareCard, shareCard, downloadCard, copyText, type ShareCardOpts } from './ShareCard'
 import { playUiTick } from './sfx'
 import { appSettings } from './settings'
+import { qa } from '../game/qa'
 import { battleSfx } from './battleSfx'
 import { ChatFeed } from './ChatFeed'
 
@@ -1931,7 +1932,8 @@ export class BattleHud {
     // reduce-motion: keep only the meaningful hits (crit / combo). Plain damage
     // numbers arc and fly the most, so they're the ones we suppress — "fewer/none".
     if (reduced && style === 'norm') return
-    if (this.floatCount >= (reduced ? this.FLOAT_CAP_REDUCED : this.FLOAT_CAP)) return
+    const cap = qa.enabled && qa.juice.floatCap > 0 ? qa.juice.floatCap : reduced ? this.FLOAT_CAP_REDUCED : this.FLOAT_CAP
+    if (this.floatCount >= cap) return
     this.floatCount++
     // clamp the spawn into the board band so numbers arc off the target without
     // flying up into the top bar / combo chip or landing under the dock + HUD.

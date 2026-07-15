@@ -1856,6 +1856,7 @@ export class BattleView3D {
   // fast. Reserve ≥0.12 for big moments — small hits should stay readable.
   shake(amp: number): void {
     if (!this.motionOk) return
+    if (qa.enabled) amp *= qa.juice.shakeMul // device-session knob; neutral in prod
     this.shakeAmp = Math.min(0.3, Math.max(this.shakeAmp, amp))
   }
 
@@ -3832,7 +3833,7 @@ export class BattleView3D {
     // bloom surge decay (0.45 = the calibrated base set in the constructor)
     if (this.bloomAmp > 0) {
       this.bloomAmp = Math.max(0, this.bloomAmp - dt * 0.55)
-      this.bloom.strength = 0.45 + this.bloomAmp
+      this.bloom.strength = (qa.enabled ? qa.juice.bloomBase : 0.45) + this.bloomAmp
     }
 
     this.composer.render()

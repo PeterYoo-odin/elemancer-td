@@ -30,6 +30,7 @@ import { realmBackdrop } from '../game/realmBackdrops'
 import { playMoroseHush, setSpectralOpenness, spectralDip, duckPunch, stepDuck, resetAudioScene } from '../ui/sfx'
 import { battleSfx, panFor } from '../ui/battleSfx'
 import { haptic, HAPTIC } from '../ui/haptics'
+import { mountQaJuicePanel, unmountQaJuicePanel } from '../ui/qaJuicePanel'
 import { heroVo } from '../ui/vo'
 import { canonicalSeed, seedToCode, seedLink, utcDayIndex } from '../game/seedcode'
 import { recordDailyResult } from '../game/daily'
@@ -438,6 +439,7 @@ export class BattleScene extends Phaser.Scene {
     // QA DRIVE: hand the gated drive a controlled surface onto this live battle.
     // No-op unless the QA flag is set (window.__chromancer never exists otherwise).
     if (qa.enabled) { this.qaClock = 0; this.qaCtl = this.qaMakeControl(); qa.bindScene(this.qaCtl) }
+    if (qa.enabled) mountQaJuicePanel() // device-tuning sliders, QA gate only
 
     // ---- ATTRACT / DEMO REEL: scripted run + cinematic camera, hands-free ----
     if (this.attract) {
@@ -1421,7 +1423,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private addHitstop(seconds: number): void {
-    this.hitstopT = Math.max(this.hitstopT, seconds * this.hitstopScale())
+    const tune = qa.enabled ? qa.juice.hitstopMul : 1 // device-session knob; neutral in prod
+    this.hitstopT = Math.max(this.hitstopT, seconds * this.hitstopScale() * tune)
   }
 
   // Remappable keyboard controls (accessibility). Ignored while a DOM dialog is up
@@ -2308,6 +2311,7 @@ export class BattleScene extends Phaser.Scene {
 
   private teardown(): void {
     if (this.qaCtl) { qa.unbindScene(this.qaCtl); this.qaCtl = null }
+    unmountQaJuicePanel()
     // leaving battle: colour + volume back to neutral so map/menu music is full
     // spectrum and un-ducked (the greying is a battlefield state, not a global one).
     music.setBoss(false)

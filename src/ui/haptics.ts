@@ -9,6 +9,7 @@
 // Callers pass a short pattern in milliseconds (a single number or an array).
 
 import { appSettings } from './settings'
+import { qa } from '../game/qa'
 
 // Resolved once: is this a touch device with a real vibrate API? matchMedia is
 // read lazily so SSR/test contexts without `window` don't throw at import time.
@@ -27,6 +28,11 @@ export function haptic(pattern: number | number[]): void {
   if (!appSettings.data.haptics) return
   if (!canVibrate()) return
   try {
+    // device-session knob (?qa=1 overlay): scale the pattern's durations; neutral in prod
+    if (qa.enabled && qa.juice.hapticMul !== 1) {
+      const m = qa.juice.hapticMul
+      pattern = Array.isArray(pattern) ? pattern.map((v) => Math.round(v * m)) : Math.round(pattern * m)
+    }
     navigator.vibrate(pattern)
   } catch {
     // some embedded webviews throw on unusual patterns — never let juice crash play

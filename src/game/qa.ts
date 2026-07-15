@@ -105,6 +105,7 @@ class Qa {
   frame = 0
   tMs = 0
   lastReaction: string | null = null
+  juice: QaJuice = { hitstopMul: 1, shakeMul: 1, hapticMul: 1, floatCap: 0, bloomBase: 0.45 }
 
   private control: QaSceneControl | null = null
   private sceneWaiters: Array<(c: QaSceneControl) => void> = []
@@ -275,6 +276,18 @@ class Qa {
     })
     return pred()
   }
+}
+
+// JUICE KNOBS — live-tunable multipliers for the device tuning session. All
+// NEUTRAL by default and only consulted behind `qa.enabled`, so production
+// play is untouched. The ?qa=1 overlay (ui/qaJuicePanel) writes these; the
+// juice call sites (hitstop / shake / haptics / floaters / bloom) read them.
+export interface QaJuice {
+  hitstopMul: number // scales every requested freeze span
+  shakeMul: number // scales every screenshake amplitude
+  hapticMul: number // scales every vibration pattern's durations
+  floatCap: number // 0 = use the shipped cap; >0 overrides the floater budget
+  bloomBase: number // the ambient bloom floor (shipped 0.45)
 }
 
 // Constructing this object is the ONLY thing that happens at import time — no DOM,
