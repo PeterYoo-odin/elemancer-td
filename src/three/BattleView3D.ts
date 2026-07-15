@@ -11,6 +11,7 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { qa } from '../game/qa'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
@@ -344,6 +345,17 @@ export class BattleView3D {
   private camera: THREE.PerspectiveCamera
   private composer: EffectComposer
   private bloom: UnrealBloomPass
+  // AUTO QUALITY — performance-as-UX. The whole juice stack (bloom composer,
+  // particles, DPR-2 rendering) turns into jank on mid/low phones; a rolling
+  // EMA of REAL frame time steps the pixel ratio down (and finally the bloom
+  // pass off) under sustained load, and back up with hysteresis when headroom
+  // returns. Deliberately ignores non-live cadences (hidden tab, QA-driven
+  // fixed stepping) so deterministic drives never mutate quality mid-measure.
+  private qTier = 0 // 0 = full … 3 = DPR 1.1 + bloom off
+  private qEma = 16.7 // ms, EMA of live frame time
+  private qLastT = 0
+  private qHold = 0 // seconds the up/down condition has held
+  private qCd = 0 // seconds until the next switch is allowed
   private renderPass: RenderPass
   private outputPass: OutputPass
 
@@ -1859,12 +1871,54 @@ export class BattleView3D {
     this.bloomAmp = Math.min(0.9, Math.max(this.bloomAmp, amp))
   }
 
+  private static readonly Q_DPR = [2, 1.6, 1.3, 1.1]
+
+  private tierDpr(): number {
+    return Math.min(window.devicePixelRatio || 1, BattleView3D.Q_DPR[this.qTier] ?? 2)
+  }
+
+  private autoQuality(): void {
+    const now = performance.now()
+    const raw = this.qLastT ? now - this.qLastT : 0
+    this.qLastT = now
+    // Only live cadences teach the EMA: hidden tabs, scene handoffs and the QA
+    // drive's fixed stepping produce 100ms+ (or ~0ms) gaps that mean nothing.
+    if (raw < 5 || raw > 80) { this.qHold = 0; return }
+    this.qEma += (raw - this.qEma) * 0.08
+    if (this.qCd > 0) { this.qCd -= raw / 1000; return }
+    if (this.qEma > 24 && this.qTier < 3) {
+      this.qHold += raw / 1000
+      if (this.qHold > 2) this.applyQuality(this.qTier + 1) // ~2s sustained >24ms → step down
+    } else if (this.qEma < 13 && this.qTier > 0) {
+      this.qHold += raw / 1000
+      if (this.qHold > 5) this.applyQuality(this.qTier - 1) // ~5s sustained headroom → step back up
+    } else {
+      this.qHold = 0
+    }
+  }
+
+  private applyQuality(tier: number): void {
+    this.qTier = Math.max(0, Math.min(3, tier))
+    this.qHold = 0
+    this.qCd = 3 // settle window so a resize storm can't thrash tiers
+    this.qEma = 16.7 // re-measure from neutral at the new tier
+    const w = window.innerWidth, h = window.innerHeight
+    const dpr = this.tierDpr()
+    this.renderer.setPixelRatio(dpr)
+    this.renderer.setSize(w, h, false)
+    this.composer.setPixelRatio(dpr)
+    this.composer.setSize(w, h)
+    this.bloom.setSize(w, h)
+    this.bloom.enabled = this.qTier < 3 // last resort: drop the whole bloom pass
+    if (qa.enabled) qa.emit('quality', { tier: this.qTier, dpr: Math.round(dpr * 100) / 100, bloom: this.bloom.enabled })
+  }
+
   resize(): void {
     if (this.disposed) return
     const w = window.innerWidth, h = window.innerHeight
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    this.renderer.setPixelRatio(this.tierDpr())
     this.renderer.setSize(w, h, false)
-    this.composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    this.composer.setPixelRatio(this.tierDpr())
     this.composer.setSize(w, h)
     this.bloom.setSize(w, h)
     this.frameCamera()
@@ -3425,6 +3479,7 @@ export class BattleView3D {
   // ---------------------------------------------------------------- render
   render(dt: number): void {
     if (this.disposed) return
+    this.autoQuality()
     this.clockT += dt
 
     // camera: idle drift + push-in on big moments + decaying screenshake

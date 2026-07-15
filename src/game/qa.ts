@@ -24,7 +24,7 @@
 import type { Sim } from '../sim'
 
 export interface QaEvent {
-  type: 'reaction' | 'hitstop' | 'shake' | 'callout' | 'sound' | 'kill' | 'combo'
+  type: 'reaction' | 'hitstop' | 'shake' | 'callout' | 'sound' | 'kill' | 'combo' | 'quality'
   name?: string
   frame: number // frame index (increments once per rendered update, incl. frozen frames)
   tMs: number // accumulated real frame time in ms (advances during a freeze too)
