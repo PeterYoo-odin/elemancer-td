@@ -183,12 +183,12 @@ const CSS = `
   box-shadow: 0 10px 26px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.1); }
 .efp-btn:active { transform: scale(.975); transition-duration: .06s; }
 /* faint paper-tooth grain so the flat glass panels stop reading as pure vector */
-.efp-btn::before, .efp-card::before, .efp-chip::before {
+.efp-btn::before, .efp-card::before, .efp-chip::before, .efp-tile::before {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
   background-size: 160px 160px; opacity: .035; mix-blend-mode: soft-light; z-index: 0;
 }
-.efp-btn > *, .efp-card > *, .efp-chip > * { position: relative; z-index: 1; }
+.efp-btn > *, .efp-card > *, .efp-chip > *, .efp-tile > * { position: relative; z-index: 1; }
 .efp-chip { position: relative; }
 .efp-card { position: relative; }
 .efp-ic {
@@ -207,6 +207,37 @@ const CSS = `
 .efp-btn:hover .efp-chev { transform: translateX(3px); color: rgba(255,255,255,.7); }
 .efp-pill { flex: 0 0 auto; font-size: 9.5px; font-weight: 800; letter-spacing: .14em; padding: 4px 9px; border-radius: 999px;
   color: #ffcf9e; background: rgba(255,140,60,.14); border: 1px solid rgba(255,150,70,.4); }
+
+/* ---- COMPETE hub: the five mode cards live one tap deep ---- */
+.efp-chev-v { transition: transform .2s ease, color .2s ease; }
+.efp-btn.efp-open { border-color: color-mix(in srgb, var(--a) 55%, transparent);
+  box-shadow: 0 6px 18px rgba(0,0,0,.35), 0 0 18px color-mix(in srgb, var(--a) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.07); }
+.efp-btn.efp-open .efp-chev-v { transform: rotate(90deg); color: rgba(255,255,255,.7); }
+.efp-modes { display: flex; flex-direction: column; gap: 9px; padding-left: 14px;
+  border-left: 2px solid rgba(141,255,74,.22); margin: -2px 0 2px 6px;
+  animation: efpIn .3s cubic-bezier(.22,1,.36,1) both; }
+.efp-modes[hidden] { display: none; }
+.efp.efp-reduced .efp-modes { animation: none; }
+.efp-modes .efp-btn { padding: 9px 13px; border-radius: 14px; }
+.efp-modes .efp-ic { width: 36px; height: 36px; }
+.efp-modes .efp-blabel { font-size: 15px; }
+
+/* ---- meta tile row: Heroes / Workshop / Store as one compact rank ---- */
+.efp-tilerow { display: flex; gap: 10px; }
+.efp-tile {
+  --a: #b06bff;
+  position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 11px 6px 9px; border-radius: 16px; border: 1px solid rgba(255,255,255,.11);
+  background: linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+  color: #efe9ff; cursor: pointer; font: inherit;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.07);
+  transition: transform .16s ease, border-color .2s ease, box-shadow .2s ease;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.efp-tile:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.28); }
+.efp-tile:active { transform: scale(.965); transition-duration: .06s; }
+.efp-tile .efp-ic { width: 38px; height: 38px; }
+.efp-tlabel { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; color: #cfc4ef; }
 
 .efp-btn.efp-primary {
   --a: #3d2a00; padding: 15px 16px; border: 0;
@@ -447,46 +478,53 @@ export class FrontPage {
           <span class="efp-btxt"><span class="efp-blabel">PLAY</span><span class="efp-bsub">Campaign</span></span>
           <span class="efp-chev">&#8250;</span>
         </button>
-        <button class="efp-btn efp-in" style="animation-delay:.42s; --a:#ffb43c" data-act="heroes">
-          <span class="efp-ic">${svg(ICONS.shield)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">HEROES</span><span class="efp-bsub">Collect &amp; level your champions</span></span>
-          <span class="efp-chev">&#8250;</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.48s; --a:#5b8dff" data-act="workshop">
-          <span class="efp-ic">${svg(ICONS.hammer)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">WORKSHOP</span><span class="efp-bsub">Permanent upgrades</span></span>
-          <span class="efp-chev">&#8250;</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.54s; --a:#c06bff" data-act="shop">
-          <span class="efp-ic">${svg(ICONS.gem)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">STORE</span><span class="efp-bsub">Skins &amp; Prism Pass &middot; zero power sold</span></span>
-          <span class="efp-chev">&#8250;</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.6s; --a:#ff7a4a" data-act="endless">
+        <button class="efp-btn efp-in" style="animation-delay:.42s; --a:#8dff4a" data-act="compete" aria-expanded="false" aria-controls="efp-modes">
           <span class="efp-ic">${svg(ICONS.infinity)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">ENDLESS</span><span class="efp-bsub">Fair play &middot; no boosts</span></span>
-          <span class="efp-pill">RANKED</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.63s; --a:#c06bff" data-act="roguelike">
-          <span class="efp-ic">${svg(ICONS.gem)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">ROGUELIKE</span><span class="efp-bsub">Relics &middot; curses &middot; weekly mutator</span></span>
-          <span class="efp-pill">WEEKLY</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.645s; --a:#8dff4a" data-act="ranked">
-          <span class="efp-ic">${svg(ICONS.shield)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">RANKED</span><span class="efp-bsub">Provably fair &middot; a board money can't climb</span></span>
+          <span class="efp-btxt"><span class="efp-blabel">COMPETE</span><span class="efp-bsub">Endless &middot; Ranked &middot; Daily &middot; Pathforge &middot; Roguelike</span></span>
           <span class="efp-pill">${iconMarkup('lock', { size: 11 })} FAIR</span>
+          <span class="efp-chev efp-chev-v">&#8250;</span>
         </button>
-        <button class="efp-btn efp-in" style="animation-delay:.66s; --a:#ffd54a" data-act="daily">
-          <span class="efp-ic">${svg(ICONS.calendar)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">DAILY SEED</span><span class="efp-bsub">One shared run &middot; beat your best</span></span>
-          <span class="efp-chev">&#8250;</span>
-        </button>
-        <button class="efp-btn efp-in" style="animation-delay:.675s; --a:#6bd7ff" data-act="pathforge">
-          <span class="efp-ic">${svg(ICONS.maze)}</span>
-          <span class="efp-btxt"><span class="efp-blabel">PATHFORGE</span><span class="efp-bsub">Build the maze &middot; same seed, pure skill</span></span>
-          <span class="efp-pill">NEW</span>
-        </button>
+        <div class="efp-modes" id="efp-modes" data-modes hidden>
+          <button class="efp-btn" style="--a:#ff7a4a" data-act="endless">
+            <span class="efp-ic">${svg(ICONS.infinity)}</span>
+            <span class="efp-btxt"><span class="efp-blabel">ENDLESS</span><span class="efp-bsub">Fair play &middot; no boosts</span></span>
+            <span class="efp-pill">RANKED</span>
+          </button>
+          <button class="efp-btn" style="--a:#8dff4a" data-act="ranked">
+            <span class="efp-ic">${svg(ICONS.shield)}</span>
+            <span class="efp-btxt"><span class="efp-blabel">RANKED</span><span class="efp-bsub">Provably fair &middot; a board money can't climb</span></span>
+            <span class="efp-pill">${iconMarkup('lock', { size: 11 })} FAIR</span>
+          </button>
+          <button class="efp-btn" style="--a:#ffd54a" data-act="daily">
+            <span class="efp-ic">${svg(ICONS.calendar)}</span>
+            <span class="efp-btxt"><span class="efp-blabel">DAILY SEED</span><span class="efp-bsub">One shared run &middot; beat your best</span></span>
+            <span class="efp-chev">&#8250;</span>
+          </button>
+          <button class="efp-btn" style="--a:#6bd7ff" data-act="pathforge">
+            <span class="efp-ic">${svg(ICONS.maze)}</span>
+            <span class="efp-btxt"><span class="efp-blabel">PATHFORGE</span><span class="efp-bsub">Build the maze &middot; same seed, pure skill</span></span>
+            <span class="efp-pill">NEW</span>
+          </button>
+          <button class="efp-btn" style="--a:#c06bff" data-act="roguelike">
+            <span class="efp-ic">${svg(ICONS.gem)}</span>
+            <span class="efp-btxt"><span class="efp-blabel">ROGUELIKE</span><span class="efp-bsub">Relics &middot; curses &middot; weekly mutator</span></span>
+            <span class="efp-pill">WEEKLY</span>
+          </button>
+        </div>
+        <div class="efp-tilerow efp-in" style="animation-delay:.48s">
+          <button class="efp-tile" style="--a:#ffb43c" data-act="heroes" aria-label="Heroes — collect and level your champions">
+            <span class="efp-ic">${svg(ICONS.shield)}</span>
+            <span class="efp-tlabel">HEROES</span>
+          </button>
+          <button class="efp-tile" style="--a:#5b8dff" data-act="workshop" aria-label="Workshop — permanent upgrades">
+            <span class="efp-ic">${svg(ICONS.hammer)}</span>
+            <span class="efp-tlabel">WORKSHOP</span>
+          </button>
+          <button class="efp-tile" style="--a:#c06bff" data-act="shop" aria-label="Store — skins and Prism Pass, zero power sold">
+            <span class="efp-ic">${svg(ICONS.gem)}</span>
+            <span class="efp-tlabel">STORE</span>
+          </button>
+        </div>
       </div>
 
       <div class="efp-foot efp-in" style="animation-delay:.68s">
@@ -549,6 +587,7 @@ export class FrontPage {
       playUiTick()
       const act = btn.dataset.act
       if (act === 'settings') this.openSettings()
+      else if (act === 'compete') this.toggleModes()
       else if (act === 'play') this.leave(() => this.handlers.onPlay())
       else if (act === 'heroes') this.leave(() => this.handlers.onHeroes())
       else if (act === 'workshop') this.leave(() => this.handlers.onWorkshop())
@@ -564,6 +603,26 @@ export class FrontPage {
     })
 
     this.refreshGrowth()
+  }
+
+  // COMPETE hub: expand/collapse the five competitive-mode cards in place. The
+  // menu's information architecture keeps ONE primary action (PLAY) plus one
+  // hub — the modes live a single tap deeper instead of sprawling nine equal
+  // cards down the page. State is per-visit (collapsed by default).
+  private toggleModes(): void {
+    const hub = this.root.querySelector<HTMLElement>('[data-act="compete"]')
+    const panel = this.root.querySelector<HTMLElement>('[data-modes]')
+    if (!hub || !panel) return
+    const open = panel.hidden
+    panel.hidden = !open
+    hub.setAttribute('aria-expanded', String(open))
+    hub.classList.toggle('efp-open', open)
+    if (open) {
+      // Bring the revealed modes into view on short screens (the page scrolls).
+      window.requestAnimationFrame(() => {
+        panel.scrollIntoView({ block: 'nearest', behavior: appSettings.reducedMotion() ? 'auto' : 'smooth' })
+      })
+    }
   }
 
   // Toggle the growth affordances (unclaimed-welcome banner + install button)
