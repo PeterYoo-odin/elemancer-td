@@ -4381,7 +4381,8 @@ var Sim = class {
         fusionKey: "",
         fusionName: "",
         fusedColor: 0,
-        auraFlip: false
+        auraFlip: false,
+        invested: 0
       };
       this.towers.push(t);
     }
@@ -4406,6 +4407,7 @@ var Sim = class {
     t.fusionName = "";
     t.fusedColor = 0;
     t.auraFlip = false;
+    t.invested = cost;
     this.occupied[row][col] = t;
     this.recomputeBuffs();
     this.recomputeResonances();
@@ -4432,6 +4434,7 @@ var Sim = class {
     const cost = this.upgradeCostFor(t);
     if (cost === null || this.gold < cost) return false;
     this.spendGold(cost);
+    t.invested += cost;
     t.level++;
     this.recomputeBuffs();
     this.emit({ t: "upgrade", x: t.x, y: t.y, color: t.def.color, radius: this.effRange(t), label: `LV ${t.level + 1}!` });
@@ -4443,6 +4446,7 @@ var Sim = class {
     const cost = this.branchCostFor(t, idx);
     if (cost === null || this.gold < cost) return false;
     this.spendGold(cost);
+    t.invested += cost;
     t.level = 3;
     t.branch = idx;
     this.recomputeBuffs();
@@ -4452,6 +4456,28 @@ var Sim = class {
   setTargeting(id, mode) {
     const t = this.towerById(id);
     if (t) t.targeting = mode;
+  }
+  // ---- SALVAGE ---------------------------------------------------------------
+  // Sell a tower back for 75% of everything sunk into it (place + upgrades +
+  // branch + fusion, incl. an absorbed partner's investment). A REAL recorded
+  // sim input — deterministic, replayed byte-identically by ranked verification
+  // (OP_SALVAGE) — so mis-taps and mid-run pivots are no longer permanent.
+  salvageRefundFor(t) {
+    return Math.floor(t.invested * 0.75);
+  }
+  /** Sell the tower; returns the refund granted, or null if it can't be sold. */
+  salvageTower(id) {
+    if (this.state !== "prep" && this.state !== "active") return null;
+    const t = this.towerById(id);
+    if (!t || !t.active) return null;
+    const refund = this.salvageRefundFor(t);
+    t.active = false;
+    if (this.occupied[t.row]?.[t.col] === t) this.occupied[t.row][t.col] = null;
+    this.addGold(refund);
+    this.recomputeBuffs();
+    this.recomputeResonances();
+    this.emit({ t: "salvage", x: t.x, y: t.y, color: t.def.color, refund });
+    return refund;
   }
   // ---- FUSION TOWERS -------------------------------------------------------
   // A host can fuse with an ADJACENT max-tier tower whose aura forms a reaction
@@ -4486,6 +4512,7 @@ var Sim = class {
     this.spendGold(cost);
     const p = opt.partner;
     const pAura = TOWER_AURA[p.kind];
+    t.invested += cost + p.invested;
     p.active = false;
     this.occupied[p.row][p.col] = null;
     t.fusedElem = pAura;
@@ -6343,7 +6370,7 @@ function pathforgeLevel(route) {
 }
 
 // src/game/ranked.ts
-var SIM_VERSION = 6;
+var SIM_VERSION = 7;
 var RANKED_HERO_LEVEL = 5;
 var ENDLESS_START_GOLD = 300;
 var ENDLESS_START_LIVES = 20;
@@ -6402,6 +6429,7 @@ var OP_STARTWAVE = 8;
 var OP_HEROMOVE = 9;
 var OP_HEROTARGET = 10;
 var OP_HEROFOCUS = 11;
+var OP_SALVAGE = 12;
 var TARGET_MODES_ORDER = ["First", "Last", "Close", "Strong", "Weak", "Primed"];
 var REPLAY_TICK_CAP = 60 * 60 * 90;
 function applyCmd(sim, cmd) {
@@ -6429,6 +6457,9 @@ function applyCmd(sim, cmd) {
       break;
     case OP_TARGET:
       sim.setTargeting(cmd[2], TARGET_MODES_ORDER[cmd[3]] ?? "First");
+      break;
+    case OP_SALVAGE:
+      sim.salvageTower(cmd[2]);
       break;
     case OP_STARTWAVE:
       if (sim.state === "prep") sim.startWave();

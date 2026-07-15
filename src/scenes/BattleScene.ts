@@ -400,6 +400,13 @@ export class BattleScene extends Phaser.Scene {
       onUpgrade: (id) => { const c = this.sim.clock; if (this.sim.upgradeTower(id)) { this.hud.showUpgrade(this.sim, id); this.recorder?.upgrade(c, id) } },
       onBranch: (id, idx) => { const c = this.sim.clock; if (this.sim.chooseBranch(id, idx)) { this.hud.showUpgrade(this.sim, id); this.recorder?.branch(c, id, idx) } },
       onFuse: (id, partnerId) => { const c = this.sim.clock; if (this.sim.fuseTowers(id, partnerId)) { this.hud.showUpgrade(this.sim, id); this.recorder?.fuse(c, id, partnerId) } },
+      onSalvage: (id) => {
+        const c = this.sim.clock
+        if (this.sim.salvageTower(id) !== null) {
+          this.recorder?.salvage(c, id) // a REAL replayed input — ranked verify re-runs it
+          this.deselect() // the panel's tower is gone; drop the sheet
+        }
+      },
       onTargeting: (id) => this.cycleTargeting(id),
       onHeroTargeting: (slot) => this.cycleHeroTargeting(slot),
       onHeroMove: (slot) => this.armHeroMove(slot),
@@ -1987,6 +1994,16 @@ export class BattleScene extends Phaser.Scene {
         if (!ev.label.startsWith('⚛')) battleSfx.upgrade() // fusion has its own forge voice
         if (this.selectedId != null) this.hud.showUpgrade(this.sim, this.selectedId)
         break
+      case 'salvage': {
+        // sell beat: a small dust ring where the tower stood + the refund arcing up
+        this.view.fxAoe(ev.x, ev.y, 46, ev.color, 0.6)
+        this.floatAt(ev.x, ev.y, `+$${ev.refund}`, 0xffd54a, 24)
+        const sp = this.view.projectToScreen(ev.x, ev.y, 0.8)
+        if (sp.visible) this.hud.coinBurst(sp.x, sp.y, Math.min(ev.refund, 40))
+        battleSfx.coin(2)
+        if (!this.attract) haptic(HAPTIC.place)
+        break
+      }
       case 'spell':
         this.view.fxSpell(ev.key, ev.x, ev.y, ev.radius, ev.color)
         battleSfx.spell(ev.key === 'meteor', panFor(ev.x))
@@ -2222,7 +2239,10 @@ export class BattleScene extends Phaser.Scene {
         scene.sim.qaGrantGold(cost)
         return scene.sim.upgradeTower(t.id)
       },
-      sellTower: (col, row) => scene.sim.qaRemoveTower(col, row),
+      sellTower: (col, row) => {
+        const t = scene.sim.towerAt(col, row)
+        return !!t && scene.sim.salvageTower(t.id) !== null
+      },
       startWave: () => { if (scene.sim.state === 'prep') scene.sim.startWave() },
       skipToWave: (n) => scene.sim.qaSkipToWave(n),
       forceWin: () => scene.sim.qaForceEnd('won'),

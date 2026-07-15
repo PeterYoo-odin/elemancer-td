@@ -38,6 +38,7 @@ export interface HudCallbacks {
   onUpgrade(id: number): void
   onBranch(id: number, idx: number): void
   onFuse(id: number, partnerId: number): void // forge a fusion tower with an adjacent max tower
+  onSalvage(id: number): void // sell the tower back for its 75% refund (arm-then-confirm in the panel)
   onTargeting(id: number): void
   onHeroTargeting(slotId: number): void // cycle a fielded hero's focus priority
   onHeroMove(slotId: number): void // arm relocation — next tile tap moves the hero
@@ -228,6 +229,9 @@ const CSS = `
 .eld-upg .up { flex:1 1 auto; padding:10px; border-radius:12px; font-weight:900; font-size:17px;
   background:linear-gradient(180deg,#3ad07a,#1f9a54); border:1px solid rgba(255,255,255,.25); }
 .eld-upg .up.no { background:#4a4470; }
+.eld-upg .sell { flex:0 0 auto; padding:10px 12px; border-radius:12px; font-weight:800; font-size:13px;
+  background:#4a2a38; border:1px solid rgba(255,140,140,.35); color:#ffb9b9; }
+.eld-upg .sell.arm { background:linear-gradient(180deg,#d05555,#a02f2f); color:#fff; border-color:rgba(255,255,255,.4); }
 .eld-upg .branches { display:flex; gap:8px; flex:1 1 auto; }
 .eld-upg .br { flex:1; padding:8px 6px; border-radius:12px; font-weight:800; border:1px solid rgba(255,255,255,.25);
   display:flex; flex-direction:column; align-items:center; line-height:1.15; }
@@ -1550,6 +1554,37 @@ export class BattleHud {
         }))
         ctl.append(max)
       }
+    }
+
+    // SELL — arm-then-confirm so a stray tap can't vaporize a tower. Refund is
+    // the sim's own number (75% of everything invested); the op is a REAL
+    // recorded input, so ranked replays reproduce it byte-identically.
+    {
+      const refund = sim.salvageRefundFor(t)
+      const sell = el('button', 'sell pe', `SELL +$${refund}`)
+      let armT = 0
+      sell.onclick = () => {
+        const now = performance.now()
+        if (sell.classList.contains('arm') && now - armT < 3000) { this.cb.onSalvage(t.id); return }
+        sell.classList.add('arm')
+        sell.textContent = 'TAP AGAIN'
+        armT = now
+        window.setTimeout(() => {
+          if (!sell.isConnected) return
+          sell.classList.remove('arm')
+          sell.textContent = `SELL +$${refund}`
+        }, 3000)
+      }
+      attachTip(sell, () => {
+        const tt = this.simRef?.towerById(id)
+        if (!tt || !this.simRef) return null
+        return {
+          tag: 'SALVAGE', title: `Sell for $${this.simRef.salvageRefundFor(tt)}`, accent: '#ff9d9d',
+          body: 'Refunds 75% of everything invested in this tower (build + upgrades + branch + fusion) and frees the tile. Tap twice to confirm.',
+          foot: 'Repositioning is a real strategy — a sold tile can host the counter the next wave needs.',
+        }
+      })
+      ctl.append(sell)
     }
 
     wrap.append(close, row1, stat, evs, ctl)

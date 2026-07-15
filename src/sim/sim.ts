@@ -187,6 +187,8 @@ export interface SimTower {
   fusionName: string
   fusedColor: number // partner element colour, for the view's fusion crown
   auraFlip: boolean // which of the two elements the NEXT volley paints
+  invested: number // total gold sunk into this tower (place + upgrades + branch +
+  // fusion, incl. an absorbed partner's investment) — drives the salvage refund
 }
 
 // A deployed hero: a CHARACTER on a build tile. Auto-attacks through the same
@@ -279,6 +281,7 @@ export type SimEvent =
   | { t: 'gold'; x: number; y: number; amount: number }
   | { t: 'place'; x: number; y: number; color: number; radius: number }
   | { t: 'upgrade'; x: number; y: number; color: number; radius: number; label: string }
+  | { t: 'salvage'; x: number; y: number; color: number; refund: number }
   | { t: 'spell'; key: SpellKey; x: number; y: number; radius: number; color: number; count: number }
   | { t: 'heroDeploy'; x: number; y: number; color: number; radius: number }
   // A hero relocated tiles — the view streaks a blink from the old cell to the new.
@@ -1364,7 +1367,7 @@ export class Sim {
       t = {
         id: this.nextId++, active: false, def, kind, level: 0, branch: -1, col, row,
         x: cc.x, y: cc.y, cd: 0, buffDmg: 1, buffRng: 1, aimAngle: 0, targeting: def.defaultTargeting, fireFlash: 0,
-        greyUntil: 0, fusedElem: '', fusionKey: '', fusionName: '', fusedColor: 0, auraFlip: false,
+        greyUntil: 0, fusedElem: '', fusionKey: '', fusionName: '', fusedColor: 0, auraFlip: false, invested: 0,
       }
       this.towers.push(t)
     }
@@ -1389,6 +1392,7 @@ export class Sim {
     t.fusionName = ''
     t.fusedColor = 0
     t.auraFlip = false
+    t.invested = cost
     this.occupied[row][col] = t
     this.recomputeBuffs()
     this.recomputeResonances()
@@ -1419,6 +1423,7 @@ export class Sim {
     const cost = this.upgradeCostFor(t)
     if (cost === null || this.gold < cost) return false
     this.spendGold(cost)
+    t.invested += cost
     t.level++
     this.recomputeBuffs()
     this.emit({ t: 'upgrade', x: t.x, y: t.y, color: t.def.color, radius: this.effRange(t), label: `LV ${t.level + 1}!` })
@@ -1431,6 +1436,7 @@ export class Sim {
     const cost = this.branchCostFor(t, idx)
     if (cost === null || this.gold < cost) return false
     this.spendGold(cost)
+    t.invested += cost
     t.level = 3
     t.branch = idx
     this.recomputeBuffs()
@@ -1441,6 +1447,30 @@ export class Sim {
   setTargeting(id: number, mode: TargetMode): void {
     const t = this.towerById(id)
     if (t) t.targeting = mode
+  }
+
+  // ---- SALVAGE ---------------------------------------------------------------
+  // Sell a tower back for 75% of everything sunk into it (place + upgrades +
+  // branch + fusion, incl. an absorbed partner's investment). A REAL recorded
+  // sim input — deterministic, replayed byte-identically by ranked verification
+  // (OP_SALVAGE) — so mis-taps and mid-run pivots are no longer permanent.
+  salvageRefundFor(t: SimTower): number {
+    return Math.floor(t.invested * 0.75)
+  }
+
+  /** Sell the tower; returns the refund granted, or null if it can't be sold. */
+  salvageTower(id: number): number | null {
+    if (this.state !== 'prep' && this.state !== 'active') return null
+    const t = this.towerById(id)
+    if (!t || !t.active) return null
+    const refund = this.salvageRefundFor(t)
+    t.active = false
+    if (this.occupied[t.row]?.[t.col] === t) this.occupied[t.row][t.col] = null
+    this.addGold(refund)
+    this.recomputeBuffs()
+    this.recomputeResonances()
+    this.emit({ t: 'salvage', x: t.x, y: t.y, color: t.def.color, refund })
+    return refund
   }
 
   // ---- FUSION TOWERS -------------------------------------------------------
@@ -1478,6 +1508,7 @@ export class Sim {
     this.spendGold(cost)
     const p = opt.partner
     const pAura = TOWER_AURA[p.kind]!
+    t.invested += cost + p.invested
     // absorb the partner: free its cell, retire its slot
     p.active = false
     this.occupied[p.row][p.col] = null

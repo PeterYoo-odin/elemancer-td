@@ -49,7 +49,8 @@ import type { SpellKey } from './spells'
 // no longer exists. PathForge's baked `route` field is untouched (it never went
 // through convergeTrunk), so pathforge records are unaffected by the route
 // change itself but still carry the old version tag and must re-record.
-export const SIM_VERSION = 6
+// v7: OP_SALVAGE joins the replay grammar (sell-tower is a recorded input).
+export const SIM_VERSION = 7
 
 // RANKED CONSTANTS — the store constitution, in code. Single source of truth
 // (economy.ts + BattleScene import these so no purchase/grind path can drift
@@ -183,6 +184,7 @@ const OP_STARTWAVE = 8
 const OP_HEROMOVE = 9 // relocate a fielded hero to a new tile
 const OP_HEROTARGET = 10 // set a hero's auto-attack priority
 const OP_HEROFOCUS = 11 // sticky-lock a hero onto one enemy (0 = clear)
+const OP_SALVAGE = 12 // sell a tower back for its 75% refund
 
 // TargetMode <-> compact index (stable order; append-only if ever extended)
 const TARGET_MODES_ORDER: TargetMode[] = ['First', 'Last', 'Close', 'Strong', 'Weak', 'Primed']
@@ -261,6 +263,9 @@ export class RunRecorder {
   heroFocus(clock: number, slotId: number, enemyId: number): void {
     this.c.push([OP_HEROFOCUS, this.tick(clock), slotId, enemyId])
   }
+  salvage(clock: number, id: number): void {
+    this.c.push([OP_SALVAGE, this.tick(clock), id])
+  }
   startWave(clock: number): void {
     this.c.push([OP_STARTWAVE, this.tick(clock)])
   }
@@ -327,6 +332,9 @@ function applyCmd(sim: Sim, cmd: Cmd): void {
       break
     case OP_TARGET:
       sim.setTargeting(cmd[2] as number, TARGET_MODES_ORDER[cmd[3] as number] ?? 'First')
+      break
+    case OP_SALVAGE:
+      sim.salvageTower(cmd[2] as number)
       break
     case OP_STARTWAVE:
       if (sim.state === 'prep') sim.startWave()

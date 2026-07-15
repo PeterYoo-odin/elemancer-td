@@ -899,6 +899,40 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
   console.log(`  events ✓ — Emberwaste live in-window, weekly seed deterministic, headline+event mutators folded`)
 }
 
+// SALVAGE — sell-tower is a real recorded sim input. Prove the refund math
+// (75% of everything invested), that the tile frees for a re-build, and that
+// the op is deterministic (same seed + same ops ⇒ identical fingerprint).
+console.log('\nsalvage — 75% refund · tile freed · deterministic…')
+{
+  const run = (report: boolean): { goldAfter: number; refund: number; replaced: boolean } => {
+    const sim = makeSim(0xa11ce)
+    const cells = sim.buildCells()
+    const cell = cells[0]
+    const g0 = sim.gold
+    const t = sim.placeTower('storm', cell.col, cell.row)
+    if (!t) { fail('salvage: could not place the probe tower'); return { goldAfter: 0, refund: 0, replaced: false } }
+    sim.upgradeTower(t.id)
+    sim.upgradeTower(t.id)
+    const spent = g0 - sim.gold
+    if (t.invested !== spent) fail(`salvage: invested tracking drifted — invested ${t.invested} vs actually spent ${spent}`)
+    const expect = Math.floor(t.invested * 0.75)
+    if (sim.salvageRefundFor(t) !== expect) fail(`salvage: refund preview ${sim.salvageRefundFor(t)} != floor(75% of ${t.invested}) = ${expect}`)
+    const refund = sim.salvageTower(t.id)
+    if (refund !== expect) fail(`salvage: granted refund ${refund} != expected ${expect}`)
+    if (sim.gold !== g0 - spent + expect) fail(`salvage: gold after sell ${sim.gold} != ${g0 - spent + expect}`)
+    if (sim.towerAt(cell.col, cell.row)) fail('salvage: tile still occupied after selling')
+    if (sim.salvageTower(t.id) !== null) fail('salvage: selling the same tower twice must fail')
+    const re = sim.placeTower('flame', cell.col, cell.row) // the freed tile must take a new tower
+    if (!re) fail('salvage: freed tile refused a re-build')
+    if (re && re.invested !== sim.placeCost('flame')) fail('salvage: re-built tower inherited stale invested value')
+    if (report) console.log(`  refund ok — invested ${t.invested} → +${expect} back, tile re-built`)
+    return { goldAfter: sim.gold, refund: expect, replaced: !!re }
+  }
+  const a = run(true)
+  const b = run(false)
+  if (a.goldAfter !== b.goldAfter || a.refund !== b.refund) fail('salvage: non-deterministic across identical runs')
+}
+
 // (6) RANKED REPLAY VERIFICATION — THE MOAT. Drive a canonical ranked run while
 // recording its input log, then RE-RUN that log through the SAME pure sim the
 // server uses and assert the replay reproduces the claimed score+wave exactly.
@@ -965,6 +999,11 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
       if (building && tick === 260 && towerIds.length >= 2) {
         if (sim.fuseTowers(towerIds[0], towerIds[1])) { rec.fuse(clock, towerIds[0], towerIds[1]); bump('fuse') }
       }
+      // salvage the newest tower once (covers the OP_SALVAGE opcode), then
+      // re-build on the freed cell next placement window if the cap allows
+      if (building && tick === 300 && towerIds.length >= 3) {
+        if (sim.salvageTower(towerIds[2]) !== null) { rec.salvage(clock, towerIds[2]); bump('salvage') }
+      }
       // global spell + hero spell on cooldown — FROZEN after the build window too,
       // so no active-play offense keeps the frozen board alive past the curve.
       if (building && tick % 70 === 20 && sim.spellCd.meteor <= 0) {
@@ -993,7 +1032,7 @@ console.log(`  ${MUTATOR_IDS.length} mutators + event ran clean — elites ${rog
   if (run.rec.log.c.length < 20) fail(`ranked driver recorded too few commands (${run.rec.log.c.length}) — bot may not be building`)
 
   // opcode coverage — every command KIND must round-trip through the replay
-  for (const need of ['place', 'upgrade', 'deploy', 'target', 'spell', 'heroSpell', 'startWave']) {
+  for (const need of ['place', 'upgrade', 'deploy', 'target', 'spell', 'heroSpell', 'startWave', 'salvage']) {
     if (!run.ops[need]) fail(`ranked replay self-test never exercised the '${need}' command opcode`)
   }
 
