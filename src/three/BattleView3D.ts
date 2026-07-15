@@ -12,6 +12,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { qa } from '../game/qa'
+import { artUrl } from '../ui/webp'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
@@ -693,21 +694,22 @@ export class BattleView3D {
       this.atmosphere = undefined
     }
 
-    new THREE.TextureLoader().load(
-      this.backdrop.url,
-      (tex) => {
-        if (this.disposed) { tex.dispose(); return }
-        tex.colorSpace = THREE.SRGBColorSpace
-        tex.wrapS = THREE.ClampToEdgeWrapping
-        tex.wrapT = THREE.ClampToEdgeWrapping
-        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
-        this.disposables.push(tex)
-        mat.map = tex
-        mat.needsUpdate = true
-      },
-      undefined,
-      () => { /* missing/failed → stay on the tinted gradient sky (graceful fallback) */ },
-    )
+    const bdPng = this.backdrop.url
+    const applyBd = (tex: THREE.Texture): void => {
+      if (this.disposed) { tex.dispose(); return }
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.wrapS = THREE.ClampToEdgeWrapping
+      tex.wrapT = THREE.ClampToEdgeWrapping
+      tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+      this.disposables.push(tex)
+      mat.map = tex
+      mat.needsUpdate = true
+    }
+    // WebP-first (≈93% smaller) → original PNG → tinted gradient sky.
+    new THREE.TextureLoader().load(artUrl(bdPng), applyBd, undefined, () => {
+      if (artUrl(bdPng) === bdPng) return /* stay on the gradient sky */
+      new THREE.TextureLoader().load(bdPng, applyBd, undefined, () => { /* gradient sky */ })
+    })
   }
 
   // ---------------------------------------------------------------- lights
@@ -1135,52 +1137,54 @@ export class BattleView3D {
   private loadGroundTextures(kitAtlas: THREE.Texture | null): void {
     const realmKey = this.backdrop?.key ?? ''
     const loader = new THREE.TextureLoader()
-    const groundUrl = `${import.meta.env.BASE_URL}textures/realms/${realmKey}-ground.png`
-    loader.load(
-      groundUrl,
-      (tex) => {
-        if (this.disposed || !this.groundMat) { tex.dispose(); return }
-        tex.colorSpace = THREE.SRGBColorSpace
-        tex.wrapS = THREE.RepeatWrapping
-        tex.wrapT = THREE.RepeatWrapping
-        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
-        this.disposables.push(tex)
-        this.realmGroundTex = tex
-        this.groundMat.map = tex
-        this.groundMat.color.set(0xffffff)
-        this.groundMat.needsUpdate = true
-      },
-      undefined,
-      () => {
-        if (this.disposed || !this.groundMat) return
-        this.groundMat.map = kitAtlas ?? null
-        this.groundMat.color.set(kitAtlas ? 0xffffff : this.palette.build)
-        this.groundMat.needsUpdate = true
-      },
-    )
-    const pathUrl = `${import.meta.env.BASE_URL}textures/path-road.png`
-    loader.load(
-      pathUrl,
-      (tex) => {
-        if (this.disposed || !this.pathMat) { tex.dispose(); return }
-        tex.colorSpace = THREE.SRGBColorSpace
-        tex.wrapS = THREE.RepeatWrapping
-        tex.wrapT = THREE.RepeatWrapping
-        tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
-        this.disposables.push(tex)
-        this.pathRoadTex = tex
-        this.pathMat.map = tex
-        this.pathMat.color.set(0xffffff)
-        this.pathMat.needsUpdate = true
-      },
-      undefined,
-      () => {
-        if (this.disposed || !this.pathMat) return
-        this.pathMat.map = kitAtlas ?? null
-        this.pathMat.color.set(kitAtlas ? 0xffffff : this.palette.path)
-        this.pathMat.needsUpdate = true
-      },
-    )
+    // WebP-first (≈93% smaller), then the original PNG, then the kit atlas —
+    // three rungs so no missing file can ever blank the board.
+    const groundPng = `${import.meta.env.BASE_URL}textures/realms/${realmKey}-ground.png`
+    const applyGround = (tex: THREE.Texture): void => {
+      if (this.disposed || !this.groundMat) { tex.dispose(); return }
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.wrapS = THREE.RepeatWrapping
+      tex.wrapT = THREE.RepeatWrapping
+      tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+      this.disposables.push(tex)
+      this.realmGroundTex = tex
+      this.groundMat.map = tex
+      this.groundMat.color.set(0xffffff)
+      this.groundMat.needsUpdate = true
+    }
+    const groundKit = (): void => {
+      if (this.disposed || !this.groundMat) return
+      this.groundMat.map = kitAtlas ?? null
+      this.groundMat.color.set(kitAtlas ? 0xffffff : this.palette.build)
+      this.groundMat.needsUpdate = true
+    }
+    loader.load(artUrl(groundPng), applyGround, undefined, () => {
+      if (artUrl(groundPng) === groundPng) { groundKit(); return }
+      loader.load(groundPng, applyGround, undefined, groundKit)
+    })
+    const pathPng = `${import.meta.env.BASE_URL}textures/path-road.png`
+    const applyPath = (tex: THREE.Texture): void => {
+      if (this.disposed || !this.pathMat) { tex.dispose(); return }
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.wrapS = THREE.RepeatWrapping
+      tex.wrapT = THREE.RepeatWrapping
+      tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
+      this.disposables.push(tex)
+      this.pathRoadTex = tex
+      this.pathMat.map = tex
+      this.pathMat.color.set(0xffffff)
+      this.pathMat.needsUpdate = true
+    }
+    const pathKit = (): void => {
+      if (this.disposed || !this.pathMat) return
+      this.pathMat.map = kitAtlas ?? null
+      this.pathMat.color.set(kitAtlas ? 0xffffff : this.palette.path)
+      this.pathMat.needsUpdate = true
+    }
+    loader.load(artUrl(pathPng), applyPath, undefined, () => {
+      if (artUrl(pathPng) === pathPng) { pathKit(); return }
+      loader.load(pathPng, applyPath, undefined, pathKit)
+    })
   }
 
   // ?qa=1 drive-API surface (see qa.ts QaBoardTexture): reads the LIVE material's
@@ -1413,9 +1417,8 @@ export class BattleView3D {
     // Graceful fallback: if the art is missing the procedural fount above carries it.
     const artBase = import.meta.env.BASE_URL + 'concepts/base/'
     const mkArt = (file: string, initOpacity: number, primary: boolean, assign: (s: THREE.Sprite, m: THREE.SpriteMaterial) => void): void => {
-      new THREE.TextureLoader().load(
-        artBase + file,
-        (tex) => {
+      const png = artBase + file
+      const apply = (tex: THREE.Texture): void => {
           if (this.disposed) { tex.dispose(); return }
           tex.colorSpace = THREE.SRGBColorSpace
           tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy())
@@ -1438,10 +1441,12 @@ export class BattleView3D {
           // light + halo stay); the critical sprite only ever fades IN over it.
           if (primary) this.baseMesh.visible = false
           this.setBaseIntegrity(this.baseIntegrity) // re-apply current HP state to the new sprite
-        },
-        undefined,
-        () => { /* missing → procedural fount ships (graceful fallback) */ },
-      )
+      }
+      // WebP-first (≈93% smaller) → original PNG → the procedural fount carries it.
+      new THREE.TextureLoader().load(artUrl(png), apply, undefined, () => {
+        if (artUrl(png) === png) return /* missing → procedural fount ships */
+        new THREE.TextureLoader().load(png, apply, undefined, () => { /* procedural fount ships */ })
+      })
     }
     mkArt('wellspring.png', 1, true, (s, m) => { this.baseArt = s; this.baseArtMat = m })
     mkArt('wellspring-critical.png', 0, false, (s, m) => { this.baseArtCrit = s; this.baseArtCritMat = m })

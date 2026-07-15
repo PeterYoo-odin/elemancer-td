@@ -8,6 +8,7 @@
 // Every archetype is decoded at most once and cached; nothing here runs per frame.
 
 import * as THREE from 'three'
+import { artUrl } from './webp'
 import type { EnemyKind } from '../game/enemies'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/enemies/'
@@ -52,13 +53,19 @@ export function enemyAccent(kind: EnemyKind): number | null {
   return ENEMY_ART[kind]?.accent ?? null
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
+function loadOne(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => resolve(img)
     img.onerror = () => reject(new Error('enemy art load failed: ' + url))
     img.src = url
   })
+}
+
+/** WebP-first (≈93% smaller), falling back to the original PNG on a miss. */
+function loadImage(pngUrl: string): Promise<HTMLImageElement> {
+  const preferred = artUrl(pngUrl)
+  return preferred === pngUrl ? loadOne(pngUrl) : loadOne(preferred).catch(() => loadOne(pngUrl))
 }
 
 const cache = new Map<EnemyKind, Promise<EnemyArt | null>>()

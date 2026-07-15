@@ -5,6 +5,7 @@
 // frame. A missing file degrades gracefully (callers fall back to a glyph).
 
 import { WYRMS, wyrmById } from '../game/wyrms'
+import { artUrl } from './webp'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/dragons/'
 
@@ -13,13 +14,19 @@ export function wyrmArtUrl(wyrmId: string): string | null {
   return w ? BASE + w.file : null
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
+function loadOne(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => resolve(img)
     img.onerror = () => reject(new Error('image load failed: ' + url))
     img.src = url
   })
+}
+
+/** WebP-first (≈93% smaller), falling back to the original PNG on a miss. */
+function loadImage(pngUrl: string): Promise<HTMLImageElement> {
+  const preferred = artUrl(pngUrl)
+  return preferred === pngUrl ? loadOne(pngUrl) : loadOne(preferred).catch(() => loadOne(pngUrl))
 }
 
 export interface WyrmCutout {

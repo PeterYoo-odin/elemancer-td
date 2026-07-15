@@ -9,6 +9,7 @@
 
 import { LEVELS, REALMS, isLevelUnlocked, realmForLevel, type LevelDef, type RealmDef } from '../game/levels'
 import { realmBackdropUrl } from '../game/realmBackdrops'
+import { artUrl } from './webp'
 import { economy } from '../game/economy'
 import { appSettings } from './settings'
 import { playUiTick, playNodeStinger, playDiscovery } from './sfx'
@@ -910,7 +911,7 @@ export class WorldMap {
     el.style.setProperty('--a', realm.ui.accent)
     el.innerHTML = `
       <div class="ewm-bcard" style="--a:${realm.ui.accent}">
-        <div class="ewm-bkey" style="background-image:url('${realmBackdropUrl(realmIdx)}')"></div>
+        <div class="ewm-bkey" style="background-image:url('${artUrl(realmBackdropUrl(realmIdx))}')"></div>
         <div class="ewm-bbody">
           <div class="ewm-bemoji">${realm.emoji}</div>
           <div class="ewm-bord">REALM ${ROMAN[realmIdx]} · ${realm.element.toUpperCase()}</div>
@@ -972,7 +973,7 @@ export class WorldMap {
     // biome landscape layered faintly UNDER the card gradient (kept ~88% opaque
     // so the flavor + bark text stays crisp), so the pre-level card reads as this realm
     const rIdx = Math.max(0, REALMS.indexOf(node.realm))
-    const pcardBg = `linear-gradient(180deg, rgba(29,19,56,.86) 0%, rgba(19,12,40,.93) 100%), url('${realmBackdropUrl(rIdx)}') center/cover no-repeat`
+    const pcardBg = `linear-gradient(180deg, rgba(29,19,56,.86) 0%, rgba(19,12,40,.93) 100%), url('${artUrl(realmBackdropUrl(rIdx))}') center/cover no-repeat`
     const el = document.createElement('div')
     el.className = 'ewm-pre'
     el.innerHTML = `
