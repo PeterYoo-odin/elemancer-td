@@ -1304,20 +1304,34 @@ export class BattleView3D {
     this.detailGroup.add(g)
   }
 
-  // Buildable-cell highlight (shown while placing a tower) using selection markers.
+  // Flat square "frame" (an outer square with a concentric square hole), lying in
+  // XY — caller rotates -90° about X to lay it flat on the ground.
+  private squareFrameGeo(outerHalf: number, innerHalf: number): THREE.ShapeGeometry {
+    const shape = new THREE.Shape()
+    shape.moveTo(-outerHalf, -outerHalf); shape.lineTo(outerHalf, -outerHalf)
+    shape.lineTo(outerHalf, outerHalf);   shape.lineTo(-outerHalf, outerHalf); shape.closePath()
+    const hole = new THREE.Path()
+    hole.moveTo(-innerHalf, -innerHalf); hole.lineTo(-innerHalf, innerHalf)
+    hole.lineTo(innerHalf, innerHalf);   hole.lineTo(innerHalf, -innerHalf); hole.closePath()
+    shape.holes.push(hole)
+    return new THREE.ShapeGeometry(shape)
+  }
+
+  // Buildable-cell highlight (shown while placing a tower) — a white-bordered
+  // square outline per tile, so the placeable footprint reads as the actual
+  // (square) tile it occupies, plus a faint fill for legibility.
   private setupBuildHighlight(): void {
     const cells = this.sim.buildCells()
-    const geo = models.geometry('selection-a')
-    const mat = new THREE.MeshBasicMaterial({ color: 0x8affc0, transparent: true, opacity: 0.32, depthWrite: false })
-    this.disposables.push(mat)
-    if (geo) this.disposables.push(geo)
+    const frameGeo = this.squareFrameGeo(0.46, 0.40) // ~0.06-wide white frame, small gap to neighbour
+    const borderMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false, toneMapped: false })
+    const fillGeo = new THREE.PlaneGeometry(0.80, 0.80)
+    const fillMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false, toneMapped: false })
+    this.disposables.push(frameGeo, borderMat, fillGeo, fillMat)
     for (const { col, row } of cells) {
-      const mesh = geo
-        ? new THREE.Mesh(geo, mat)
-        : new THREE.Mesh(this.blobGeo, mat)
-      if (!geo) mesh.rotation.x = -Math.PI / 2
-      mesh.position.set(wx(MAP_X + col * TILE_PX + TILE_PX / 2), GROUND + 0.015, wz(MAP_Y + row * TILE_PX + TILE_PX / 2))
-      this.buildHighlight.add(mesh)
+      const cx = wx(MAP_X + col * TILE_PX + TILE_PX / 2)
+      const cz = wz(MAP_Y + row * TILE_PX + TILE_PX / 2)
+      const fill = new THREE.Mesh(fillGeo, fillMat); fill.rotation.x = -Math.PI / 2; fill.position.set(cx, GROUND + 0.014, cz); this.buildHighlight.add(fill)
+      const border = new THREE.Mesh(frameGeo, borderMat); border.rotation.x = -Math.PI / 2; border.position.set(cx, GROUND + 0.016, cz); this.buildHighlight.add(border)
     }
   }
 

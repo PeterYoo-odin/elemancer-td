@@ -75,6 +75,7 @@ export function installChromancer(game: Phaser.Game): void {
 
     // ---- juice ----
     triggerReaction: (name: string): boolean => qa.requireScene().triggerReaction(name),
+    showPlacement: (on = true): void => qa.requireScene().showPlacement(on),
 
     // ---- state + deterministic stepping ----
     getState: (): QaState => qa.requireScene().state(),

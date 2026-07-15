@@ -82,6 +82,7 @@ export interface QaSceneControl {
   forceWin(): void
   forceDefeat(): void
   triggerReaction(name: string): boolean
+  showPlacement(on: boolean): void // toggle buildable-cell highlights (visual QA)
   state(): QaState
 }
 

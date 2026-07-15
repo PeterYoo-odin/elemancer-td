@@ -2228,6 +2228,7 @@ export class BattleScene extends Phaser.Scene {
       forceWin: () => scene.sim.qaForceEnd('won'),
       forceDefeat: () => scene.sim.qaForceEnd('lost'),
       triggerReaction: (name) => scene.qaFireReaction(name),
+      showPlacement: (on) => scene.view.setBuildHighlight(on),
       state: () => scene.qaState(),
     }
   }
