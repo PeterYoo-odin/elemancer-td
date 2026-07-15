@@ -9,6 +9,7 @@
 
 import { economy, type WelcomeGrant, type SpinPrize, WELCOME_DIAMONDS } from '../game/economy'
 import { appSettings } from './settings'
+import { iconMarkup, currencyIcon, glyphIcon, hasGlyphIcon, type IconName } from './icons'
 
 let open = false
 
@@ -62,20 +63,22 @@ export function showWelcomeReward(onClose?: () => void): void {
 
   const chips = document.createElement('div')
   chips.style.cssText = 'display:flex;flex-direction:column;gap:10px;width:100%;margin-top:4px;'
+  // First-impression surface: SVG icons only (the crafted icon set), never raw
+  // OS emoji — this modal is the first thing a brand-new player ever sees.
   chips.append(
-    rewardChip('💎', `${WELCOME_DIAMONDS.toLocaleString('en-US')} Diamonds`, 'Premium currency — also earned free by playing.'),
-    rewardChip('🎨', 'Firstlight Cannon skin', 'Exclusive starter cosmetic. Pure paint — never sold.'),
-    rewardChip('🎡', 'A free First Spin', 'One spin of the welcome wheel — soft-currency prizes.'),
+    rewardChip('diamond', '#8fe9ff', `${WELCOME_DIAMONDS.toLocaleString('en-US')} Diamonds`, 'Premium currency — also earned free by playing.'),
+    rewardChip('brush', '#ff8fb0', 'Firstlight Cannon skin', 'Exclusive starter cosmetic. Pure paint — never sold.'),
+    rewardChip('dice', '#8fe9ff', 'A free First Spin', 'One spin of the welcome wheel — soft-currency prizes.'),
   )
   if (referred) {
-    chips.append(rewardChip('🌸', 'Kindred Dye (referred bonus)', 'Exclusive to players who arrived on a friend’s invite.'))
+    chips.append(rewardChip('sprout', '#8dff4a', 'Kindred Dye (referred bonus)', 'Exclusive to players who arrived on a friend’s invite.'))
   }
 
-  const badge = el('div', '🛡  Nothing you claim here ever works in Ranked.',
-    'font-size:11.5px;color:#8fe6c0;margin-top:2px;')
+  const badge = el('div', '', 'font-size:11.5px;color:#8fe6c0;margin-top:2px;display:flex;align-items:center;gap:6px;justify-content:center;')
+  badge.innerHTML = `${iconMarkup('shield', { size: 14, color: '#8fe6c0' })}<span>Nothing you claim here ever works in Ranked.</span>`
 
   const claimBtn = document.createElement('button')
-  claimBtn.textContent = '✨  CLAIM MY BUNDLE'
+  claimBtn.innerHTML = `${iconMarkup('sparkle', { size: 18, color: '#6b4404' })}  CLAIM MY BUNDLE`
   claimBtn.style.cssText =
     'margin-top:6px;padding:15px 30px;border-radius:16px;border:1px solid rgba(255,255,255,.3);cursor:pointer;color:#0a0716;' +
     'font:900 19px "Baloo 2","Nunito",system-ui,sans-serif;letter-spacing:.5px;width:100%;' +
@@ -104,10 +107,12 @@ export function showWelcomeReward(onClose?: () => void): void {
 // ---- phase 2: the first-spin wheel ----
 function renderSpin(panel: HTMLDivElement, grant: WelcomeGrant, finish: () => void, reduced: boolean): void {
   panel.replaceChildren()
+  const claimed = el('div', '', 'font-size:13px;color:#e8ddff;')
+  claimed.innerHTML =
+    `+${grant.diamonds.toLocaleString('en-US')} ${currencyIcon('diamond', { size: 13 })}  &middot;  Firstlight skin equipped${grant.referred ? '  &middot;  Kindred Dye' : ''}`
   panel.append(
     el('div', 'BUNDLE CLAIMED', 'font-weight:700;letter-spacing:2px;font-size:12.5px;color:#8fe6c0;'),
-    el('div', `+${grant.diamonds.toLocaleString('en-US')} 💎  ·  Firstlight skin equipped${grant.referred ? '  ·  Kindred Dye' : ''}`,
-      'font-size:13px;color:#e8ddff;'),
+    claimed,
     el('div', 'One free spin →', 'font-weight:900;font-size:23px;margin-top:2px;'),
   )
 
@@ -116,13 +121,13 @@ function renderSpin(panel: HTMLDivElement, grant: WelcomeGrant, finish: () => vo
     'width:100%;padding:20px 12px;border-radius:16px;margin-top:4px;overflow:hidden;position:relative;' +
     'background:rgba(255,255,255,.05);border:1px solid rgba(190,160,255,.3);'
   const face = document.createElement('div')
-  face.textContent = '🎡  ?'
-  face.style.cssText = 'font-weight:900;font-size:26px;color:#ffe9a8;'
+  face.style.cssText = 'font-weight:900;font-size:26px;color:#ffe9a8;display:flex;align-items:center;gap:9px;justify-content:center;'
+  setFace(face, 'dice', '?')
   reel.appendChild(face)
   panel.appendChild(reel)
 
   const spinBtn = document.createElement('button')
-  spinBtn.textContent = '🎡  SPIN'
+  spinBtn.innerHTML = `${iconMarkup('dice', { size: 17, color: '#0a3b55' })}  SPIN`
   spinBtn.style.cssText =
     'margin-top:8px;padding:14px 28px;border-radius:16px;border:1px solid rgba(255,255,255,.3);cursor:pointer;color:#0a0716;' +
     'font:900 18px "Baloo 2","Nunito",system-ui,sans-serif;width:100%;' +
@@ -149,7 +154,7 @@ function renderSpin(panel: HTMLDivElement, grant: WelcomeGrant, finish: () => vo
     let i = 0
     let delay = 60
     const tick = () => {
-      face.textContent = '🎡  ' + prizes[i % prizes.length].label
+      setFace(face, 'dice', prizes[i % prizes.length].label)
       i++
       delay *= 1.12
       if (delay < 320 && i < 26) { window.setTimeout(tick, delay) }
@@ -167,8 +172,34 @@ function afterSpin(face: HTMLDivElement, prize: SpinPrize, doneBtn: HTMLButtonEl
 }
 
 function land(face: HTMLDivElement, prize: SpinPrize | null, prizes: SpinPrize[]): void {
-  face.textContent = '🎉  ' + (prize?.label ?? prizes[0].label)
+  setFace(face, 'sparkle', prize?.label ?? prizes[0].label)
   face.style.color = '#ffe9a8'
+}
+
+/** Wheel face = crafted SVG glyph + a text label. Prize labels come from the
+ *  economy data table and may carry glyph characters (e.g. "5 ✦") — those are
+ *  routed through the emoji→icon bridge so no raw glyph ever reaches the
+ *  screen. Plain text renders via textContent (never interpreted as HTML). */
+function setFace(face: HTMLDivElement, icon: IconName, label: string): void {
+  face.innerHTML = iconMarkup(icon, { size: 24, color: '#ffe9a8' })
+  let buf = ''
+  const flush = () => {
+    if (!buf) return
+    const s = document.createElement('span')
+    s.textContent = buf
+    face.appendChild(s)
+    buf = ''
+  }
+  for (const ch of label) {
+    if (hasGlyphIcon(ch)) {
+      flush()
+      const s = document.createElement('span')
+      s.style.lineHeight = '0'
+      s.innerHTML = glyphIcon(ch, { size: 20 })
+      face.appendChild(s)
+    } else buf += ch
+  }
+  flush()
 }
 
 // ---- helpers ----
@@ -179,14 +210,14 @@ function el(tag: string, text: string, css: string): HTMLElement {
   return e
 }
 
-function rewardChip(glyph: string, name: string, desc: string): HTMLElement {
+function rewardChip(icon: IconName, tint: string, name: string, desc: string): HTMLElement {
   const row = document.createElement('div')
   row.style.cssText =
     'display:flex;gap:12px;align-items:center;text-align:left;padding:10px 12px;border-radius:14px;' +
     'background:rgba(255,255,255,.05);border:1px solid rgba(190,160,255,.22);'
   const g = document.createElement('div')
-  g.textContent = glyph
-  g.style.cssText = 'font-size:26px;flex:0 0 auto;width:34px;text-align:center;'
+  g.innerHTML = iconMarkup(icon, { size: 26, color: tint })
+  g.style.cssText = 'flex:0 0 auto;width:34px;text-align:center;line-height:0;'
   const t = document.createElement('div')
   t.style.cssText = 'min-width:0;'
   const n = el('div', name, 'font-weight:800;font-size:15px;')
