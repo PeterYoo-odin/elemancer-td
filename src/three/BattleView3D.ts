@@ -12,7 +12,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { qa } from '../game/qa'
-import { artUrl } from '../ui/webp'
+import { artUrl, artMiss } from '../ui/webp'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
@@ -707,8 +707,8 @@ export class BattleView3D {
     }
     // WebP-first (≈93% smaller) → original PNG → tinted gradient sky.
     new THREE.TextureLoader().load(artUrl(bdPng), applyBd, undefined, () => {
-      if (artUrl(bdPng) === bdPng) return /* stay on the gradient sky */
-      new THREE.TextureLoader().load(bdPng, applyBd, undefined, () => { /* gradient sky */ })
+      if (artUrl(bdPng) === bdPng) { artMiss('realm backdrop', bdPng); return } /* gradient sky */
+      new THREE.TextureLoader().load(bdPng, applyBd, undefined, () => artMiss('realm backdrop', bdPng))
     })
   }
 
@@ -1154,6 +1154,7 @@ export class BattleView3D {
     }
     const groundKit = (): void => {
       if (this.disposed || !this.groundMat) return
+      artMiss('realm ground texture', groundPng)
       this.groundMat.map = kitAtlas ?? null
       this.groundMat.color.set(kitAtlas ? 0xffffff : this.palette.build)
       this.groundMat.needsUpdate = true
@@ -1177,6 +1178,7 @@ export class BattleView3D {
     }
     const pathKit = (): void => {
       if (this.disposed || !this.pathMat) return
+      artMiss('path texture', pathPng)
       this.pathMat.map = kitAtlas ?? null
       this.pathMat.color.set(kitAtlas ? 0xffffff : this.palette.path)
       this.pathMat.needsUpdate = true
@@ -1444,8 +1446,8 @@ export class BattleView3D {
       }
       // WebP-first (≈93% smaller) → original PNG → the procedural fount carries it.
       new THREE.TextureLoader().load(artUrl(png), apply, undefined, () => {
-        if (artUrl(png) === png) return /* missing → procedural fount ships */
-        new THREE.TextureLoader().load(png, apply, undefined, () => { /* procedural fount ships */ })
+        if (artUrl(png) === png) { artMiss('Wellspring art', png); return } /* procedural fount ships */
+        new THREE.TextureLoader().load(png, apply, undefined, () => artMiss('Wellspring art', png))
       })
     }
     mkArt('wellspring.png', 1, true, (s, m) => { this.baseArt = s; this.baseArtMat = m })

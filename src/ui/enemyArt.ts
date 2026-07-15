@@ -8,7 +8,7 @@
 // Every archetype is decoded at most once and cached; nothing here runs per frame.
 
 import * as THREE from 'three'
-import { artUrl } from './webp'
+import { artUrl, artMiss } from './webp'
 import type { EnemyKind } from '../game/enemies'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/enemies/'
@@ -75,7 +75,7 @@ const resolved = new Map<EnemyKind, EnemyArt>() // decoded art for sync consumer
 export function enemyArt(kind: EnemyKind): Promise<EnemyArt | null> {
   let p = cache.get(kind)
   if (!p) {
-    p = build(kind).catch(() => null)
+    p = build(kind).catch(() => { artMiss('enemy billboard', ENEMY_ART[kind]?.file ?? String(kind)); return null })
     cache.set(kind, p)
   }
   return p

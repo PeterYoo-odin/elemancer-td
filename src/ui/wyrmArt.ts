@@ -5,7 +5,7 @@
 // frame. A missing file degrades gracefully (callers fall back to a glyph).
 
 import { WYRMS, wyrmById } from '../game/wyrms'
-import { artUrl } from './webp'
+import { artUrl, artMiss } from './webp'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/dragons/'
 
@@ -43,7 +43,7 @@ const cutoutCache = new Map<string, Promise<WyrmCutout | null>>()
 export function wyrmCutout(wyrmId: string): Promise<WyrmCutout | null> {
   let p = cutoutCache.get(wyrmId)
   if (!p) {
-    p = buildCutout(wyrmId).catch(() => null)
+    p = buildCutout(wyrmId).catch(() => { artMiss('wyrm art', wyrmId); return null })
     cutoutCache.set(wyrmId, p)
   }
   return p

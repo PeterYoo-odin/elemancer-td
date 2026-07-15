@@ -9,6 +9,20 @@
 //   2. Every load site keeps an onerror fallback to the original .png, so a
 //      missing/corrupt .webp on the server can never blank an asset.
 
+import { qa } from '../game/qa'
+
+/** An art asset fell through to its LAST fallback rung. Fail LOUD (warn once
+ *  per asset + a QA telemetry event) so a deploy that drops a file — or a
+ *  regression that greys something out via fail-soft — can never read as
+ *  success. The render-side fallbacks themselves stay graceful and NON-grey. */
+const missed = new Set<string>()
+export function artMiss(what: string, url: string): void {
+  if (missed.has(url)) return
+  missed.add(url)
+  console.warn(`[chromancer:art] ${what} failed to load — using fallback:`, url)
+  if (qa.enabled) qa.emit('asset', { what, url })
+}
+
 let ok: boolean | null = null
 
 /** True when this browser can decode WebP (evaluated once). */

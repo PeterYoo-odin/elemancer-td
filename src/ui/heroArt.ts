@@ -10,6 +10,8 @@
 //     signature mark inpainted out (grassfire fill + local blur), as a blob URL
 // Every asset is processed at most once and cached — nothing here runs per frame.
 
+import { artMiss } from './webp'
+
 const BASE = import.meta.env.BASE_URL + 'concepts/'
 
 // hero id (the save/sim key) → painted portrait file. All 8 heroes are painted;
@@ -64,7 +66,7 @@ const cutoutCache = new Map<string, Promise<HeroCutout | null>>()
 export function heroCutout(heroId: string): Promise<HeroCutout | null> {
   let p = cutoutCache.get(heroId)
   if (!p) {
-    p = buildCutout(heroId).catch(() => null)
+    p = buildCutout(heroId).catch(() => { artMiss('hero art', heroId); return null })
     cutoutCache.set(heroId, p)
   }
   return p
