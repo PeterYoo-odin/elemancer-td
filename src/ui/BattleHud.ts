@@ -1621,18 +1621,18 @@ export class BattleHud {
     wrap.style.boxShadow = `0 12px 34px rgba(0,0,0,.55), 0 0 22px ${hex(color)}55`
 
     const row1 = el('div', 'row1')
-    row1.append(el('div', 'tt', `${def.glyph} ${def.name} · Lv ${h.level}`), el('div', 'stars', def.role.toUpperCase()))
+    row1.append(iconEl('div', 'tt', `${glyphIcon(def.glyph, { size: 15, color: hex(color) })} ${escHud(def.name)} · Lv ${h.level}`), el('div', 'stars', def.role.toUpperCase()))
     const roleEl = row1.querySelector('.stars') as HTMLElement
     roleEl.style.color = hex(color)
 
-    const focusHint = h.focusId !== 0 ? ' · 🎯 FOCUSED' : ''
-    const stat = el('div', 'stat pe', `DPS ${Math.round(sim.heroDps(h))}   ·   RNG ${(sim.heroRange(h) / 80).toFixed(1)}   ·   ${def.element}${focusHint}`)
+    const focusHint = h.focusId !== 0 ? ` · ${iconMarkup('target', { size: 12, color: '#ffe27a' })} FOCUSED` : ''
+    const stat = iconEl('div', 'stat pe', `DPS ${Math.round(sim.heroDps(h))}   ·   RNG ${(sim.heroRange(h) / 80).toFixed(1)}   ·   ${escHud(def.element ?? '')}${focusHint}`)
 
     const ressForHero = sim.activeResonances().filter((r) => r.heroIds.includes(h.heroId))
-    const bondLine = h.wyrm ? `${h.wyrm.wyrm.emoji} ${h.wyrm.wyrm.name} bond · ${h.wyrm.tierLabel}` : ''
-    const resLine = ressForHero.length ? `🔗 ${ressForHero.map((r) => r.name).join(' · ')}` : ''
+    const bondLine = h.wyrm ? `${glyphIcon(h.wyrm.wyrm.emoji, { size: 12 })} ${escHud(h.wyrm.wyrm.name)} bond · ${escHud(h.wyrm.tierLabel)}` : ''
+    const resLine = ressForHero.length ? `${iconMarkup('link', { size: 12, color: '#ffe27a' })} ${ressForHero.map((r) => escHud(r.name)).join(' · ')}` : ''
     const investTxt = [resLine, bondLine].filter(Boolean).join('   ·   ') || 'Tap an enemy to FOCUS · tap a tile after MOVE to relocate'
-    const evs = el('div', 'evs pe', investTxt)
+    const evs = iconEl('div', 'evs pe', investTxt)
     evs.style.color = ressForHero.length || h.wyrm ? '#ffe27a' : '#b8b0d8'
 
     const close = el('button', 'close pe', '✕')

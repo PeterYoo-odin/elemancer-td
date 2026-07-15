@@ -200,7 +200,7 @@ function initSignup(): void {
       }
     } catch { /* private mode etc. — the thank-you still stands */ }
     status.classList.remove('is-error')
-    status.textContent = 'You\'re on the list. First seed drop heads your way soon. 🎨'
+    status.textContent = 'You\'re on the list. First seed drop heads your way soon.'
     input.value = ''
   })
 }
@@ -239,8 +239,8 @@ function initGrowth(): void {
     const bundle = document.getElementById('hero-bundle')
     if (bundle) {
       bundle.innerHTML =
-        '🎁 A friend invited you — your welcome bundle is <strong>upgraded</strong>. ' +
-        'Play now → claim 2000💎 + a starter skin + a referred-only dye. Ranked stays untouched.'
+        'A friend invited you — your welcome bundle is <strong>upgraded</strong>. ' +
+        'Play now → claim 2,000 diamonds + a starter skin + a referred-only dye. Ranked stays untouched.'
     }
   }
 

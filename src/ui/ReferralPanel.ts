@@ -8,6 +8,7 @@
 // Pure DOM overlay. Reuses copyText from ShareCard for the clipboard fallback.
 
 import { economy } from '../game/economy'
+import { iconMarkup } from './icons'
 import { myReferralCode, referralLink, reportReferralEvent } from '../game/referral'
 import { copyText } from './ShareCard'
 
@@ -37,6 +38,7 @@ export function showReferralPanel(onClose?: () => void): void {
 
   const close = document.createElement('button')
   close.textContent = '✕'
+  close.setAttribute('aria-label', 'Close')
   close.setAttribute('aria-label', 'Close')
   close.style.cssText = 'position:absolute;top:8px;right:12px;background:none;border:none;color:#7a6fa8;font-size:18px;cursor:pointer;padding:4px;'
   close.onclick = () => {
@@ -72,7 +74,8 @@ export function showReferralPanel(onClose?: () => void): void {
   panel.appendChild(codeRow)
 
   // share (native)
-  const shareBtn = button('📣  Share invite', 'linear-gradient(180deg,#b8f0ff,#5cc7ff)', '#062033')
+  const shareBtn = button('Share invite', 'linear-gradient(180deg,#b8f0ff,#5cc7ff)', '#062033')
+  shareBtn.innerHTML = `${iconMarkup('megaphone', { size: 15, color: '#062033' })}  Share invite`
   shareBtn.onclick = async () => {
     const shareData = {
       title: 'CHROMANCER',
@@ -86,7 +89,7 @@ export function showReferralPanel(onClose?: () => void): void {
     } catch { /* cancelled/unsupported */ }
     const ok = await copyText(link)
     shareBtn.textContent = ok ? '✓ Link copied — paste it anywhere' : 'Copy failed'
-    window.setTimeout(() => { shareBtn.textContent = '📣  Share invite' }, 1800)
+    window.setTimeout(() => { shareBtn.innerHTML = `${iconMarkup('megaphone', { size: 15, color: '#062033' })}  Share invite` }, 1800)
   }
   panel.appendChild(shareBtn)
 

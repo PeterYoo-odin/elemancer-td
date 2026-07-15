@@ -122,7 +122,17 @@ export function renderShareCard(o: ShareCardOpts): HTMLCanvasElement {
   // combo highlight
   ctx.font = '700 25px system-ui, sans-serif'
   ctx.fillStyle = hexA(o.accent, 1)
-  ctx.fillText('⚡ ' + o.comboHighlight, L, 432)
+  {
+    // draw the storm-bolt as a VECTOR (the icons.ts 'storm' path) — a canvas
+    // fillText emoji renders per-OS in the shared PNG, this stays on-brand
+    const bolt = new Path2D('M13 2 4 13.5h6L9 22l9-12.5h-6L13 2Z')
+    ctx.save()
+    ctx.translate(L, 432 - 15)
+    ctx.scale(0.8, 0.8)
+    ctx.fill(bolt)
+    ctx.restore()
+    ctx.fillText(o.comboHighlight, L + 24, 432)
+  }
 
   // challenge footer
   ctx.font = '900 34px system-ui, sans-serif'

@@ -16,7 +16,7 @@ import { BondPanel } from './BondPanel'
 import { HEROES, HERO_ORDER, RARITY_COLOR, MAX_PARTY, type HeroDef, type HeroRarity } from '../game/heroes'
 import { heroStats, heroSpellScaled, xpForLevel, shardCostForLevel, MAX_HERO_LEVEL, signatureAwake, SIGNATURE_UNLOCK_LEVEL } from '../game/heroProgress'
 import { resonanceInfo } from '../game/resonance'
-import { elementIcon, glyphIcon, currencyIcon } from './icons'
+import { elementIcon, glyphIcon, currencyIcon, iconMarkup } from './icons'
 
 function hex(c: number): string {
   return '#' + (c & 0xffffff).toString(16).padStart(6, '0')
@@ -261,7 +261,7 @@ export class HeroCollection {
     const back = el('button', 'hc-back', '‹ BACK')
     back.onclick = () => this.onBack()
     head.append(back, el('div', 'hc-title', 'HEROES'))
-    const bonds = el('button', 'hc-back', '🐉 BONDS')
+    const bonds = iconEl('button', 'hc-back', `${iconMarkup('sparkle', { size: 13 })} BONDS`)
     bonds.onclick = () => this.openBonds()
     head.append(bonds)
     this.walletEl = el('div', 'hc-wallet')
@@ -475,7 +475,7 @@ export class HeroCollection {
     const cost = shardCostForLevel(level)
     const afford = free || economy.heroShards >= cost
     const b = el('button', `hc-btn hc-lvlup ${free ? 'free' : afford ? '' : 'no'}`)
-    b.innerHTML = free ? 'LEVEL UP<br>FREE ★' : `LEVEL UP<br>${cost} 🔹`
+    b.innerHTML = free ? 'LEVEL UP<br>FREE ★' : `LEVEL UP<br>${cost} ${iconMarkup('shard', { size: 12, color: '#7dffb0' })}`
     b.onclick = () => {
       const res = economy.levelUpHero(def.id)
       if (res) {
@@ -510,9 +510,9 @@ export class HeroCollection {
 
   private lockOverlay(def: HeroDef): HTMLElement {
     const ov = el('div', 'hc-lock')
-    ov.append(el('div', 'lk', '🔒'), el('div', 'lname', def.name))
+    ov.append(iconEl('div', 'lk', iconMarkup('lock', { size: 26, color: '#cfc6ec' })), el('div', 'lname', def.name))
     const afford = economy.heroShards >= def.unlockShards
-    const btn = el('button', `hc-unlock ${afford ? '' : 'no'}`, `UNLOCK · ${def.unlockShards} 🔹`)
+    const btn = iconEl('button', `hc-unlock ${afford ? '' : 'no'}`, `UNLOCK · ${def.unlockShards} ${iconMarkup('shard', { size: 12, color: '#7dffb0' })}`)
     btn.onclick = () => {
       if (economy.unlockHero(def.id)) { this.toast(`${def.name} unlocked!`, def.color); this.render() }
       else this.toast('Not enough shards', 0xff5b7a)
@@ -677,7 +677,7 @@ export class HeroCollection {
       fill.style.width = `${Math.round((have / q.goal) * 100)}%`
       bar.append(fill)
       row.append(bar)
-      row.append(el('div', 'hcd-qr', `${done ? '✦ ' : '🎁 '}${esc(q.reward)}`))
+      row.append(iconEl('div', 'hcd-qr', `${done ? iconMarkup('star', { size: 12, color: '#ffd54a' }) : iconMarkup('gift', { size: 12, color: '#ffd873' })} ${esc(q.reward)}`))
       sec.append(row)
     }
 

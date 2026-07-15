@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import { currencyIcon } from '../ui/icons'
 import { withModeExplainer } from '../ui/modeExplainer'
 import { economy } from '../game/economy'
 import { FrontPage } from '../ui/FrontPage'
@@ -85,17 +86,17 @@ export class MenuScene extends Phaser.Scene {
       else lines.push('')
       const r = streak.reward
       const parts: string[] = []
-      if (r.diamonds) parts.push(`+${r.diamonds} 💎`)
-      if (r.coins) parts.push(`+${r.coins} 🪙`)
-      if (r.prisms) parts.push(`+${r.prisms} ✦`)
+      if (r.diamonds) parts.push(`+${r.diamonds} ${currencyIcon('diamond', { size: 13 })}`)
+      if (r.coins) parts.push(`+${r.coins} ${currencyIcon('coin', { size: 13 })}`)
+      if (r.prisms) parts.push(`+${r.prisms} ${currencyIcon('prism', { size: 13 })}`)
       lines.push(`Day ${streak.streak} streak: ${parts.join(' · ')}`)
       // the "come back tomorrow" nudge — name tomorrow's escalating reward
       const info = economy.loginStreakInfo()
       const t = info.tomorrowReward
       const tParts: string[] = []
-      if (t.diamonds) tParts.push(`${t.diamonds} 💎`)
-      if (t.coins) tParts.push(`${t.coins} 🪙`)
-      if (t.prisms) tParts.push(`${t.prisms} ✦`)
+      if (t.diamonds) tParts.push(`${t.diamonds} ${currencyIcon('diamond', { size: 13 })}`)
+      if (t.coins) tParts.push(`${t.coins} ${currencyIcon('coin', { size: 13 })}`)
+      if (t.prisms) tParts.push(`${t.prisms} ${currencyIcon('prism', { size: 13 })}`)
       if (tParts.length) lines.push(`Come back tomorrow for ${tParts.join(' · ')} →`)
     }
     if (lines.length) {
