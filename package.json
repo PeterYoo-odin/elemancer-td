@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node scripts/build-api.mjs",
     "simcheck": "tsx scripts/simcheck.ts",
+    "juicecheck": "tsx scripts/juicecheck.ts",
     "balance": "tsx scripts/balance.ts",
     "preview": "vite preview",
     "difficulty": "tsx scripts/difficulty.ts"
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@types/three": "^0.169.0",
     "esbuild": "^0.21.5",
+    "playwright-core": "^1.61.1",
     "tsx": "^4.23.0",
     "typescript": "^5.4.5",
     "vite": "^5.2.0"
