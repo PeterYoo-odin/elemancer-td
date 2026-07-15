@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import { withModeExplainer } from '../ui/modeExplainer'
 import { economy } from '../game/economy'
 import { FrontPage } from '../ui/FrontPage'
 import { showOdinSplash } from '../ui/OdinSplash'
@@ -45,11 +46,13 @@ export class MenuScene extends Phaser.Scene {
       onHeroes: () => this.scene.start('Heroes'),
       onWorkshop: () => this.scene.start('Workshop'),
       onShop: () => this.scene.start('Shop'),
-      onEndless: () => launchBattle(this, { endless: true }),
-      onRoguelike: () => launchBattle(this, { roguelike: true }),
-      onDaily: () => this.scene.start('Daily'),
-      onRanked: () => this.scene.start('Ranked'),
-      onPathforge: () => this.scene.start('Pathforge'),
+      // Each competitive mode teaches itself ONCE (a single card, FTUE-persisted)
+      // before its first open — the names assume context a new player lacks.
+      onEndless: () => withModeExplainer('endless', () => launchBattle(this, { endless: true })),
+      onRoguelike: () => withModeExplainer('roguelike', () => launchBattle(this, { roguelike: true })),
+      onDaily: () => withModeExplainer('daily', () => this.scene.start('Daily')),
+      onRanked: () => withModeExplainer('ranked', () => this.scene.start('Ranked')),
+      onPathforge: () => withModeExplainer('pathforge', () => this.scene.start('Pathforge')),
       // Replay from settings: the user has interacted, so no tap gate needed.
       onReplayIntro: () => showOdinSplash({ gate: false }),
     })
