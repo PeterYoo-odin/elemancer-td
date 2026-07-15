@@ -95,6 +95,9 @@ const CSS = `
 .erk-empty { padding: 16px 14px; text-align: center; font-size: 12px; color: #9d92c4; line-height: 1.6;
   border-radius: 11px; border: 1px dashed rgba(255,255,255,.16); }
 .erk-empty.connecting { border-color: rgba(141,255,74,.3); color: #a6e57a; }
+.erk-retry { margin-top: 10px; padding: 7px 22px; border-radius: 10px; cursor: pointer; font: 800 11px inherit;
+  letter-spacing: .12em; color: #a6e57a; background: rgba(141,255,74,.12); border: 1px solid rgba(141,255,74,.4); }
+.erk-retry:active { transform: scale(.96); }
 
 .erk-promise { border-radius: 13px; padding: 13px 15px; text-align: center;
   background: rgba(141,255,74,.07); border: 1px solid rgba(141,255,74,.26); }
@@ -232,7 +235,17 @@ export class RankedPage {
     if (token !== this.reqToken) return
     const boardEl = inner.querySelector<HTMLElement>('[data-board]')
     if (!boardEl) return
-    if (rows.length === 0) {
+    if (rows === null) {
+      // OUTAGE ≠ EMPTY: never tell a player "no runs yet" when the truth is
+      // "we couldn't reach the board". Warm copy + a retry, local PBs intact.
+      boardEl.innerHTML =
+        `<div class="erk-empty connecting">The boards are waking up — your runs are safe on this device and will sync.` +
+        `<br/><button class="erk-retry" data-retry>RETRY</button></div>`
+      boardEl.querySelector<HTMLElement>('[data-retry]')?.addEventListener('click', () => {
+        playUiTick()
+        void this.renderBoard()
+      })
+    } else if (rows.length === 0) {
       boardEl.innerHTML = `<div class="erk-empty">No runs on this board yet — be the first to set the pace.</div>`
     } else {
       boardEl.innerHTML = `<div class="erk-list">${rows.map((r, i) => boardRow(r, i, mode)).join('')}</div>`

@@ -148,12 +148,15 @@ export interface BoardRow {
   created_at: string
 }
 
-/** Top rows for a board (mode + period). Empty array when unconfigured/offline. */
-export async function fetchBoard(mode: RankedMode, period: number, limit = 100): Promise<BoardRow[]> {
+/** Top rows for a board (mode + period). Distinguishes the two nothings:
+ *  `[]` = the board is reachable and genuinely empty; `null` = unreachable
+ *  (unconfigured / offline / server error) — the UI must NOT render an outage
+ *  as "no runs yet", or a downed backend quietly gaslights every player. */
+export async function fetchBoard(mode: RankedMode, period: number, limit = 100): Promise<BoardRow[] | null> {
   const rows = await sbGet(
     `runs?select=id,handle,score,wave,seed,player_id,created_at&mode=eq.${mode}&period=eq.${period}&order=score.desc,created_at.asc&limit=${limit}`,
   )
-  return Array.isArray(rows) ? rows.map(normalizeRow) : []
+  return Array.isArray(rows) ? rows.map(normalizeRow) : null
 }
 
 function normalizeRow(r: any): BoardRow {
