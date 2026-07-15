@@ -221,6 +221,7 @@ export class SettingsPanel {
       const next = !analytics.enabled()
       analytics.setConsent(next)
       el.classList.toggle('on', next)
+      el.setAttribute('aria-checked', String(next))
       this.refreshSnapshot()
       return
     }

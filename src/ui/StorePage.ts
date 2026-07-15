@@ -230,7 +230,7 @@ export class StorePage {
       </div>
       <div class="est-ribbon"><b>Nothing you can buy works in Ranked. Ever.</b><br/>
         Skins are paint. Convenience is casual-only. Diamonds drip free from play. No loot boxes — every item shows exactly what you get.</div>
-      <div class="est-tabs">${TABS.map((t) => `<button class="est-tab${t.id === 'featured' ? ' on' : ''}" data-tab="${t.id}">${t.label}</button>`).join('')}</div>
+      <div class="est-tabs" role="tablist" aria-label="Store sections">${TABS.map((t) => `<button class="est-tab${t.id === 'featured' ? ' on' : ''}" data-tab="${t.id}" role="tab" aria-selected="${t.id === 'featured'}">${t.label}</button>`).join('')}</div>
       <div class="est-body"><div class="est-inner" data-body></div></div>
     `
     document.body.appendChild(this.root)
@@ -250,7 +250,11 @@ export class StorePage {
     if (tabId) {
       this.tab = tabId
       this.confirmId = null
-      for (const b of this.root.querySelectorAll('.est-tab')) b.classList.toggle('on', (b as HTMLElement).dataset.tab === tabId)
+      for (const b of this.root.querySelectorAll('.est-tab')) {
+        const onTab = (b as HTMLElement).dataset.tab === tabId
+        b.classList.toggle('on', onTab)
+        b.setAttribute('aria-selected', String(onTab))
+      }
       this.render()
       this.root.querySelector('.est-body')!.scrollTop = 0
       return

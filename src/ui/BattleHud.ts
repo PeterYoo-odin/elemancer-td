@@ -751,10 +751,13 @@ export class BattleHud {
     // controls cluster (pause / speed / reset view) — docked in the bottom bar
     const rc = el('div', 'eld-rc')
     this.pauseBtn = el('button', 'pe', '❚❚')
+    this.pauseBtn.setAttribute('aria-label', 'Pause')
     this.pauseBtn.onclick = () => { playUiTick(); this.cb.onPause() }
     this.speedBtn = el('button', 'pe', '1×')
+    this.speedBtn.setAttribute('aria-label', 'Battle speed — cycle 1x, 2x, 4x')
     this.speedBtn.onclick = () => { playUiTick(); this.cb.onSpeed() }
     const resetBtn = iconEl('button', 'pe', iconMarkup('target', { size: 18, color: '#e6ddff' }))
+    resetBtn.setAttribute('aria-label', 'Reset camera view')
     resetBtn.onclick = () => { playUiTick(); this.cb.onResetView() }
     rc.append(this.pauseBtn, this.speedBtn, resetBtn)
     attachTip(this.pauseBtn, () => ({
@@ -1433,6 +1436,7 @@ export class BattleHud {
     }))
 
     const close = el('button', 'close pe', '✕')
+    close.setAttribute('aria-label', 'Close panel')
     close.onclick = () => this.cb.onSelectDeselect()
 
     const ctl = el('div', 'ctl')
@@ -1632,6 +1636,7 @@ export class BattleHud {
     evs.style.color = ressForHero.length || h.wyrm ? '#ffe27a' : '#b8b0d8'
 
     const close = el('button', 'close pe', '✕')
+    close.setAttribute('aria-label', 'Close panel')
     close.onclick = () => this.cb.onSelectDeselect()
 
     const ctl = el('div', 'ctl')
@@ -1808,6 +1813,7 @@ export class BattleHud {
         window.setTimeout(() => { cp.innerHTML = `${iconMarkup('link', { size: 14, color: '#e0ccff' })} COPY SEED LINK` }, 1600)
       }
       const dl = el('button', 'eld-btn purple slim', '↓')
+      dl.setAttribute('aria-label', 'Copy the run seed and replay link')
       dl.title = 'Download the card'
       dl.onclick = () => downloadCard(canvas, share.code)
       srow.append(sh, cp, dl)
@@ -1878,7 +1884,10 @@ export class BattleHud {
     this.overlayEl = null
   }
 
-  setPauseIcon(paused: boolean): void { this.pauseBtn.textContent = paused ? '▶' : '❚❚' }
+  setPauseIcon(paused: boolean): void {
+    this.pauseBtn.textContent = paused ? '▶' : '❚❚'
+    this.pauseBtn.setAttribute('aria-label', paused ? 'Resume' : 'Pause')
+  }
   setSpeed(speed: number): void { this.speedBtn.textContent = `${speed}×` }
 
   // ------------------------------------------------------------- floating fx

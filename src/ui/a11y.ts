@@ -131,6 +131,11 @@ html[data-contrast="high"] .settings-card, html[data-contrast="high"] .ecdx-card
   text-shadow: 0 1px 2px #000, 0 0 1px #000;
 }
 html[data-contrast="high"] { color: #fff; }
+/* Keyboard-nav focus ring: visible on :focus-visible only (never on taps), so
+   remappable-keys players can actually see where they are. */
+button:focus-visible, [role="switch"]:focus-visible, [role="tab"]:focus-visible, input:focus-visible {
+  outline: 2px solid #ffd76a !important; outline-offset: 2px;
+}
 /* Belt-and-suspenders reduce-motion: kill transitions/animations app-wide when set. */
 html[data-reduce-motion="on"] * {
   animation-duration: 0.001ms !important;
