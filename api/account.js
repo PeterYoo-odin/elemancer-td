@@ -4,6 +4,14 @@ var SERVICE_KEY = process.env.GAME_SUPABASE_SERVICE_ROLE_KEY || "";
 function serverConfigured() {
   return !!URL && !!SERVICE_KEY;
 }
+var SbError = class extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = "SbError";
+    this.status = status;
+    this.code = code;
+  }
+};
 async function sbFetch(path, init = {}) {
   const res = await fetch(`${URL}/rest/v1/${path}`, {
     ...init,
@@ -16,11 +24,19 @@ async function sbFetch(path, init = {}) {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`supabase ${res.status}: ${body.slice(0, 300)}`);
+    let code = null;
+    try {
+      code = JSON.parse(body)?.code ?? null;
+    } catch {
+    }
+    throw new SbError(res.status, code, `supabase ${res.status}: ${body.slice(0, 300)}`);
   }
   if (res.status === 204) return null;
   const txt = await res.text();
   return txt ? JSON.parse(txt) : null;
+}
+function isSchemaDrift(e) {
+  return e instanceof SbError && (e.code === "42703" || e.code === "42P01");
 }
 async function upsertPlayer(deviceHash, handle) {
   const body = { device_hash: deviceHash };
@@ -57,8 +73,15 @@ async function findPlayerByAuthUid(uid) {
   return Array.isArray(rows) && rows[0] ? rows[0] : null;
 }
 async function findPlayerByDevice(deviceHash) {
-  const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,auth_uid,device_hash`);
-  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  try {
+    const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,auth_uid,device_hash`);
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch (e) {
+    if (!isSchemaDrift(e)) throw e;
+    const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,device_hash`);
+    const row = Array.isArray(rows) && rows[0] ? rows[0] : null;
+    return row ? { ...row, auth_uid: null, _schemaDrift: true } : null;
+  }
 }
 async function patchPlayer(id, fields) {
   const rows = await sbFetch(`players?id=eq.${encodeURIComponent(id)}`, {
@@ -128,6 +151,43 @@ function cors(res) {
 }
 
 // server/account.ts
+function failureFor(e) {
+  if (e instanceof SbError) {
+    if (e.code === "42703") return { status: 503, reason: "schema-drift" };
+    if (e.code === "42P01") return { status: 503, reason: "schema-missing" };
+    if (e.status === 401 || e.status === 403) return { status: 503, reason: "grant" };
+    return { status: 502, reason: "upstream" };
+  }
+  if (e instanceof TypeError) return { status: 503, reason: "network" };
+  return { status: 500, reason: "internal" };
+}
+async function probe(path) {
+  try {
+    await sbFetch(path);
+    return "ok";
+  } catch (e) {
+    if (e instanceof SbError) {
+      if (e.code === "42P01") return "missing-table";
+      if (e.code === "42703") return "missing-column";
+      return `error:${e.code ?? e.status}`;
+    }
+    return "error:network";
+  }
+}
+async function health(res) {
+  const [players, playersAuthUid, saves, runs, runInputsRoute] = await Promise.all([
+    probe("players?select=id&limit=1"),
+    probe("players?select=auth_uid&limit=1"),
+    // 0002_auth.sql applied?
+    probe("saves?select=rev&limit=1"),
+    probe("runs?select=id&limit=1"),
+    probe("run_inputs?select=route&limit=1")
+    // 0003_pathforge.sql applied?
+  ]);
+  const schema = { players, players_auth_uid: playersAuthUid, saves, runs, run_inputs_route: runInputsRoute };
+  const ok = Object.values(schema).every((v) => v === "ok");
+  res.status(ok ? 200 : 503).json({ ok, configured: true, schema });
+}
 function progressScore(d) {
   if (!d || typeof d !== "object") return 0;
   const n = (x) => Number(x) || 0;
@@ -191,6 +251,10 @@ async function handler(req, res) {
     return;
   }
   const op = String(body?.op || "");
+  if (op === "health") {
+    await health(res);
+    return;
+  }
   const deviceHash = typeof body?.deviceHash === "string" ? body.deviceHash : "";
   const accessToken = typeof body?.accessToken === "string" ? body.accessToken : void 0;
   if (!deviceHash || deviceHash.length < 16) {
@@ -266,12 +330,22 @@ async function handler(req, res) {
         return;
       }
       const save = await saveRowFor(player.id);
-      res.status(200).json({ ok: true, exists: true, handle: player.handle ?? null, data: save?.data ?? null, rev: save ? save.rev : -1 });
+      res.status(200).json({
+        ok: true,
+        exists: true,
+        handle: player.handle ?? null,
+        data: save?.data ?? null,
+        rev: save ? save.rev : -1,
+        // guest lookup succeeded only via the drift fallback → tell ops (the
+        // client ignores unknown fields) without failing the player.
+        ...player._schemaDrift ? { degraded: "schema-drift" } : {}
+      });
       return;
     }
     res.status(400).json({ ok: false, reason: "op" });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
+    const f = failureFor(e);
+    res.status(f.status).json({ ok: false, reason: f.reason, error: String(e?.message || e).slice(0, 200) });
   }
 }
 export {

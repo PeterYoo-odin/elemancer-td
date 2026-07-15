@@ -10,6 +10,22 @@ export function serverConfigured(): boolean {
   return !!URL && !!SERVICE_KEY
 }
 
+/** A PostgREST/Supabase failure with enough structure to DIAGNOSE it from the
+ *  API response: HTTP status + the Postgres error code (e.g. 42703 undefined
+ *  column = schema drift, 42P01 undefined table = unapplied migration). The
+ *  2026-07 prod incident — op:load 500ing for weeks because players.auth_uid
+ *  was never migrated — was invisible precisely because this was a flat string. */
+export class SbError extends Error {
+  status: number
+  code: string | null
+  constructor(status: number, code: string | null, message: string) {
+    super(message)
+    this.name = 'SbError'
+    this.status = status
+    this.code = code
+  }
+}
+
 /** Fetch against PostgREST with the service role. `path` is e.g.
  *  `players?device_hash=eq.abc&select=*`. Returns parsed JSON (or null on 204). */
 export async function sbFetch(path: string, init: RequestInit = {}): Promise<any> {
@@ -24,11 +40,19 @@ export async function sbFetch(path: string, init: RequestInit = {}): Promise<any
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`supabase ${res.status}: ${body.slice(0, 300)}`)
+    let code: string | null = null
+    try { code = JSON.parse(body)?.code ?? null } catch { /* non-JSON error body */ }
+    throw new SbError(res.status, code, `supabase ${res.status}: ${body.slice(0, 300)}`)
   }
   if (res.status === 204) return null
   const txt = await res.text()
   return txt ? JSON.parse(txt) : null
+}
+
+/** True when an error is Postgres schema drift (missing column/table) — i.e.
+ *  the code references schema a migration hasn't created on this project yet. */
+export function isSchemaDrift(e: unknown): e is SbError {
+  return e instanceof SbError && (e.code === '42703' || e.code === '42P01')
 }
 
 /** Upsert (get-or-create) the player row for a device hash, returning it. */
@@ -85,10 +109,22 @@ export async function findPlayerByAuthUid(uid: string): Promise<any> {
   return Array.isArray(rows) && rows[0] ? rows[0] : null
 }
 
-/** The guest player row for a device hash, or null. */
+/** The guest player row for a device hash, or null.
+ *  DRIFT-TOLERANT: if `players.auth_uid` doesn't exist yet on this project
+ *  (0002_auth.sql unapplied — the exact 2026-07 prod incident), the guest
+ *  lookup retries WITHOUT that column so guests keep loading their cloud save
+ *  while ops applies the migration. The degraded row carries `auth_uid: null`
+ *  (a guest's true value) plus `_schemaDrift` so callers can surface it. */
 export async function findPlayerByDevice(deviceHash: string): Promise<any> {
-  const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,auth_uid,device_hash`)
-  return Array.isArray(rows) && rows[0] ? rows[0] : null
+  try {
+    const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,auth_uid,device_hash`)
+    return Array.isArray(rows) && rows[0] ? rows[0] : null
+  } catch (e) {
+    if (!isSchemaDrift(e)) throw e
+    const rows = await sbFetch(`players?device_hash=eq.${encodeURIComponent(deviceHash)}&select=id,handle,device_hash`)
+    const row = Array.isArray(rows) && rows[0] ? rows[0] : null
+    return row ? { ...row, auth_uid: null, _schemaDrift: true } : null
+  }
 }
 
 /** Patch selected columns on a player row; returns the updated row. */

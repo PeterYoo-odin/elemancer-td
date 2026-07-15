@@ -6533,6 +6533,14 @@ var SERVICE_KEY = process.env.GAME_SUPABASE_SERVICE_ROLE_KEY || "";
 function serverConfigured() {
   return !!URL && !!SERVICE_KEY;
 }
+var SbError = class extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = "SbError";
+    this.status = status;
+    this.code = code;
+  }
+};
 async function sbFetch(path, init = {}) {
   const res = await fetch(`${URL}/rest/v1/${path}`, {
     ...init,
@@ -6545,7 +6553,12 @@ async function sbFetch(path, init = {}) {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`supabase ${res.status}: ${body.slice(0, 300)}`);
+    let code = null;
+    try {
+      code = JSON.parse(body)?.code ?? null;
+    } catch {
+    }
+    throw new SbError(res.status, code, `supabase ${res.status}: ${body.slice(0, 300)}`);
   }
   if (res.status === 204) return null;
   const txt = await res.text();

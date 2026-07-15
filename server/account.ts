@@ -16,12 +16,68 @@
 //                         MERGING better progress if the uid already has a row
 //   save {data, rev}    → last-write-wins mirror of the local save
 //   load                → fetch the cloud save (for reconcile on a fresh device)
+//   health              → ops probe: is every table/column this API + verify-run
+//                         depend on actually migrated on this project? (no auth)
+//
+// FAILURE CONTRACT: infra problems answer 502/503 with a STABLE `reason`
+// (schema-drift | schema-missing | grant | network | upstream); 500 is reserved
+// for genuine bugs. op:load additionally survives players.auth_uid drift for
+// GUESTS (degraded fallback) so an unapplied auth migration can't kill cloud load.
 
 import {
   serverConfigured, sbFetch, upsertPlayer, readBody, cors,
   verifyAuthToken, findPlayerByAuthUid, findPlayerByDevice, patchPlayer, createAuthPlayer,
-  resolvePlayer, saveRevFor, saveRowFor, putSaveRow,
+  resolvePlayer, saveRevFor, saveRowFor, putSaveRow, SbError,
 } from './_supabase'
+
+// Map a thrown failure to an HTTP status + a STABLE machine reason so an
+// infra/schema problem is diagnosable from the response (and distinguishable
+// from a genuine server bug). Born of the 2026-07 incident where op:load
+// 500ed for weeks with a flat string because players.auth_uid was unmigrated.
+function failureFor(e: unknown): { status: number; reason: string } {
+  if (e instanceof SbError) {
+    if (e.code === '42703') return { status: 503, reason: 'schema-drift' } // column missing → unapplied migration
+    if (e.code === '42P01') return { status: 503, reason: 'schema-missing' } // table missing → unprovisioned
+    if (e.status === 401 || e.status === 403) return { status: 503, reason: 'grant' }
+    return { status: 502, reason: 'upstream' }
+  }
+  if (e instanceof TypeError) return { status: 503, reason: 'network' } // fetch-level failure to reach Supabase
+  return { status: 500, reason: 'internal' }
+}
+
+// One PostgREST probe per schema dependency this API (and verify-run) needs.
+// Each returns 'ok' | 'missing-table' | 'missing-column' | 'error:<code>'.
+async function probe(path: string): Promise<string> {
+  try {
+    await sbFetch(path)
+    return 'ok'
+  } catch (e) {
+    if (e instanceof SbError) {
+      if (e.code === '42P01') return 'missing-table'
+      if (e.code === '42703') return 'missing-column'
+      return `error:${e.code ?? e.status}`
+    }
+    return 'error:network'
+  }
+}
+
+// op:'health' — the drift detector. Answers, in ONE unauthenticated call, the
+// question that took weeks to see: is every table/column the account + ranked
+// APIs query actually present on this project? Reads nothing sensitive (limit=1
+// column probes under the service role; results are booleans about SCHEMA, not
+// data) and writes nothing.
+async function health(res: any): Promise<void> {
+  const [players, playersAuthUid, saves, runs, runInputsRoute] = await Promise.all([
+    probe('players?select=id&limit=1'),
+    probe('players?select=auth_uid&limit=1'), // 0002_auth.sql applied?
+    probe('saves?select=rev&limit=1'),
+    probe('runs?select=id&limit=1'),
+    probe('run_inputs?select=route&limit=1'), // 0003_pathforge.sql applied?
+  ])
+  const schema = { players, players_auth_uid: playersAuthUid, saves, runs, run_inputs_route: runInputsRoute }
+  const ok = Object.values(schema).every((v) => v === 'ok')
+  res.status(ok ? 200 : 503).json({ ok, configured: true, schema })
+}
 
 // A cheap "how much progress is here" score over the opaque save blob — MUST
 // stay in sync with progressScore() in src/game/cloudSave.ts. Used so a merge
@@ -93,6 +149,8 @@ export default async function handler(req: any, res: any): Promise<void> {
   let body: any
   try { body = await readBody(req) } catch { res.status(400).json({ ok: false }); return }
   const op = String(body?.op || '')
+  // health needs no identity — it's the ops probe for schema drift.
+  if (op === 'health') { await health(res); return }
   const deviceHash = typeof body?.deviceHash === 'string' ? body.deviceHash : ''
   const accessToken = typeof body?.accessToken === 'string' ? body.accessToken : undefined
   if (!deviceHash || deviceHash.length < 16) { res.status(400).json({ ok: false, reason: 'device' }); return }
@@ -175,12 +233,18 @@ export default async function handler(req: any, res: any): Promise<void> {
       if (!player) player = await findPlayerByDevice(deviceHash)
       if (!player) { res.status(200).json({ ok: true, exists: false }); return }
       const save = await saveRowFor(player.id)
-      res.status(200).json({ ok: true, exists: true, handle: player.handle ?? null, data: save?.data ?? null, rev: save ? save.rev : -1 })
+      res.status(200).json({
+        ok: true, exists: true, handle: player.handle ?? null, data: save?.data ?? null, rev: save ? save.rev : -1,
+        // guest lookup succeeded only via the drift fallback → tell ops (the
+        // client ignores unknown fields) without failing the player.
+        ...(player._schemaDrift ? { degraded: 'schema-drift' } : {}),
+      })
       return
     }
 
     res.status(400).json({ ok: false, reason: 'op' })
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) })
+    const f = failureFor(e)
+    res.status(f.status).json({ ok: false, reason: f.reason, error: String(e?.message || e).slice(0, 200) })
   }
 }
