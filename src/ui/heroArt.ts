@@ -10,7 +10,7 @@
 //     signature mark inpainted out (grassfire fill + local blur), as a blob URL
 // Every asset is processed at most once and cached — nothing here runs per frame.
 
-import { artMiss } from './webp'
+import { artMiss, artBound, artUrl } from './webp'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/'
 
@@ -42,6 +42,61 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error('image load failed: ' + url))
     img.src = url
   })
+}
+
+// ---------------------------------------------------------------------------
+// Painted POSE FRAMES (battle billboard, frame-swapped over the pose envelope)
+// ---------------------------------------------------------------------------
+// Three cel-shaded transparent cutouts per hero (idle / attack / cast) under
+// concepts/heroes/poses/, exported at a SHARED pixel scale — so each frame's
+// naturalHeight ratio against idle encodes its relative world height (a raised
+// staff makes the cast frame taller without shrinking the character).
+// WebP-first with PNG fallback; any missing frame → null and the caller keeps
+// the heroCutout portrait billboard (which keeps its own procedural fallback).
+
+export type HeroPose = 'idle' | 'attack' | 'cast'
+export const HERO_POSE_NAMES: readonly HeroPose[] = ['idle', 'attack', 'cast'] as const
+
+export interface HeroPoseFrame {
+  img: HTMLImageElement
+  aspect: number // width / height of the frame
+  relH: number // frame height relative to the IDLE frame (shared pixel scale)
+}
+export type HeroPoseFrames = Record<HeroPose, HeroPoseFrame>
+
+const POSE_BASE = BASE + 'heroes/poses/'
+
+/** WebP-first (same #11 pipeline), falling back to the original PNG. */
+function loadPoseImage(pngUrl: string): Promise<HTMLImageElement> {
+  const preferred = artUrl(pngUrl)
+  return preferred === pngUrl ? loadImage(pngUrl) : loadImage(preferred).catch(() => loadImage(pngUrl))
+}
+
+const poseCache = new Map<string, Promise<HeroPoseFrames | null>>()
+
+export function heroPoseFrames(heroId: string): Promise<HeroPoseFrames | null> {
+  let p = poseCache.get(heroId)
+  if (!p) {
+    p = buildPoseFrames(heroId).catch(() => { artMiss('hero pose art', heroId); return null })
+    poseCache.set(heroId, p)
+  }
+  return p
+}
+
+async function buildPoseFrames(heroId: string): Promise<HeroPoseFrames | null> {
+  if (!HERO_ART[heroId]) return null
+  const [idle, attack, cast] = await Promise.all(
+    HERO_POSE_NAMES.map((pose) => loadPoseImage(`${POSE_BASE}${heroId}-${pose}.png`)),
+  )
+  const relTo = (img: HTMLImageElement): number =>
+    Math.max(0.7, Math.min(1.45, img.naturalHeight / Math.max(1, idle.naturalHeight)))
+  const frame = (img: HTMLImageElement): HeroPoseFrame => ({
+    img,
+    aspect: img.naturalWidth / Math.max(1, img.naturalHeight),
+    relH: relTo(img),
+  })
+  artBound('hero-pose', heroId)
+  return { idle: frame(idle), attack: frame(attack), cast: frame(cast) }
 }
 
 // ---------------------------------------------------------------------------

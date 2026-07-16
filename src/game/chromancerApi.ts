@@ -32,6 +32,7 @@ export function installChromancer(game: Phaser.Game): void {
 
     // ---- live telemetry (read-only views onto the event bus) ----
     get events(): ReadonlyArray<unknown> { return qa.events },
+    get assetEvents(): ReadonlyArray<unknown> { return qa.assetEvents },
     get frame(): number { return qa.frame },
     get driven(): boolean { return qa.driven },
     clearEvents: (): void => qa.clearEvents(),

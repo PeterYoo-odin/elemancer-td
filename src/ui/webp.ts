@@ -23,6 +23,19 @@ export function artMiss(what: string, url: string): void {
   if (qa.enabled) qa.emit('asset', { what, url })
 }
 
+/** The POSITIVE counterpart of artMiss: a painted asset genuinely decoded and
+ *  is BOUND to its material/billboard. Emitted once per asset so a QA run can
+ *  assert the NEW art actually loaded — closing the silent-fallback trap from
+ *  the other side (a 404 that fails soft to older art can no longer read as
+ *  success, because the expected 'asset-bound' event never fires). */
+const boundSeen = new Set<string>()
+export function artBound(what: string, id: string): void {
+  const key = what + ':' + id
+  if (boundSeen.has(key)) return
+  boundSeen.add(key)
+  if (qa.enabled) qa.emit('asset-bound', { what, id })
+}
+
 let ok: boolean | null = null
 
 /** True when this browser can decode WebP (evaluated once). */

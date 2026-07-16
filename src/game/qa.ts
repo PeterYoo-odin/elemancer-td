@@ -24,7 +24,7 @@
 import type { Sim } from '../sim'
 
 export interface QaEvent {
-  type: 'reaction' | 'hitstop' | 'shake' | 'callout' | 'sound' | 'kill' | 'combo' | 'quality' | 'asset'
+  type: 'reaction' | 'hitstop' | 'shake' | 'callout' | 'sound' | 'kill' | 'combo' | 'quality' | 'asset' | 'asset-bound'
   name?: string
   frame: number // frame index (increments once per rendered update, incl. frozen frames)
   tMs: number // accumulated real frame time in ms (advances during a freeze too)
@@ -102,6 +102,10 @@ class Qa {
   autoDraft = true
 
   events: QaEvent[] = []
+  // ASSET LEDGER — every 'asset' (miss) and 'asset-bound' (positive bind)
+  // event, kept OUT of the 8000-cap ring churn and NOT wiped by clearEvents,
+  // so an end-of-run QA read can assert art binding across the whole session.
+  assetEvents: QaEvent[] = []
   frame = 0
   tMs = 0
   lastReaction: string | null = null
@@ -129,6 +133,10 @@ class Qa {
     const ev: QaEvent = { type, frame: this.frame, tMs: Math.round(this.tMs * 100) / 100, ...data }
     this.events.push(ev)
     if (this.events.length > 8000) this.events.splice(0, this.events.length - 8000)
+    if (type === 'asset' || type === 'asset-bound') {
+      this.assetEvents.push(ev)
+      if (this.assetEvents.length > 400) this.assetEvents.splice(0, this.assetEvents.length - 400)
+    }
     try {
       // performance.mark makes each beat visible in a browser/Playwright trace too.
       performance.mark(`chromancer:${type}`, { detail: ev })
