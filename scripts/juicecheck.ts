@@ -145,6 +145,44 @@ async function main(): Promise<void> {
     })
     check(placed >= 4, `placed + double-upgraded ${placed} towers via QA drive`)
 
+    // ---- painted POSE-FRAME binding: heroes (assert-bound, not fail-soft) --
+    // Deploy the roster and POSITIVELY assert each deployed hero's painted
+    // pose frames decoded and bound ('asset-bound' telemetry). A 404 that
+    // fails soft to the portrait cutout can no longer read as success.
+    const heroBind = await page.evaluate(async (ids: string[]) => {
+      const c = (window as any).__chromancer
+      const deployed: string[] = []
+      outer: for (const id of ids) {
+        for (let q = 0; q < 20; q++) {
+          for (let r = 0; r < 14; r++) {
+            if (c.placeHero(id, { q, r })) { deployed.push(id); continue outer }
+          }
+        }
+      }
+      for (let i = 0; i < 60; i++) {
+        // the drive is frozen between steps — step a few frames so the VIEW
+        // creates the hero slots and binds the decoded frames
+        c.stepFrames(4)
+        const boundNow = new Set((c.assetEvents as any[])
+          .filter((e: any) => e.type === 'asset-bound' && e.what === 'hero-pose')
+          .map((e: any) => e.id))
+        if (deployed.every((id) => boundNow.has(id))) break
+        await new Promise((res) => setTimeout(res, 250))
+      }
+      const evs = (c.assetEvents as any[]).slice()
+      return {
+        deployed,
+        bound: evs.filter((e: any) => e.type === 'asset-bound').map((e: any) => `${e.what}:${e.id}`),
+        misses: evs.filter((e: any) => e.type === 'asset' && /pose/.test(String(e.what))).map((e: any) => `${e.what}:${e.url}`),
+      }
+    }, ['ember', 'glacia', 'sylvan', 'pyra', 'zephyra', 'volt', 'aurelia', 'vex'])
+    const allBound = new Set<string>(heroBind.bound)
+    const allPoseMisses = new Set<string>(heroBind.misses)
+    check(heroBind.deployed.length >= 3, `deployed ${heroBind.deployed.length} heroes via QA drive (${heroBind.deployed.join(', ')})`)
+    for (const id of heroBind.deployed) {
+      check(allBound.has(`hero-pose:${id}`), `hero '${id}' painted pose frames BOUND (idle/attack/cast)`)
+    }
+
     // ---- all 9 reactions fire their full juice chain -----------------------
     const rx = await page.evaluate((keys: string[]) => {
       const c = (window as any).__chromancer
@@ -164,6 +202,10 @@ async function main(): Promise<void> {
       return { fired, evs }
     }, REACTION_KEYS)
 
+    for (const e of rx.evs as any[]) {
+      if (e.type === 'asset-bound') allBound.add(`${e.what}:${e.id}`)
+      if (e.type === 'asset' && /pose/.test(String(e.what))) allPoseMisses.add(`${e.what}:${e.url}`)
+    }
     for (const k of REACTION_KEYS) check(rx.fired[k] === true, `reaction '${k}' triggered`)
     const byType = (t: string) => rx.evs.filter((e: any) => e.type === t)
     check(byType('reaction').length >= 9, `${byType('reaction').length} reaction telemetry events (>=9)`)
@@ -204,8 +246,17 @@ async function main(): Promise<void> {
     }
     const wavep = await page.evaluate(([w2, endState, endWave]: any[]) => {
       const evs = ((window as any).__chromancer.events as any[]).slice()
-      return { wave2: w2, endState, endWave, combo: evs.filter((e) => e.type === 'combo').length, kills: evs.filter((e) => e.type === 'kill').length, milestones: evs.filter((e) => e.type === 'combo' && (e as any).milestone).length }
+      return {
+        wave2: w2, endState, endWave,
+        combo: evs.filter((e) => e.type === 'combo').length,
+        kills: evs.filter((e) => e.type === 'kill').length,
+        milestones: evs.filter((e) => e.type === 'combo' && (e as any).milestone).length,
+        bound: evs.filter((e) => e.type === 'asset-bound').map((e: any) => `${e.what}:${e.id}`),
+        misses: evs.filter((e) => e.type === 'asset' && /pose/.test(String((e as any).what))).map((e: any) => `${e.what}:${e.url}`),
+      }
     }, [wave2, s.state, s.wave])
+    for (const b of wavep.bound) allBound.add(b)
+    for (const m of wavep.misses) allPoseMisses.add(m)
     check(wavep.wave2 >= 2, `WAVE COUNTER ADVANCES in the real loop (reached wave ${wavep.wave2}) — the E2E 'stuck 1/7' was a reachability artifact`)
     check(wavep.endState === 'won' || wavep.endState === 'lost', `level ran to a real end state: '${wavep.endState}' at wave ${wavep.endWave}`)
     if (wavep.endState !== 'won') warn(`defense did not WIN naturally (ended '${wavep.endState}') — win screen still proven via forceWin below`)
@@ -222,6 +273,36 @@ async function main(): Promise<void> {
     })
     check(ends.w === 'won', `WIN end state fires ('${ends.w}')`)
     check(ends.l === 'lost', `DEFEAT end state fires ('${ends.l}')`)
+
+    // ---- painted POSE-FRAME binding: enemies + no silent fallback ----------
+    // The main drive's maxed defense one-shots spawns inside a single coarse
+    // 250 ms step, so the VIEW can never create an enemy slot (nothing survives
+    // to a render). Probe binding on a FRESH, undefended board instead: let
+    // runners genuinely march a few rendered seconds, then read the persistent
+    // asset ledger (immune to ring-buffer churn + clearEvents).
+    const tail = await page.evaluate(async () => {
+      const c = (window as any).__chromancer
+      await c.startLevel({ levelId: 'l1', seed: 9 })
+      for (let i = 0; i < 32; i++) {
+        // the re-entered scene settles into 'prep' a few frames late (the prior
+        // forceDefeat state lingers) — keep nudging the wave until it takes
+        if (c.getState().state === 'prep') c.startWave()
+        c.stepFrames(10) // fine dt — enemies live across many rendered frames
+        const evs0 = c.assetEvents as any[]
+        if (evs0.some((e: any) => e.type === 'asset-bound' && e.what === 'enemy-pose')) break
+        await new Promise((res) => setTimeout(res, 250)) // wall time for decode
+      }
+      const evs = (c.assetEvents as any[]).slice()
+      return {
+        bound: evs.filter((e) => e.type === 'asset-bound').map((e: any) => `${e.what}:${e.id}`),
+        misses: evs.filter((e) => e.type === 'asset' && /pose/.test(String((e as any).what))).map((e: any) => `${e.what}:${e.url}`),
+      }
+    })
+    for (const b of tail.bound) allBound.add(b)
+    for (const m of tail.misses) allPoseMisses.add(m)
+    const enemyBound = [...allBound].filter((b) => b.startsWith('enemy-pose:')).map((b) => b.split(':')[1])
+    check(enemyBound.length >= 1, `enemy painted pose frames BOUND for ${enemyBound.length} archetype(s): ${enemyBound.join(', ') || 'none'}`)
+    check(allPoseMisses.size === 0, allPoseMisses.size ? `pose art fell back silently: ${[...allPoseMisses].join(' | ')}` : 'zero pose-art misses across the whole drive (no silent fallback)')
 
     // ---- page health -------------------------------------------------------
     check(pageErrors.length === 0, pageErrors.length ? `uncaught page errors: ${pageErrors.slice(0, 3).join(' | ')}` : 'zero uncaught page errors across the whole drive')

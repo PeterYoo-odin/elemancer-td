@@ -8,7 +8,7 @@
 // Every archetype is decoded at most once and cached; nothing here runs per frame.
 
 import * as THREE from 'three'
-import { artUrl, artMiss } from './webp'
+import { artUrl, artMiss, artBound } from './webp'
 import type { EnemyKind } from '../game/enemies'
 
 const BASE = import.meta.env.BASE_URL + 'concepts/enemies/'
@@ -42,10 +42,26 @@ const ENEMY_ART: Partial<Record<EnemyKind, EnemyArtDef>> = {
   boss: { file: 'elite.png', accent: 0xe0507d },
 }
 
-export interface EnemyArt {
+export interface EnemyFrame {
   tex: THREE.Texture
-  aspect: number // width / height of the source PNG
+  aspect: number // width / height of the frame
+  relH: number // frame height relative to WALK-A (frames share a pixel scale)
+}
+
+/** Painted pose frames: 2-frame walk cycle + a hit-flinch, cel-shaded cutouts
+ *  under concepts/enemies/poses/. Textures are SHARED per kind (billboards
+ *  swap `material.map` between shared textures — no per-entity allocs). */
+export interface EnemyFrames {
+  walkA: EnemyFrame
+  walkB: EnemyFrame
+  hit: EnemyFrame
+}
+
+export interface EnemyArt {
+  tex: THREE.Texture // walk-A when pose frames landed; legacy single sprite otherwise
+  aspect: number // width / height of `tex`
   accent: number
+  frames: EnemyFrames | null // null → legacy single-frame billboard
 }
 
 /** Signature accent colour for a kind, available synchronously (no decode). */
@@ -86,18 +102,60 @@ export function enemyArtReady(kind: EnemyKind): EnemyArt | null {
   return resolved.get(kind) ?? null
 }
 
-async function build(kind: EnemyKind): Promise<EnemyArt | null> {
-  const def = ENEMY_ART[kind]
-  if (!def) return null
-  const img = await loadImage(BASE + def.file)
+function makeTex(img: HTMLImageElement): THREE.Texture {
   const tex = new THREE.Texture(img)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.anisotropy = 4
   tex.needsUpdate = true
+  return tex
+}
+
+// pose frames are decoded once per FILE prefix (keeper/boss reuse elite's) and
+// shared by every kind that maps onto it
+const POSE_BASE = BASE + 'poses/'
+const framesCache = new Map<string, Promise<EnemyFrames | null>>()
+
+function poseFrames(prefix: string): Promise<EnemyFrames | null> {
+  let p = framesCache.get(prefix)
+  if (!p) {
+    p = buildFrames(prefix).catch(() => { artMiss('enemy pose art', prefix); return null })
+    framesCache.set(prefix, p)
+  }
+  return p
+}
+
+async function buildFrames(prefix: string): Promise<EnemyFrames | null> {
+  const [a, b, hit] = await Promise.all(
+    ['walk-a', 'walk-b', 'hit'].map((f) => loadImage(`${POSE_BASE}${prefix}-${f}.png`)),
+  )
+  const frame = (img: HTMLImageElement): EnemyFrame => ({
+    tex: makeTex(img),
+    aspect: img.naturalWidth / Math.max(1, img.naturalHeight),
+    relH: Math.max(0.7, Math.min(1.45, img.naturalHeight / Math.max(1, a.naturalHeight))),
+  })
+  artBound('enemy-pose', prefix)
+  return { walkA: frame(a), walkB: frame(b), hit: frame(hit) }
+}
+
+async function build(kind: EnemyKind): Promise<EnemyArt | null> {
+  const def = ENEMY_ART[kind]
+  if (!def) return null
+  const prefix = def.file.replace(/\.png$/, '')
+  // painted pose frames first (walk×2 + hit); the legacy single-frame sprite
+  // stays as the fallback rung so a missing pose file can never blank a unit —
+  // and the miss is already reported LOUD by poseFrames().
+  const frames = await poseFrames(prefix)
+  if (frames) {
+    const art: EnemyArt = { tex: frames.walkA.tex, aspect: frames.walkA.aspect, accent: def.accent, frames }
+    resolved.set(kind, art)
+    return art
+  }
+  const img = await loadImage(BASE + def.file)
   const art: EnemyArt = {
-    tex,
+    tex: makeTex(img),
     aspect: img.naturalWidth / Math.max(1, img.naturalHeight),
     accent: def.accent,
+    frames: null,
   }
   resolved.set(kind, art)
   return art

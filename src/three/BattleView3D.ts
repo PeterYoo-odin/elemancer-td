@@ -30,9 +30,9 @@ import { TERRAIN_META } from '../game/paths'
 import { models } from './models'
 import { towerVisual, accentGeometry, type AccentSpec, type PartRole, type TowerVisual } from './towerModels'
 import { appSettings } from '../ui/settings'
-import { heroCutout } from '../ui/heroArt'
+import { heroCutout, heroPoseFrames, HERO_POSE_NAMES, type HeroPose } from '../ui/heroArt'
 import { wyrmCutout } from '../ui/wyrmArt'
-import { enemyArt, enemyArtReady } from '../ui/enemyArt'
+import { enemyArt, enemyArtReady, type EnemyFrames } from '../ui/enemyArt'
 
 const TILE_PX = 80
 const CX = MAP_X + MAP_W / 2 // 360
@@ -108,6 +108,10 @@ interface EnemySlot {
   art: THREE.Sprite | null
   artMat: THREE.SpriteMaterial | null
   artH: number // billboard height in world units (drives the squash/bob math)
+  // painted pose frames (walk×2 + hit) with per-frame world dims for THIS slot
+  // (boss-scale slots bake bigger dims from the same shared textures)
+  artFrames: { a: { tex: THREE.Texture; w: number; h: number }; b: { tex: THREE.Texture; w: number; h: number }; hit: { tex: THREE.Texture; w: number; h: number } } | null
+  artFrame: 'a' | 'b' | 'hit'
   accentGlow: THREE.Sprite | null // additive signature-accent halo (skipped for swarm)
   accentGlowMat: THREE.SpriteMaterial | null
   accent: number // signature Greying accent colour
@@ -187,6 +191,12 @@ interface HeroSlot {
   badgeMat: THREE.SpriteMaterial
   art: THREE.Sprite | null // painted billboard token (async)
   artMat: THREE.SpriteMaterial | null
+  // painted POSE FRAMES (idle/attack/cast), frame-swapped over the pose
+  // envelopes below; null → single-portrait cutout (or the low-poly figure)
+  poseTex: Record<HeroPose, THREE.Texture> | null
+  poseDim: Record<HeroPose, { w: number; h: number }> | null
+  pose: HeroPose
+  artBaseH: number // current frame's world height (idle = HERO_ART_H)
   color: number
   heroId: string
   artTint: number // equipped hero-skin dye (0xffffff = stock)
@@ -208,9 +218,10 @@ interface HeroSlot {
   prevFire: number // last-seen h.fireFlash, to detect a fresh shot
 }
 
-// painted cutout textures, keyed by heroId — shared across battles, never disposed
-// (7 small canvases; re-uploaded automatically when a new renderer context starts)
-const heroArtTexCache = new Map<string, THREE.CanvasTexture>()
+// painted hero textures — pose frames keyed `heroId:pose`, legacy portrait
+// cutouts keyed by bare heroId. Shared across battles, never disposed
+// (small set; re-uploaded automatically when a new renderer context starts)
+const heroArtTexCache = new Map<string, THREE.Texture>()
 // painted Wyrm cutout textures, keyed by wyrmId (6 canvases; shared like heroes)
 const wyrmArtTexCache = new Map<string, THREE.CanvasTexture>()
 const WYRM_ART_H = 1.15 // world-units tall — the companion reads smaller than its hero
@@ -2059,7 +2070,7 @@ export class BattleView3D {
       kind: e.kind, group, body, bodyMat, hpBg, hpFill, hpFillMat, shield, shadow, baseScale: 1, hoverY, spawnT: 0, hitT: 0, radius: r,
       prevX: e.x, prevY: e.y, yaw: 0, walkT: Math.random() * Math.PI * 2, phase: Math.random() * Math.PI * 2, animSpeed: 1, burning: false, emberAcc: 0, streakAcc: 0, isAir: !!def.isAir,
       auraPip: null, auraPipMat: null, crown, crownMat,
-      art: null, artMat: null, artH: 0, accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false, prevShield: e.shieldMax,
+      art: null, artMat: null, artH: 0, artFrames: null, artFrame: 'a', accentGlow: null, accentGlowMat: null, accent: def.accent, boss: !!def.boss, castWarned: false, prevShield: e.shieldMax,
     }
 
     // Swap the primitive body for the painted "greyling" billboard once its PNG
@@ -2086,6 +2097,22 @@ export class BattleView3D {
       slot.artH = artH
       slot.accent = art.accent // bright signature glow (not def.accent's dark outline)
       body.visible = false
+
+      // painted pose frames (walk×2 + hit): bake THIS slot's world dims per
+      // frame off the shared textures — the walk loop swaps `map` + dims only
+      if (art.frames) {
+        const dim = (f: { aspect: number; relH: number }): { w: number; h: number } => {
+          const fh = artH * f.relH
+          return { w: fh * f.aspect, h: fh }
+        }
+        const fr = art.frames
+        slot.artFrames = {
+          a: { tex: fr.walkA.tex, ...dim(fr.walkA) },
+          b: { tex: fr.walkB.tex, ...dim(fr.walkB) },
+          hit: { tex: fr.hit.tex, ...dim(fr.hit) },
+        }
+        slot.artFrame = 'a'
+      }
 
       // signature accent glow: a soft additive halo in the archetype's Greying
       // colour so roles read at a glance. Skipped for swarm — dense clusters, and
@@ -2684,7 +2711,8 @@ export class BattleView3D {
     const slot: HeroSlot = {
       group: g, figure, bodyMat, orb, orbMat, ring, ringMat, glow,
       badge: badge.sprite, badgeTex: badge.tex, badgeMat: badge.mat,
-      art: null, artMat: null, color: def.color, heroId: h.heroId,
+      art: null, artMat: null, poseTex: null, poseDim: null, pose: 'idle', artBaseH: HERO_ART_H,
+      color: def.color, heroId: h.heroId,
       artTint: heroDye(h.heroId)?.tint ?? 0xffffff, // equipped hero-skin dye
       wyrm: null, wyrmMat: null, wyrmPhase: (h.id * 1.7) % (Math.PI * 2),
       phase: (h.id * 2.399963) % (Math.PI * 2), artBaseW: 0.9,
@@ -2716,29 +2744,63 @@ export class BattleView3D {
       })
     }
 
-    // swap the low-poly figure for the painted billboard token once the cached
-    // background-keyed cutout is ready (first battle pays one decode; after
-    // that it resolves instantly). Keying failure → keep the figure.
-    heroCutout(h.heroId).then((cut) => {
-      if (!cut || this.disposed || this.heroViews.get(h.id) !== slot) return
-      let tex = heroArtTexCache.get(h.heroId)
-      if (!tex) {
-        tex = new THREE.CanvasTexture(cut.canvas)
-        tex.colorSpace = THREE.SRGBColorSpace
-        tex.anisotropy = 4
-        heroArtTexCache.set(h.heroId, tex)
-      }
+    // Attach a painted billboard token in place of the low-poly figure.
+    const attachArt = (tex: THREE.Texture, w: number, hgt: number): void => {
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, alphaTest: 0.05, depthWrite: false })
       const sprite = new THREE.Sprite(mat)
-      sprite.scale.set(HERO_ART_H * cut.aspect, HERO_ART_H, 1)
-      sprite.position.y = HERO_ART_H / 2 + 0.05
+      sprite.scale.set(w, hgt, 1)
+      sprite.position.y = hgt / 2 + 0.05
       sprite.userData.y0 = sprite.position.y
       g.add(sprite)
       figure.visible = false
-      slot.badge.position.y = HERO_ART_H + 0.32 // clear the taller token
+      slot.badge.position.y = Math.max(HERO_ART_H, hgt) + 0.32 // clear the taller token
       slot.art = sprite
       slot.artMat = mat
-      slot.artBaseW = HERO_ART_H * cut.aspect
+      slot.artBaseW = w
+      slot.artBaseH = hgt
+    }
+
+    // Painted POSE FRAMES first (idle/attack/cast, frame-swapped over the pose
+    // envelope). Missing/partial set → fall back to the single portrait cutout;
+    // keying failure there → the figure stays. Each rung is loud on a miss and
+    // the frame rung reports 'asset-bound' so QA can positively assert it.
+    heroPoseFrames(h.heroId).then((pf) => {
+      if (this.disposed || this.heroViews.get(h.id) !== slot || slot.art) return
+      if (pf) {
+        const texKey = (pose: HeroPose): string => `${h.heroId}:${pose}`
+        const dims = {} as Record<HeroPose, { w: number; h: number }>
+        const texes = {} as Record<HeroPose, THREE.Texture>
+        for (const pose of HERO_POSE_NAMES) {
+          let tex = heroArtTexCache.get(texKey(pose))
+          if (!tex) {
+            tex = new THREE.Texture(pf[pose].img)
+            tex.colorSpace = THREE.SRGBColorSpace
+            tex.anisotropy = 4
+            tex.needsUpdate = true
+            heroArtTexCache.set(texKey(pose), tex)
+          }
+          const fh = HERO_ART_H * pf[pose].relH
+          dims[pose] = { w: fh * pf[pose].aspect, h: fh }
+          texes[pose] = tex
+        }
+        slot.poseTex = texes
+        slot.poseDim = dims
+        slot.pose = 'idle'
+        attachArt(texes.idle, dims.idle.w, dims.idle.h)
+        return
+      }
+      // fallback: the cached background-keyed portrait cutout (legacy billboard)
+      void heroCutout(h.heroId).then((cut) => {
+        if (!cut || this.disposed || this.heroViews.get(h.id) !== slot || slot.art) return
+        let tex = heroArtTexCache.get(h.heroId)
+        if (!tex) {
+          tex = new THREE.CanvasTexture(cut.canvas)
+          tex.colorSpace = THREE.SRGBColorSpace
+          tex.anisotropy = 4
+          heroArtTexCache.set(h.heroId, tex)
+        }
+        attachArt(tex, HERO_ART_H * cut.aspect, HERO_ART_H)
+      })
     })
     return slot
   }
@@ -2801,10 +2863,6 @@ export class BattleView3D {
   private animateHeroPresence(s: HeroSlot, buffed: boolean): void {
     const t = this.clockT
     const usingArt = !!s.art && s.art.visible
-    const body: THREE.Object3D = usingArt ? s.art! : s.figure
-    const baseY = usingArt ? (s.art!.userData.y0 as number) : 0
-    const baseW = usingArt ? s.artBaseW : 1
-    const baseH = usingArt ? HERO_ART_H : 1
 
     // pose envelopes (1 at trigger → 0 when the window closes); a soft ease-out
     const env = (until: number, dur: number): number => (until > t ? Math.max(0, Math.min(1, (until - t) / dur)) : 0)
@@ -2812,6 +2870,27 @@ export class BattleView3D {
     const hurt = env(s.hurtUntil, HURT_DUR)
     const awaken = env(s.awakenUntil, AWAKEN_DUR)
     const atk = env(s.atkUntil, HERO_ATK_DUR)
+
+    // PAINTED POSE FRAMES: swap the billboard frame with the envelope that owns
+    // the beat (cast/awaken > attack > idle). A swap is just a shared-texture
+    // `map` assignment — no allocs. Reduce-motion pins the static idle frame,
+    // so the procedural squash/lean below never plays over a mid-action frame.
+    if (usingArt && s.poseTex && s.poseDim && s.artMat) {
+      const want: HeroPose = !this.motionOk ? 'idle' : (cast > 0 || awaken > 0) ? 'cast' : atk > 0 ? 'attack' : 'idle'
+      if (want !== s.pose) {
+        s.pose = want
+        const d = s.poseDim[want]
+        s.artMat.map = s.poseTex[want]
+        s.artBaseW = d.w
+        s.artBaseH = d.h
+        s.art!.userData.y0 = d.h / 2 + 0.05
+      }
+    }
+
+    const body: THREE.Object3D = usingArt ? s.art! : s.figure
+    const baseY = usingArt ? (s.art!.userData.y0 as number) : 0
+    const baseW = usingArt ? s.artBaseW : 1
+    const baseH = usingArt ? s.artBaseH : 1
 
     let dy = 0, sx = 1, sy = 1, tilt = 0, glow = buffed ? 0.15 : 0
     let lx = 0, lz = 0 // world-space lunge offset toward the target (basic attack)
@@ -3603,6 +3682,23 @@ export class BattleView3D {
         sqY *= 1 - hitK * 0.22
       }
       if (s.art) {
+        // PAINTED POSE FRAMES: two walk frames alternate on the stride sign
+        // (2 plants/stride, matching the bob), the hit frame owns the flinch
+        // window. Swaps assign SHARED per-kind textures — no per-entity allocs.
+        // Reduce-motion pins the static walk-A frame (frame 1).
+        if (s.artFrames && s.artMat) {
+          const want: 'a' | 'b' | 'hit' =
+            hitK > 0 ? 'hit' : !this.motionOk ? 'a' : stride >= 0 ? 'a' : 'b'
+          if (want !== s.artFrame) {
+            s.artFrame = want
+            const f = s.artFrames[want]
+            s.artMat.map = f.tex
+            s.art.userData.w = f.w
+            s.art.userData.h = f.h
+            // keep the feet planted (ground) / hover centre (air) as heights vary
+            s.art.userData.y0 = s.isAir ? f.h * 0.12 : f.h / 2 - s.radius
+          }
+        }
         // painted billboard: the full gait applied to the sprite's base dims. Facing
         // is camera-locked (that's the billboard read); lean is a screen-space tilt.
         const w = s.art.userData.w as number
