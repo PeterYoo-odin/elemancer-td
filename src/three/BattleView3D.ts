@@ -47,11 +47,14 @@ const GROUND = 0.2
 // board into the fog/haze.
 const TSUB = 3
 const TSKIRT = 3
-// Ground/path texture tiling: repeats per BOARD TILE (not per quad) — high enough
-// that several painted slabs read across one tile rather than one giant stretched
-// copy, computed from a continuous tile-space UV so there are no seams anywhere
-// on the merged mesh regardless of this value.
-const GROUND_TEX_REPEAT = 2
+// Ground/path texture tiling: repeats per BOARD TILE (not per quad) — kept well
+// under 1 so a SINGLE painted slab spans roughly ten board tiles (the Kingdom
+// Rush scale a top-down camera reads at), computed from a continuous tile-space
+// UV so there are no seams anywhere on the merged mesh regardless of this value.
+// (A value >=1 crams many slabs into a few on-screen pixels; mipmapping then
+// averages them down to a flat tint — that was the "washed beige board" bug.)
+const GROUND_TEX_REPEAT = 0.1
+const PATH_TEX_REPEAT = 0.1
 // Empirical: the scene's stacked lighting reads a flat-vertex-coloured surface
 // noticeably brighter than its input albedo — this compensates so the sculpted
 // terrain's ON-SCREEN mid-luma matches the per-realm design target, not a washed
@@ -384,7 +387,6 @@ export class BattleView3D {
   // a subdivided heightfield (flat plaza on build/path tiles — never moves a tower or
   // the pick plane — rising into rocky highlands on blocked/scenery tiles, plus a
   // perimeter skirt that falls away into haze). See computeTileRise()/buildTerrainMesh().
-  private terrainGeo?: THREE.BufferGeometry
   // Ground/path/blocked each get their own material (CHROMANCER #58 — a painted
   // cel-shaded ground texture instead of one flat vertex-coloured kit tint) so the
   // three tile roles read as instantly distinct materials, not just a vertex tint.
@@ -397,17 +399,6 @@ export class BattleView3D {
   private realmGroundTex: THREE.Texture | null = null
   private pathRoadTex: THREE.Texture | null = null
   private tileRise: Float32Array = new Float32Array(0) // per-tile extra height above GROUND (blocked cells only), COLS*ROWS
-  // Grey→colour reveal: as the realm is cleared (sim.colorProgress 0..1) the ashen
-  // field regains its palette saturation — the board itself proves the thesis. Stored
-  // per vertex-write (flat-shaded quads: 6 writes/quad) so the re-tint is one buffer pass.
-  private terrainFull: Float32Array = new Float32Array(0) // full-saturation target colour (r,g,b per vertex-write)
-  private terrainGrey: Float32Array = new Float32Array(0) // ashen-monochrome colour (r,g,b per vertex-write)
-  private terrainHold: Uint8Array = new Uint8Array(0) // hazard quads: never mute (gameplay read)
-  private groundRevealQ = -1 // last quantised reveal level (throttles the re-tint)
-  private ashenTint = new THREE.Color(0x4a4a5c) // cool desaturated "Limbo" grey — the Greying's target, not mud
-  // Hard floor on how far the grey reveal may pull the board toward ashenTint — at
-  // colorProgress 0 the terrain must still read as the realm's OWN colour, never mud.
-  private static readonly GREY_CLAMP = 0.45
   private hazeTint = new THREE.Color(0x241a3c) // skirt fall-away colour (set to the realm fog tint in buildTerrainMesh)
   private boardLife?: BoardLife // on-board weather + prism-road shimmer
   private detailGroup = new THREE.Group()
@@ -954,21 +945,22 @@ export class BattleView3D {
   }
 
   // matIndex 0=path, 1=build(ground), 2=blocked(rock) — one geometry group per
-  // material below. Path/build quads now carry the realm's PAINTED texture (see
+  // material below. Path/build quads carry the realm's PAINTED texture (see
   // buildTerrainMesh); the colour returned here is a MODULATION tint multiplied
   // over that texture, so it's kept near-white (worn-lip/hazard/AO only) rather
-  // than the old flat palette albedo — that albedo now lives in the PNG, and
-  // re-tinting it away from white is exactly the "washed beige" bug we're fixing.
+  // than a flat palette albedo — that albedo lives in the PNG, and re-tinting it
+  // away from white is exactly the "washed beige" bug this must never reintroduce.
+  // This modulation is STABLE — it does not change over the course of a battle
+  // (see buildTerrainMesh: the colour attribute is written once and never re-tinted).
   // Rock/blocked quads have no painted texture (they read as a darker, desaturated
   // highland — the readability contrast against the bright buildable ground) so
   // they keep the original flat-vertex-coloured strata treatment untouched.
   private terrainQuadColor(
     tc: number, tr: number, si: number, sj: number,
     h00: number, h10: number, h01: number, h11: number,
-  ): [THREE.Color, boolean, number] {
+  ): [THREE.Color, number] {
     const inBoard = tc >= 0 && tc < COLS && tr >= 0 && tr < ROWS
     const kind = inBoard ? this.sim.grid[tr][tc] : 'blocked'
-    let hold = false
     let col: THREE.Color
     let matIndex: number
     if (kind === 'path') {
@@ -979,8 +971,9 @@ export class BattleView3D {
       col = new THREE.Color(0xffffff)
       const terr = this.sim.terrainAt(tc, tr)
       if (terr !== '' && TERRAIN_META[terr]) {
+        // hazard/terrain-feature tint: a gameplay read, kept as an intentional hue
+        // (not the reveal mechanic — that's gone; this is just terrain identity).
         col = col.clone().lerp(new THREE.Color(TERRAIN_META[terr].color), 0.55)
-        hold = true
       }
       // worn lip: darken the strip of build tile that actually touches the lane
       const nKind = (dc: number, dr: number): string => {
@@ -1028,17 +1021,7 @@ export class BattleView3D {
     // on screen regardless of hue. Only the UNTEXTURED rock material needs this; the
     // painted path/build textures are already contrast-gated to their on-screen target.
     if (matIndex === 2) col = col.clone().multiplyScalar(TERRAIN_LIGHT_COMP)
-    return [col, hold, matIndex]
-  }
-
-  // Ashen target for the Greying's wave-1 state: a single CLAMPED lerp toward the
-  // cool "Limbo" tint, capped at GREY_CLAMP (0.45) — never a full desaturate-to-
-  // luminance-then-tint stack, which was eating the realm's own colour down to
-  // ~27% at colorProgress 0 (the "bottoms out into mud" bug). At the clamp, the
-  // board still reads as its own hue at HALF-plus strength; full colour still
-  // rewards clearing the realm.
-  private ashenColorFor(full: THREE.Color): THREE.Color {
-    return full.clone().lerp(this.ashenTint, BattleView3D.GREY_CLAMP)
+    return [col, matIndex]
   }
 
   // Build the merged, non-indexed (flat-shaded) terrain BufferGeometry: the whole
@@ -1052,12 +1035,9 @@ export class BattleView3D {
     const quads = cols * TSUB * rows * TSUB
     const verts = quads * 6
     const pos = new Float32Array(verts * 3)
-    const full = new Float32Array(verts * 3)
-    const grey = new Float32Array(verts * 3)
-    const hold = new Uint8Array(verts)
+    const col = new Float32Array(verts * 3)
     const uv = new Float32Array(verts * 2)
     let vi = 0
-    const _full = new THREE.Color()
     const geo = new THREE.BufferGeometry()
     let groupStart = 0
     let groupMatIndex = -1
@@ -1071,7 +1051,7 @@ export class BattleView3D {
             const h01 = this.heightAt(gx0, gz1), h11 = this.heightAt(gx1, gz1)
             const x0 = wx(MAP_X + gx0 * TILE_PX), x1 = wx(MAP_X + gx1 * TILE_PX)
             const z0 = wz(MAP_Y + gz0 * TILE_PX), z1 = wz(MAP_Y + gz1 * TILE_PX)
-            const [c, hd, matIndex] = this.terrainQuadColor(tc, tr, si, sj, h00, h10, h01, h11)
+            const [c, matIndex] = this.terrainQuadColor(tc, tr, si, sj, h00, h10, h01, h11)
             // One geometry group per contiguous run of same-material quads (path /
             // build / blocked each render with their OWN textured material below —
             // still just 3 draw calls total for the whole board, not per-tile).
@@ -1080,21 +1060,18 @@ export class BattleView3D {
               groupStart = vi
               groupMatIndex = matIndex
             }
-            _full.copy(c)
-            const g = this.ashenColorFor(_full)
+            const texRepeat = matIndex === 0 ? PATH_TEX_REPEAT : GROUND_TEX_REPEAT
             const quad: Array<[number, number, number, number, number]> = [
               [x0, h00, z0, gx0, gz0], [x1, h10, z0, gx1, gz0], [x1, h11, z1, gx1, gz1],
               [x0, h00, z0, gx0, gz0], [x1, h11, z1, gx1, gz1], [x0, h01, z1, gx0, gz1],
             ]
             for (const [x, y, z, gx, gz] of quad) {
               pos[vi * 3] = x; pos[vi * 3 + 1] = y; pos[vi * 3 + 2] = z
-              full[vi * 3] = _full.r; full[vi * 3 + 1] = _full.g; full[vi * 3 + 2] = _full.b
-              grey[vi * 3] = g.r; grey[vi * 3 + 1] = g.g; grey[vi * 3 + 2] = g.b
-              hold[vi] = hd ? 1 : 0
+              col[vi * 3] = c.r; col[vi * 3 + 1] = c.g; col[vi * 3 + 2] = c.b
               // Continuous tile-space coords (never reset per-tile) → seamless
               // RepeatWrapping tiling across the whole merged mesh, no per-quad seams.
-              uv[vi * 2] = gx * GROUND_TEX_REPEAT
-              uv[vi * 2 + 1] = gz * GROUND_TEX_REPEAT
+              uv[vi * 2] = gx * texRepeat
+              uv[vi * 2 + 1] = gz * texRepeat
               vi++
             }
           }
@@ -1103,13 +1080,9 @@ export class BattleView3D {
     }
     if (groupMatIndex >= 0) geo.addGroup(groupStart, vi - groupStart, groupMatIndex)
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-    geo.setAttribute('color', new THREE.BufferAttribute(full.slice(), 3))
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
     geo.computeVertexNormals()
-    this.terrainFull = full
-    this.terrainGrey = grey
-    this.terrainHold = hold
-    this.terrainGeo = geo
 
     const kitAtlas = models.atlas()
     // Buildable ground: the realm's painted cel-shaded texture. Falls back to the
@@ -1134,10 +1107,6 @@ export class BattleView3D {
     mesh.frustumCulled = false
     this.scene.add(mesh)
     this.boardMeshes.push(mesh)
-    // Paint the initial reveal state: ashen when animation is on (climbs to full
-    // colour as the realm clears); snap to full colour under reduce-motion (static).
-    this.groundRevealQ = -1
-    this.applyGroundReveal(this.motionOk ? this.sim.colorProgress() : 1)
   }
 
   // Fail-soft PNG load for the ground/path textures: on success, swap the live
@@ -1209,40 +1178,6 @@ export class BattleView3D {
       ground: this.groundMat && this.groundMat.map === this.realmGroundTex && this.realmGroundTex ? 'realm-png' : 'fallback-atlas',
       path: this.pathMat && this.pathMat.map === this.pathRoadTex && this.pathRoadTex ? 'path-png' : 'fallback-atlas',
     }
-  }
-
-  // Re-tint the terrain toward its palette as the realm is cleared. reveal 0 → ashen
-  // monochrome; reveal 1 → full palette colour. Hazard quads are pinned to full
-  // colour so the terrain read never fades. Cheap: only touched when the quantised
-  // reveal changes (a handful of times per battle).
-  private applyGroundReveal(reveal: number): void {
-    const geo = this.terrainGeo
-    if (!geo) return
-    const colAttr = geo.getAttribute('color') as THREE.BufferAttribute
-    const arr = colAttr.array as Float32Array
-    const mute = (1 - Math.max(0, Math.min(1, reveal))) * 0.85
-    for (let i = 0; i < this.terrainHold.length; i++) {
-      const o = i * 3
-      if (this.terrainHold[i] || mute <= 0) {
-        arr[o] = this.terrainFull[o]; arr[o + 1] = this.terrainFull[o + 1]; arr[o + 2] = this.terrainFull[o + 2]
-      } else {
-        arr[o] = this.terrainFull[o] + (this.terrainGrey[o] - this.terrainFull[o]) * mute
-        arr[o + 1] = this.terrainFull[o + 1] + (this.terrainGrey[o + 1] - this.terrainFull[o + 1]) * mute
-        arr[o + 2] = this.terrainFull[o + 2] + (this.terrainGrey[o + 2] - this.terrainFull[o + 2]) * mute
-      }
-    }
-    colAttr.needsUpdate = true
-  }
-
-  // Per-frame: drive the reveal off battle progress, throttled to ~2% steps so the
-  // full-board re-tint only fires when the clear fraction actually advances.
-  private updateGroundReveal(): void {
-    if (!this.terrainGeo || !this.motionOk) return // static (already full) when reduced
-    const prog = this.sim.colorProgress()
-    const q = Math.round(prog * 50)
-    if (q === this.groundRevealQ) return
-    this.groundRevealQ = q
-    this.applyGroundReveal(q / 50)
   }
 
   // On-board diorama layers (per-realm weather drifting across the plane + a
@@ -3921,7 +3856,8 @@ export class BattleView3D {
     this.updateParticles(dt)
     this.updateMotes()
     this.updateBackdrop(dt)
-    this.updateGroundReveal() // grey→colour as the realm is cleared (thesis on the board)
+    // The board's land is intentionally STABLE — no grey→colour reveal here. Grey is
+    // the Greying's colour (enemies), not the land's; see terrainQuadColor/buildTerrainMesh.
     if (this.boardLife) {
       try {
         this.boardLife.update(dt, this.clockT)

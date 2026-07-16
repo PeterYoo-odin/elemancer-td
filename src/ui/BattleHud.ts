@@ -193,8 +193,19 @@ const CSS = `
 .eld-spell .cdmask { position:absolute; inset:-2px; border-radius:50%; pointer-events:none; }
 .eld-spell .cdtxt { position:absolute; font-size:16px; font-weight:900; text-shadow:0 1px 2px #000; }
 .eld-spell.ready .cdtxt { display:none; }
-.eld-towers { display:flex; gap:8px; justify-content:center; }
-.eld-tower { position:relative; flex:1 1 0; max-width:118px; border-radius:16px; padding:8px 4px 6px;
+/* Horizontally scrollable strip (CHROMANCER #63 — the row ran off both edges on
+   phones, e.g. "Cannon" clipped left / "Sha[dow]" clipped right, with no way to
+   reach the rest). Native overflow-x scroll + momentum, matching the
+   .est-tabs/.ebd-heroes convention elsewhere in the HUD. Edge padding so the
+   FIRST/LAST card scroll fully into view (not flush against the container edge),
+   and a soft edge-fade mask as the "more off-screen" affordance. */
+.eld-towers { display:flex; gap:8px; overflow-x:auto; overscroll-behavior-x:contain;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch; scroll-snap-type:x proximity;
+  padding:2px 10px; margin:0 -10px;
+  -webkit-mask-image:linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+  mask-image:linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
+.eld-towers::-webkit-scrollbar { display:none; }
+.eld-tower { position:relative; flex:0 0 auto; width:104px; scroll-snap-align:center; border-radius:16px; padding:8px 4px 6px;
   background:linear-gradient(180deg,var(--panel2),var(--panel)); border:2px solid #444;
   display:flex; flex-direction:column; align-items:center; gap:2px; box-shadow:0 4px 12px rgba(0,0,0,.35); transition:transform .08s; }
 .eld-tower:active { transform:scale(.95); }
@@ -511,8 +522,9 @@ const CSS = `
    stack (which occluded the play plane and inflated --dock-h, shoving the
    upgrade sheet into the top bar) and becomes a SLIM, edge-docked HORIZONTAL
    rail: prep row on top, all action tiles on one short line below, tiles
-   scaled down to fit the tightest landscape phone (iPhone SE, 667px) with
-   the full loadout (3 spells + 3 controls + 3 heroes + 5 towers) on one line. */
+   scaled down to fit the tightest landscape phone (iPhone SE, 667px). The
+   tower row (8 towers, growing) scrolls horizontally rather than trying to
+   cram every tile onto one line — see .eld-towers overflow-x above. */
 @media (orientation: landscape) and (max-height: 520px) {
   .eld-dock {
     flex-flow: row wrap; align-items: flex-end; justify-content: center;
@@ -532,7 +544,7 @@ const CSS = `
   .eld-hero .hport { width: 40px; height: 40px; font-size: 17px; }
   .eld-hero .hname { font-size: 9px; }
   .eld-hero .hlvl { font-size: 9px; padding: 1px 3px; }
-  .eld-towers { gap: 5px; }
+  .eld-towers { gap: 5px; max-width: 100%; margin: 0 -8px; padding: 2px 8px; }
   .eld-tower { flex: 0 0 auto; width: 44px; max-width: 44px; padding: 4px 2px 3px;
     border-radius: 11px; gap: 1px; }
   .eld-tower .gem { width: 22px; height: 22px; border-radius: 7px; margin-top: 1px; }

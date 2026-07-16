@@ -453,13 +453,21 @@ export class RealmAtmosphere {
     if (!this.camera.parent) this.scene.add(this.camera)
   }
 
-  // Scale the frame to cover the camera frustum at frameDepth (+2% overscan), so the
+  // Scale the frame to cover the camera frustum at frameDepth (+4% overscan), so the
   // corner art frames the true screen corners on every aspect (desktop → mobile).
+  // UNIFORM ("cover") scale, not per-axis stretch: the source texture is square
+  // (512x512). Scaling it non-uniformly to exactly fill an arbitrary-aspect frustum
+  // stretches the corner wedges — on tall/narrow phone aspects that stretch pushes
+  // the top-left/top-right wedges far enough down and inward that they visually merge
+  // into a single dark trapezoid band across the upper board. A uniform max(halfW,
+  // halfH) scale keeps the corner art's own proportions intact (harmless overscan
+  // beyond the frustum on the shorter axis) while still fully covering every corner.
   private fitFrame(): void {
     if (!this.frameMesh) return
     const halfH = this.frameDepth * Math.tan((this.camera.fov * Math.PI / 180) / 2)
     const halfW = halfH * this.camera.aspect
-    this.frameMesh.scale.set(halfW * 2 * 1.04, halfH * 2 * 1.04, 1)
+    const half = Math.max(halfW, halfH)
+    this.frameMesh.scale.set(half * 2 * 1.04, half * 2 * 1.04, 1)
   }
 
   // ---- per-frame update ----------------------------------------------------------
