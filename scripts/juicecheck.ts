@@ -304,6 +304,43 @@ async function main(): Promise<void> {
     check(enemyBound.length >= 1, `enemy painted pose frames BOUND for ${enemyBound.length} archetype(s): ${enemyBound.join(', ') || 'none'}`)
     check(allPoseMisses.size === 0, allPoseMisses.size ? `pose art fell back silently: ${[...allPoseMisses].join(' | ')}` : 'zero pose-art misses across the whole drive (no silent fallback)')
 
+    // ---- painted WORLD-MAP RIDGE binding (assert-bound) --------------------
+    // Reach the real map through the shipped flow (win screen → WORLD MAP),
+    // then require every realm band to flip to .ridged — which only happens
+    // after a REAL decode — and all six 'ridge-art' ledger binds.
+    const ridge = await page.evaluate(async () => {
+      const c = (window as any).__chromancer
+      await c.startLevel({ levelId: 'l1', seed: 10 })
+      // the re-entered scene settles into 'prep' a few frames late — wait for
+      // it (stepping so the driven loop advances), then win, then poll for the
+      // victory screen's WORLD MAP button
+      for (let i = 0; i < 40 && c.getState().state !== 'prep'; i++) {
+        c.stepFrames(5)
+        await new Promise((res) => setTimeout(res, 150))
+      }
+      c.forceWin()
+      let btn: HTMLButtonElement | undefined
+      for (let i = 0; i < 40 && !btn; i++) {
+        c.stepFrames(5)
+        btn = [...document.querySelectorAll('button')].find((b) => (b.textContent || '').includes('WORLD MAP')) as HTMLButtonElement | undefined
+        if (!btn) await new Promise((res) => setTimeout(res, 250))
+      }
+      btn?.click()
+      let bands = 0
+      for (let i = 0; i < 40; i++) {
+        bands = document.querySelectorAll('.ewm-band.ridged').length
+        if (bands >= 6) break
+        await new Promise((res) => setTimeout(res, 300))
+      }
+      const bound = (c.assetEvents as any[])
+        .filter((e: any) => e.type === 'asset-bound' && e.what === 'ridge-art')
+        .map((e: any) => e.id)
+      return { clicked: !!btn, bands, bound }
+    })
+    check(ridge.clicked, 'win screen exposes the WORLD MAP button (map reachable)')
+    check(ridge.bands === 6, `painted ridge panoramas BOUND on ${ridge.bands}/6 realm bands (.ridged only flips on a real decode)`)
+    check(ridge.bound.length === 6, `6/6 'ridge-art' asset-bound ledger events (${ridge.bound.join(', ')})`)
+
     // ---- page health -------------------------------------------------------
     check(pageErrors.length === 0, pageErrors.length ? `uncaught page errors: ${pageErrors.slice(0, 3).join(' | ')}` : 'zero uncaught page errors across the whole drive')
   } finally {

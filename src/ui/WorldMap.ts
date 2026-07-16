@@ -8,8 +8,8 @@
 // node → levelId wiring (plain DOM buttons, so taps can't miss).
 
 import { LEVELS, REALMS, isLevelUnlocked, realmForLevel, type LevelDef, type RealmDef } from '../game/levels'
-import { realmBackdropUrl } from '../game/realmBackdrops'
-import { artUrl } from './webp'
+import { realmBackdrop, realmBackdropUrl } from '../game/realmBackdrops'
+import { artUrl, artMiss, artBound } from './webp'
 import { economy } from '../game/economy'
 import { appSettings } from './settings'
 import { playUiTick, playNodeStinger, playDiscovery } from './sfx'
@@ -102,6 +102,17 @@ const CSS = `
 .ewm-ridge { position: absolute; left: -2%; right: -2%; bottom: 0; }
 .ewm-ridge.far { height: 46%; background: var(--ridgeFar); opacity: .8; }
 .ewm-ridge.near { height: 32%; background: var(--ridge); }
+/* painted parallax ridge panorama — replaces the CSS silhouettes once its
+   texture decodes (band gains .ridged); a load failure keeps the silhouettes
+   and is reported LOUD via artMiss. It lives INSIDE .ewm-band, so the greying
+   grayscale filter + fog desaturate it exactly like the rest of the band. */
+.ewm-rart { position: absolute; left: -2%; right: -2%; bottom: 0; width: 104%;
+  height: min(46%, 340px); /* PX-CAPPED: node-heavy bands run 1000s of px tall —
+  a % height would blow the 1400px panorama into an unreadable smear */
+  object-fit: cover; object-position: center bottom; opacity: 0; pointer-events: none;
+  transition: opacity .6s ease; }
+.ewm-band.ridged .ewm-rart { opacity: 1; }
+.ewm-band.ridged .ewm-ridge { visibility: hidden; }
 .ewm-fog { position: absolute; inset: 0; opacity: 0; transition: opacity 1.5s ease; pointer-events: none;
   background: repeating-linear-gradient(115deg, rgba(200,200,210,.05) 0 26px, transparent 26px 60px),
     radial-gradient(90% 55% at 50% 60%, rgba(160,160,175,.14), transparent 70%); }
@@ -427,6 +438,23 @@ export class WorldMap {
     document.body.appendChild(this.root)
     this.scroll = this.root.querySelector<HTMLDivElement>('.ewm-scroll')!
 
+    // painted ridge panoramas: WebP-first → PNG → (loud) CSS-silhouette rung.
+    // The band only flips to .ridged after a REAL decode, so the old ridges can
+    // never blank out; 'ridge-art' asset-bound telemetry lets QA assert the art.
+    this.root.querySelectorAll<HTMLImageElement>('.ewm-rart').forEach((img) => {
+      const key = realmBackdrop(Number(img.dataset.ridge)).key
+      const png = `/concepts/realms/ridges/${key}-ridge.png`
+      img.addEventListener('load', () => {
+        artBound('ridge-art', key)
+        img.closest('.ewm-band')?.classList.add('ridged')
+      })
+      img.addEventListener('error', () => {
+        if (img.src.endsWith('.webp')) { img.src = png; return } // PNG fallback rung
+        artMiss('world-map ridge art', png) // CSS silhouettes remain — never grey, never blank
+      })
+      img.src = artUrl(png)
+    })
+
     this.root.addEventListener('click', (e) => {
       if (this.leaving) return
       // a tap while the caravan walks = "get on with it" (skip to arrival)
@@ -608,6 +636,7 @@ export class WorldMap {
           <div class="ewm-sky"></div>
           <div class="ewm-ridge far" style="clip-path:${far}"></div>
           <div class="ewm-ridge near" style="clip-path:${near}"></div>
+          <img class="ewm-rart" data-ridge="${ri}" alt="" draggable="false">
           <div class="ewm-fog"></div>
           <div class="ewm-hord">REALM ${ROMAN[ri]} · ${r.element.toUpperCase()} · ${r.levelIds.length} STOPS</div>
           <div class="ewm-head">
