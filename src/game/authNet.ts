@@ -14,16 +14,21 @@
 //  sees a verified access token (it validates it before trusting the uid).
 //
 //  SECURITY: only the anon key ships here (safe by design). The server (service
-//  role) is the sole writer and re-verifies every token. Sign-out clears ONLY the
-//  auth session — the device anchor stays, so a signed-out player falls back to
-//  guest, never a wipe. Zero PHI stored server-side (only the opaque auth uid).
+//  role) is the sole writer and re-verifies every token. Sign-out clears the auth
+//  session AND rotates the local device secret (chromancer-61): the signed-out
+//  account's row is left exactly as-is server-side (never a wipe — signing back
+//  in re-anchors it via op:link's merge path), but the device that falls back to
+//  guest is a BRAND-NEW guest identity, not a re-entry into the account that was
+//  just signed out of. This closes the shared-device/kiosk bleed where the next
+//  guest on the same browser used to resolve straight into the previous user's
+//  cloud save. Zero PHI stored server-side (only the opaque auth uid).
 // ============================================================================
 
-import { deviceHash, setLocalHandle } from './rankedNet'
+import { deviceHash, setLocalHandle, rotateDeviceSecret } from './rankedNet'
 import { resolveProviderFlags, HIDDEN, type ProviderFlags } from './authProviders'
 
-const URL = (import.meta.env.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
-const ANON = (import.meta.env.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
+const URL = (import.meta.env?.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
+const ANON = (import.meta.env?.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
 
 const SESSION_KEY = 'chromancer_auth_session_v1'
 
@@ -296,7 +301,9 @@ export async function linkDevice(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-//  Sign-out — clears ONLY the auth session (device anchor untouched → guest).
+//  Sign-out — clears the auth session AND rotates the local device secret, so
+//  this browser falls back to a FRESH guest, never a re-entry into the account
+//  just signed out of. See rotateDeviceSecret() in rankedNet.ts.
 // ---------------------------------------------------------------------------
 
 export async function signOut(): Promise<void> {
@@ -311,4 +318,10 @@ export async function signOut(): Promise<void> {
     } catch { /* offline — local sign-out still proceeds */ }
   }
   storeSession(null)
+  // Mint a new device secret so the NEXT guest on this browser (e.g. the next
+  // person on a shared/kiosk device) gets a brand-new device_hash and cannot
+  // resolve to the account that was just signed out of (chromancer-61: the
+  // account row itself is untouched server-side and is fully recoverable by
+  // signing back in — this only changes which LOCAL identity comes next).
+  rotateDeviceSecret()
 }

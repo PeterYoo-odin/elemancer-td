@@ -14,8 +14,8 @@
 import type { RankedMode, RankedRunRecord, RankedLog, DeclaredHero } from './ranked'
 import type { PFCell } from './pathforge'
 
-const URL = (import.meta.env.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
-const ANON = (import.meta.env.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
+const URL = (import.meta.env?.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
+const ANON = (import.meta.env?.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
 
 /** True when the ranked backend is wired. Reads/boards need this; when false the
  *  UI shows the "connecting to ranked servers…" state and local play is untouched. */
@@ -61,20 +61,38 @@ async function apiPost(fn: string, body: unknown): Promise<any> {
 const SECRET_KEY = 'chromancer_device_secret_v1'
 const HANDLE_KEY = 'chromancer_handle_v1'
 
+function generateSecret(): string {
+  const buf = new Uint8Array(16)
+  ;(globalThis.crypto || ({} as Crypto)).getRandomValues?.(buf)
+  let s = Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+  if (s.length < 8) s = 'x' + Date.now().toString(16) + Math.floor(Math.random() * 1e9).toString(16)
+  return s
+}
+
 function deviceSecret(): string {
   try {
     let s = localStorage.getItem(SECRET_KEY)
     if (!s) {
-      const buf = new Uint8Array(16)
-      ;(globalThis.crypto || ({} as Crypto)).getRandomValues?.(buf)
-      s = Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
-      if (s.length < 8) s = 'x' + Date.now().toString(16) + Math.floor(Math.random() * 1e9).toString(16)
+      s = generateSecret()
       localStorage.setItem(SECRET_KEY, s)
     }
     return s
   } catch {
     return 'ephemeral-' + Math.floor(Math.random() * 1e9).toString(16)
   }
+}
+
+/** Mint a FRESH device secret, replacing the old one, so the next deviceHash()
+ *  derives a brand-new device_hash. Used on sign-out to close the shared-device
+ *  bleed: the just-signed-out account's row (still keyed by the OLD device_hash
+ *  server-side) is left exactly as-is — recoverable by signing back in, which
+ *  re-anchors via op:link's existing merge path — but the NEXT guest on this
+ *  browser is unambiguously a new identity, not a re-entry into that account. */
+export function rotateDeviceSecret(): void {
+  try {
+    localStorage.setItem(SECRET_KEY, generateSecret())
+  } catch { /* private mode — nothing persisted to rotate; next read re-derives fresh anyway */ }
+  cachedHash = null
 }
 
 let cachedHash: string | null = null

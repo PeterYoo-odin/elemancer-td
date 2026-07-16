@@ -10,6 +10,7 @@
     "simcheck": "tsx scripts/simcheck.ts",
     "juicecheck": "tsx scripts/juicecheck.ts",
     "logoncheck": "tsx scripts/logoncheck.ts",
+    "devicecheck": "tsx scripts/devicecheck.ts",
     "balance": "tsx scripts/balance.ts",
     "preview": "vite preview",
     "difficulty": "tsx scripts/difficulty.ts"
