@@ -201,8 +201,22 @@ export async function readBody(req: any): Promise<any> {
   try { return raw ? JSON.parse(raw) : {} } catch { return {} }
 }
 
-export function cors(res: any): void {
-  res.setHeader('Access-Control-Allow-Origin', '*')
+// Game origins only. Auth is bearer-in-body (not cookies), so a wide-open '*'
+// carried no live exploit — this is defense-in-depth, not a fix for a hole.
+// Localhost (any port) stays allowed for local dev.
+const ALLOWED_ORIGINS = new Set(['https://www.chromancer.io', 'https://chromancer.io'])
+const LOCAL_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
+
+export function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.has(origin) || LOCAL_ORIGIN_RE.test(origin)
+}
+
+export function cors(req: any, res: any): void {
+  const origin = typeof req?.headers?.origin === 'string' ? req.headers.origin : ''
+  if (isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 }

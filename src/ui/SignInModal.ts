@@ -12,7 +12,9 @@
 import {
   authConfigured, isSignedIn, currentUser, userEmail,
   signInWithMagicLink, signInWithOAuth, signOut, onAuthChange,
+  getCachedProviderFlags, fetchProviderFlags,
 } from '../game/authNet'
+import { HIDDEN, type ProviderFlags } from '../game/authProviders'
 import { localHandle } from '../game/rankedNet'
 import { playUiTick } from './sfx'
 import { appSettings } from './settings'
@@ -84,17 +86,25 @@ export function openSignIn(opts: SignInOpts = {}): void {
   ov.addEventListener('click', (e) => { if (e.target === ov) close(false) })
 }
 
+/** The OAuth buttons + divider, or '' when neither provider is enabled (fail-safe
+ *  default — see authProviders.ts). Magic-link below is never gated by this. */
+function oauthSectionHtml(flags: ProviderFlags): string {
+  const buttons = [
+    flags.google ? `<button class="sgn-btn sgn-google" data-oauth="google">${GOOGLE_G}<span>Continue with Google</span></button>` : '',
+    flags.apple ? `<button class="sgn-btn sgn-apple" data-oauth="apple">${APPLE_A}<span>Continue with Apple</span></button>` : '',
+  ].join('')
+  if (!buttons) return ''
+  return `<div class="sgn-oauth">${buttons}</div><div class="sgn-or"><span>or email me a link</span></div>`
+}
+
 function renderSignIn(card: HTMLElement, opts: SignInOpts, close: (p: boolean) => void): void {
   const title = opts.title || 'Save your account'
   const subtitle = opts.subtitle || 'Keep your progress, handle and purchases safe — and play on any device. Free, passwordless, no card.'
+  const flags = getCachedProviderFlags()
   card.innerHTML = `
     <div class="sgn-title">${esc(title)}</div>
     <div class="sgn-sub">${esc(subtitle)}</div>
-    <div class="sgn-oauth">
-      <button class="sgn-btn sgn-google" data-oauth="google">${GOOGLE_G}<span>Continue with Google</span></button>
-      <button class="sgn-btn sgn-apple" data-oauth="apple">${APPLE_A}<span>Continue with Apple</span></button>
-    </div>
-    <div class="sgn-or"><span>or email me a link</span></div>
+    <div data-oauth-section>${oauthSectionHtml(flags || HIDDEN)}</div>
     <form class="sgn-mail" data-mailform>
       <input class="sgn-input" type="email" inputmode="email" autocomplete="email" placeholder="you@email.com" aria-label="Email address" data-email />
       <button class="sgn-btn sgn-primary" type="submit" data-magic>Email me a sign-in link</button>
@@ -109,11 +119,27 @@ function renderSignIn(card: HTMLElement, opts: SignInOpts, close: (p: boolean) =
   const msg = card.querySelector<HTMLElement>('[data-msg]')!
   const setMsg = (t: string, kind: 'ok' | 'err' | '' = '') => { msg.textContent = t; msg.className = 'sgn-msg' + (kind ? ' ' + kind : '') }
 
-  for (const b of card.querySelectorAll<HTMLElement>('[data-oauth]')) {
-    b.addEventListener('click', () => {
-      playUiTick()
-      setMsg('Redirecting…')
-      signInWithOAuth(b.dataset.oauth as 'google' | 'apple')
+  const wireOauthButtons = () => {
+    for (const b of card.querySelectorAll<HTMLElement>('[data-oauth]')) {
+      b.addEventListener('click', () => {
+        playUiTick()
+        setMsg('Redirecting…')
+        signInWithOAuth(b.dataset.oauth as 'google' | 'apple')
+      })
+    }
+  }
+  wireOauthButtons()
+
+  // Never block/delay the modal on the settings check — magic-link is already
+  // live above. If it resolves while this card is still the sign-in view,
+  // patch ONLY the oauth section in place (never wipe an in-progress email).
+  if (!flags) {
+    fetchProviderFlags().then((f) => {
+      if (!open || isSignedIn()) return
+      const section = card.querySelector<HTMLElement>('[data-oauth-section]')
+      if (!section) return
+      section.innerHTML = oauthSectionHtml(f)
+      wireOauthButtons()
     })
   }
 

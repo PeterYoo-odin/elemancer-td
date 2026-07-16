@@ -144,8 +144,17 @@ async function readBody(req) {
     return {};
   }
 }
-function cors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+var ALLOWED_ORIGINS = /* @__PURE__ */ new Set(["https://www.chromancer.io", "https://chromancer.io"]);
+var LOCAL_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+function isAllowedOrigin(origin) {
+  return ALLOWED_ORIGINS.has(origin) || LOCAL_ORIGIN_RE.test(origin);
+}
+function cors(req, res) {
+  const origin = typeof req?.headers?.origin === "string" ? req.headers.origin : "";
+  if (isAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
@@ -160,6 +169,41 @@ function failureFor(e) {
   }
   if (e instanceof TypeError) return { status: 503, reason: "network" };
   return { status: 500, reason: "internal" };
+}
+var RATE_WINDOW_MS = 6e4;
+var RATE_MAX = 30;
+var rateHits = /* @__PURE__ */ new Map();
+function withinRateLimit(key, now) {
+  let hits = rateHits.get(key);
+  if (hits) {
+    let i = 0;
+    while (i < hits.length && hits[i] <= now - RATE_WINDOW_MS) i++;
+    if (i > 0) hits = hits.slice(i);
+  } else {
+    hits = [];
+  }
+  if (hits.length >= RATE_MAX) {
+    rateHits.set(key, hits);
+    return false;
+  }
+  hits.push(now);
+  rateHits.set(key, hits);
+  return true;
+}
+function clientIp(req) {
+  const xf = req?.headers?.["x-forwarded-for"];
+  const first = Array.isArray(xf) ? xf[0] : typeof xf === "string" ? xf.split(",")[0] : "";
+  return first && first.trim() || req?.socket?.remoteAddress || "unknown";
+}
+function rateLimited(req, deviceHash) {
+  try {
+    const now = Date.now();
+    const okIp = withinRateLimit(`ip:${clientIp(req)}`, now);
+    const okDevice = deviceHash ? withinRateLimit(`dev:${deviceHash}`, now) : true;
+    return !(okIp && okDevice);
+  } catch {
+    return false;
+  }
 }
 async function probe(path) {
   try {
@@ -229,8 +273,12 @@ async function mergeRuns(survId, loserId) {
     }
   }
 }
+function sanitizeHandle(raw) {
+  const clean = raw.replace(/[^\w \-]/g, "").trim().slice(0, 24);
+  return clean || void 0;
+}
 async function handler(req, res) {
-  cors(res);
+  cors(req, res);
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
@@ -261,9 +309,13 @@ async function handler(req, res) {
     res.status(400).json({ ok: false, reason: "device" });
     return;
   }
+  if (rateLimited(req, deviceHash)) {
+    res.status(429).json({ ok: false, reason: "rate" });
+    return;
+  }
   try {
     if (op === "register") {
-      const handle = typeof body?.handle === "string" && body.handle.trim() ? body.handle.trim().slice(0, 24) : void 0;
+      const handle = typeof body?.handle === "string" ? sanitizeHandle(body.handle) : void 0;
       const { player } = await resolvePlayer(deviceHash, accessToken);
       if (handle && player?.id) {
         const upd = await patchPlayer(player.id, { handle });
@@ -349,5 +401,7 @@ async function handler(req, res) {
   }
 }
 export {
-  handler as default
+  handler as default,
+  rateLimited,
+  sanitizeHandle
 };

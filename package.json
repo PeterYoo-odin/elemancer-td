@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build && node scripts/build-api.mjs",
     "simcheck": "tsx scripts/simcheck.ts",
     "juicecheck": "tsx scripts/juicecheck.ts",
+    "logoncheck": "tsx scripts/logoncheck.ts",
     "balance": "tsx scripts/balance.ts",
     "preview": "vite preview",
     "difficulty": "tsx scripts/difficulty.ts"

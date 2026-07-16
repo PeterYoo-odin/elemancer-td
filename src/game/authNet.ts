@@ -20,6 +20,7 @@
 // ============================================================================
 
 import { deviceHash, setLocalHandle } from './rankedNet'
+import { resolveProviderFlags, HIDDEN, type ProviderFlags } from './authProviders'
 
 const URL = (import.meta.env.VITE_GAME_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') || ''
 const ANON = (import.meta.env.VITE_GAME_SUPABASE_ANON_KEY as string | undefined) || ''
@@ -182,6 +183,34 @@ export function signInWithOAuth(provider: 'google' | 'apple'): void {
     const url = `${URL}/auth/v1/authorize?provider=${encodeURIComponent(provider)}&redirect_to=${encodeURIComponent(redirectUrl())}`
     location.assign(url)
   } catch { /* navigation blocked — nothing to do */ }
+}
+
+// ---------------------------------------------------------------------------
+//  OAuth provider availability — see authProviders.ts for the why. Resolved
+//  once per session (cached; a fetch failure caches HIDDEN too, so we never
+//  hammer a flaky endpoint hoping for a different answer mid-session — the
+//  buttons simply catch up on the NEXT session/reload once Peter flips a
+//  provider on).
+// ---------------------------------------------------------------------------
+
+let providerFlags: ProviderFlags | null = null
+let providerFlagsPromise: Promise<ProviderFlags> | null = null
+
+/** The last resolved provider flags, or null if the check hasn't finished yet
+ *  (or hasn't started). Callers render with HIDDEN as the default until this
+ *  resolves — never block on it. */
+export function getCachedProviderFlags(): ProviderFlags | null { return providerFlags }
+
+/** Kick off (or join) the settings check. Safe to call repeatedly — only ever
+ *  hits the network once per session. */
+export function fetchProviderFlags(): Promise<ProviderFlags> {
+  if (providerFlags) return Promise.resolve(providerFlags)
+  if (providerFlagsPromise) return providerFlagsPromise
+  if (!authConfigured()) { providerFlags = HIDDEN; return Promise.resolve(providerFlags) }
+  providerFlagsPromise = resolveProviderFlags(URL, ANON)
+    .then((f) => { providerFlags = f; return f })
+    .finally(() => { providerFlagsPromise = null })
+  return providerFlagsPromise
 }
 
 // ---------------------------------------------------------------------------

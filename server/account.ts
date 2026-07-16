@@ -45,6 +45,54 @@ function failureFor(e: unknown): { status: number; reason: string } {
   return { status: 500, reason: 'internal' }
 }
 
+// ---------------------------------------------------------------------------
+//  RATE LIMIT — simple in-memory sliding window, per IP AND per device. Cheap
+//  abuse/enumeration/cost guard: op:link triggers a GoTrue /user verify per
+//  call and op:save writes, both unthrottled before this. Good enough for a
+//  single serverless region (each instance keeps its own window; a cold start
+//  resets it) — no dependency, no shared store. FAILS OPEN: any bug in the
+//  limiter itself must never be able to lock a player out of their own
+//  account, so a thrown/unexpected error here is swallowed and the request
+//  proceeds as if unlimited.
+// ---------------------------------------------------------------------------
+const RATE_WINDOW_MS = 60_000
+const RATE_MAX = 30 // per key (ip: or dev:), per window
+
+const rateHits = new Map<string, number[]>()
+
+function withinRateLimit(key: string, now: number): boolean {
+  let hits = rateHits.get(key)
+  if (hits) {
+    let i = 0
+    while (i < hits.length && hits[i] <= now - RATE_WINDOW_MS) i++
+    if (i > 0) hits = hits.slice(i)
+  } else {
+    hits = []
+  }
+  if (hits.length >= RATE_MAX) { rateHits.set(key, hits); return false }
+  hits.push(now)
+  rateHits.set(key, hits)
+  return true
+}
+
+function clientIp(req: any): string {
+  const xf = req?.headers?.['x-forwarded-for']
+  const first = Array.isArray(xf) ? xf[0] : typeof xf === 'string' ? xf.split(',')[0] : ''
+  return (first && first.trim()) || req?.socket?.remoteAddress || 'unknown'
+}
+
+/** True when this request should be REJECTED with 429. */
+export function rateLimited(req: any, deviceHash: string): boolean {
+  try {
+    const now = Date.now()
+    const okIp = withinRateLimit(`ip:${clientIp(req)}`, now)
+    const okDevice = deviceHash ? withinRateLimit(`dev:${deviceHash}`, now) : true
+    return !(okIp && okDevice)
+  } catch {
+    return false // limiter bug → fail OPEN, never lock a player out
+  }
+}
+
 // One PostgREST probe per schema dependency this API (and verify-run) needs.
 // Each returns 'ok' | 'missing-table' | 'missing-column' | 'error:<code>'.
 async function probe(path: string): Promise<string> {
@@ -140,8 +188,19 @@ async function mergeRuns(survId: string, loserId: string): Promise<void> {
   }
 }
 
+// Server-side handle sanitizer — DEFENSE IN DEPTH. The client (registerHandle
+// in rankedNet.ts) already strips to this same allowlist before it ever sends
+// a handle, but a raw API caller bypasses that entirely; `slice(0, 24)` alone
+// let control chars / HTML-significant chars through. Render sites already
+// escape (no live XSS per the recon) — this keeps that the ONLY line of
+// defense from becoming the only one that matters.
+export function sanitizeHandle(raw: string): string | undefined {
+  const clean = raw.replace(/[^\w \-]/g, '').trim().slice(0, 24)
+  return clean || undefined
+}
+
 export default async function handler(req: any, res: any): Promise<void> {
-  cors(res)
+  cors(req, res)
   if (req.method === 'OPTIONS') { res.status(204).end(); return }
   if (req.method !== 'POST') { res.status(405).json({ ok: false, reason: 'method' }); return }
   if (!serverConfigured()) { res.status(503).json({ ok: false, reason: 'unconfigured' }); return }
@@ -154,10 +213,11 @@ export default async function handler(req: any, res: any): Promise<void> {
   const deviceHash = typeof body?.deviceHash === 'string' ? body.deviceHash : ''
   const accessToken = typeof body?.accessToken === 'string' ? body.accessToken : undefined
   if (!deviceHash || deviceHash.length < 16) { res.status(400).json({ ok: false, reason: 'device' }); return }
+  if (rateLimited(req, deviceHash)) { res.status(429).json({ ok: false, reason: 'rate' }); return }
 
   try {
     if (op === 'register') {
-      const handle = typeof body?.handle === 'string' && body.handle.trim() ? body.handle.trim().slice(0, 24) : undefined
+      const handle = typeof body?.handle === 'string' ? sanitizeHandle(body.handle) : undefined
       // Signed in → the handle belongs on the durable auth row; guest → the device row.
       const { player } = await resolvePlayer(deviceHash, accessToken)
       if (handle && player?.id) {

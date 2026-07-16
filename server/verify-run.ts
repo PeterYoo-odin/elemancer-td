@@ -11,7 +11,7 @@ import { verifyRun, logHash, type RankedRunRecord } from '../src/game/ranked'
 import { serverConfigured, sbFetch, upsertPlayer, readBody, cors } from './_supabase'
 
 export default async function handler(req: any, res: any): Promise<void> {
-  cors(res)
+  cors(req, res)
   if (req.method === 'OPTIONS') { res.status(204).end(); return }
   if (req.method !== 'POST') { res.status(405).json({ ok: false, reason: 'method' }); return }
   if (!serverConfigured()) { res.status(503).json({ ok: false, reason: 'unconfigured' }); return }
