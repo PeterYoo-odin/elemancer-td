@@ -694,8 +694,15 @@ export class BattleScene extends Phaser.Scene {
   // wave paints colour back; victory blooms past full colour then settles.
   private updateGreying(dt: number): void {
     const p = this.sim.colorProgress()
-    // the demo opens ~90% Greyed — maximum before/after contrast for the reel
-    let target = this.demoMode ? 0.1 + 0.9 * p : 0.28 + 0.72 * p
+    // COLOUR FLOOR (CHROMANCER #63b): the Greying→restoration arc is the core
+    // identity, so keep it a RISE — but wave 1 must read as a colourful-if-dimmed
+    // world, not a near-monochrome one. The floor is the saturation at p=0 (battle
+    // start): 0.45 reads as clearly-hued-but-muted (see /tmp floor A/B proofs), and
+    // still climbs to full colour at p=1 with the victory bloom overshooting to 1.45
+    // — a ~3× saturation swing to peak, so restoration stays obviously satisfying.
+    // (Old floor was 0.28, which desaturated the painted ground to a washed grey-tan.)
+    // Demo/reel keeps its aggressive 0.1 floor for max before/after contrast.
+    let target = this.demoMode ? 0.1 + 0.9 * p : 0.45 + 0.55 * p
     let bright = this.demoMode ? 0.86 + 0.14 * p : 0.92 + 0.08 * p
     if (this.greyBloomT > 0) {
       this.greyBloomT = Math.max(0, this.greyBloomT - dt)
@@ -2306,6 +2313,7 @@ export class BattleScene extends Phaser.Scene {
       frame: qa.frame,
       driven: qa.driven,
       boardTexture: this.view.boardTextureState(),
+      boardLife: this.view.boardLifeState(),
     }
   }
 

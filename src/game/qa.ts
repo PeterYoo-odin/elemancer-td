@@ -66,6 +66,10 @@ export interface QaState {
   frame: number
   driven: boolean
   boardTexture: QaBoardTexture
+  // On-board weather + prism-road shimmer status. 'active' = alive; 'reduced' =
+  // reduce-motion static collapse (intentional); 'fallback' = it threw and the board
+  // is rendering dead. A smoke drive asserts 'active' so a dead board can't ship green.
+  boardLife: 'active' | 'reduced' | 'fallback'
 }
 
 // The controlled surface a BattleScene hands to the drive. Keeps the scene's

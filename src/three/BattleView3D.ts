@@ -401,6 +401,11 @@ export class BattleView3D {
   private tileRise: Float32Array = new Float32Array(0) // per-tile extra height above GROUND (blocked cells only), COLS*ROWS
   private hazeTint = new THREE.Color(0x241a3c) // skirt fall-away colour (set to the realm fog tint in buildTerrainMesh)
   private boardLife?: BoardLife // on-board weather + prism-road shimmer
+  // Live status of the on-board weather/shimmer layer, read back by QA (getState().
+  // boardLife). 'reduced' = reduce-motion collapsed it to static ON PURPOSE (fine);
+  // 'fallback' = it THREW and the board is rendering dead. The two must never be
+  // indistinguishable, which is why setupBoardLife fails LOUD instead of swallowing.
+  private boardLifeStatus: 'active' | 'reduced' | 'fallback' = 'fallback'
   private detailGroup = new THREE.Group()
   private buildHighlight = new THREE.Group()
   private hoverMesh!: THREE.Mesh
@@ -692,8 +697,11 @@ export class BattleView3D {
     try {
       this.atmosphere = new RealmAtmosphere(this.scene, this.camera, this.backdrop, this.motionOk)
     } catch (e) {
-      console.warn('RealmAtmosphere init failed — falling back to static backdrop', e)
+      // Fail loud (same rationale as setupBoardLife): a backdrop that silently loses its
+      // aliveness pass must be visible in QA/telemetry, not swallowed by a warn.
       this.atmosphere = undefined
+      console.error('RealmAtmosphere init THREW — backdrop is static (no aliveness pass):', e)
+      if (qa.enabled) qa.emit('asset', { what: 'atmosphere-init', url: this.backdrop?.key ?? '' })
     }
 
     const bdPng = this.backdrop.url
@@ -1196,11 +1204,28 @@ export class BattleView3D {
         y: GROUND,
       }
       this.boardLife = new BoardLife(this.scene, this.motionOk, this.backdrop?.key ?? 'emberwaste', path, bounds)
+      // motionOk === false is a DELIBERATE static collapse (reduce-motion), not a
+      // failure — flag it distinctly so QA doesn't read it as a dead board.
+      this.boardLifeStatus = this.motionOk ? 'active' : 'reduced'
     } catch (e) {
-      console.warn('BoardLife init failed — board renders without weather/shimmer', e)
+      // FAIL LOUD. A silent console.warn here made a dead board indistinguishable from
+      // a working one — the exact silent-fallback trap this must never reintroduce.
+      // console.error trips the headless smoke-drive's console-error gate, and the qa
+      // event surfaces it through telemetry + getState().boardLife === 'fallback'.
+      this.boardLifeStatus = 'fallback'
       this.boardLife = undefined
+      console.error('BoardLife init THREW — board is rendering DEAD (no weather/shimmer):', e)
+      if (qa.enabled) qa.emit('asset', { what: 'boardlife-init', url: this.backdrop?.key ?? 'emberwaste' })
+      // Surface hard in dev so it can never ship unnoticed; prod still limps on the
+      // bare (legible) board rather than trapping the player on a black screen.
+      if (import.meta.env.DEV) throw e
     }
   }
+
+  // QA read-back of the on-board weather/shimmer layer's REAL state (not a flag set
+  // optimistically at construction — set from whether the constructor threw). Lets a
+  // smoke drive assert the board is alive rather than silently dead. See setupBoardLife.
+  boardLifeState(): 'active' | 'reduced' | 'fallback' { return this.boardLifeStatus }
 
 
   // Scatter per-realm props on non-play (blocked) cells so the board reads as a
@@ -3862,7 +3887,11 @@ export class BattleView3D {
       try {
         this.boardLife.update(dt, this.clockT)
       } catch (e) {
-        console.warn('BoardLife update failed — dropping on-board layers', e)
+        // Fail loud (see setupBoardLife): a per-frame throw that drops the board's
+        // life must be as visible as an init throw, not a swallowed warn.
+        this.boardLifeStatus = 'fallback'
+        console.error('BoardLife update THREW — dropping on-board layers:', e)
+        if (qa.enabled) qa.emit('asset', { what: 'boardlife-update', url: this.backdrop?.key ?? 'emberwaste' })
         this.boardLife.dispose()
         this.boardLife = undefined
       }

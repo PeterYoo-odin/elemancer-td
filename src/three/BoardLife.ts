@@ -35,13 +35,21 @@ interface WeatherSpec {
 }
 
 // Per-realm weather recipe (keyed by RealmBackdrop.key). Falls back to embers.
+//
+// CHROMANCER #63b — dialed UP from homeopathic to clearly-visible-on-first-glance.
+// The board was reading DEAD because these particles were too few/small/faint to see
+// (esp. after the mobile lowPerf ×0.55 count trim). The fix leans on SIZE + OPACITY
+// (fill-rate-cheap) more than raw COUNT (the mobile-FPS killer): counts up ~1.5×, size
+// up ~1.7×, opacity toward 0.7-0.85. Additive layers (embers/motes) stay ≤0.8 so their
+// glow reads without blowing past the board bloom threshold; non-additive fall (snow/
+// leaves) can sit higher. reduce-motion still builds NOTHING; lowPerf still ×0.55.
 const WEATHER: Record<string, WeatherSpec> = {
-  emberwaste:     { color: 0xff8a3c, count: 70, size: 0.075, speed: 0.55, kind: 'rise', additive: true,  top: 4.2, opacity: 0.5 },
-  frostreach:     { color: 0xdff2ff, count: 90, size: 0.07,  speed: 0.7,  kind: 'fall', additive: false, top: 4.8, opacity: 0.62 },
-  stormpeaks:     { color: 0xbfa6ff, count: 64, size: 0.07,  speed: 0.5,  kind: 'rise', additive: true,  top: 4.6, opacity: 0.42 },
-  verdantwilds:   { color: 0x9fe07a, count: 60, size: 0.09,  speed: 0.6,  kind: 'fall', additive: false, top: 4.4, opacity: 0.5 },
-  radiantsanctum: { color: 0xffe6a0, count: 66, size: 0.07,  speed: 0.4,  kind: 'rise', additive: true,  top: 4.6, opacity: 0.46 },
-  umbralvoid:     { color: 0xc07adf, count: 62, size: 0.075, speed: 0.42, kind: 'rise', additive: true,  top: 4.6, opacity: 0.4 },
+  emberwaste:     { color: 0xff8a3c, count: 120, size: 0.13, speed: 0.6,  kind: 'rise', additive: true,  top: 4.2, opacity: 0.8 },
+  frostreach:     { color: 0xeaf6ff, count: 150, size: 0.12, speed: 0.75, kind: 'fall', additive: false, top: 4.8, opacity: 0.85 },
+  stormpeaks:     { color: 0xcbb8ff, count: 110, size: 0.12, speed: 0.55, kind: 'rise', additive: true,  top: 4.6, opacity: 0.7 },
+  verdantwilds:   { color: 0xaef07a, count: 104, size: 0.16, speed: 0.62, kind: 'fall', additive: false, top: 4.4, opacity: 0.8 },
+  radiantsanctum: { color: 0xffe6a0, count: 112, size: 0.12, speed: 0.45, kind: 'rise', additive: true,  top: 4.6, opacity: 0.72 },
+  umbralvoid:     { color: 0xcb8aef, count: 108, size: 0.13, speed: 0.46, kind: 'rise', additive: true,  top: 4.6, opacity: 0.68 },
 }
 
 // deterministic hash → [0,1) (no Math.random: the board must be reproducible)
@@ -68,7 +76,9 @@ export class BoardLife {
   // prism-road
   private ribbonMat?: THREE.MeshBasicMaterial
   private ribbonTex?: THREE.CanvasTexture
-  private ribbonBaseOpacity = 0.32
+  // #63b: prism-road shimmer pushed up (0.32 → 0.55) so the lane visibly reads as
+  // living colour flowing underfoot — the walked path was the deadest part of the board.
+  private ribbonBaseOpacity = 0.55
 
   constructor(
     scene: THREE.Scene,

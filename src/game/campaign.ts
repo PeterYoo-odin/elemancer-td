@@ -44,17 +44,27 @@ const LANDMARK_EVERY = 10                  // a spectacle/mini-boss level roughl
 // highlands, build = the worked terrace stone the plaza/towers sit on, path = the
 // worn canyon-floor tread, pathEdge = the emissive accent (arena floor glow + vein).
 //
-// READABILITY RULE: every realm's grassA (ground) mid-luma is normalized into ~80-98
-// — hue carries identity, value does not. Radiant Sanctum is warm honey-stone (not
-// white marble); Umbral Void is deep slate-violet (not black) — both would otherwise
-// wreck unit contrast. Saturated colour is reserved for pathEdge/accent + gameplay.
+// READABILITY RULE (CHROMANCER #63b): grassA (ground) mid-luma stays normalized into
+// ~80-98 so units/enemies keep their silhouette contrast — but LUMA AND SATURATION ARE
+// INDEPENDENT. The old palette held the luma band AND crushed chroma, which turned every
+// biome into a muddy mid-tone (meadow read olive-brown, lumen ≈ ember). That over-
+// corrected: you can hold value constant and still go from mud to vivid by pushing the
+// HSV saturation up. So: keep the luma band (it genuinely protects contrast — grey is
+// the enemy colour), but DO NOT flatten the chroma. Each realm is now identifiable by
+// hue at a glance — meadow = green, frost = ice-blue, storm = slate blue-violet, lumen =
+// honey-gold, ember = rust-orange, void = deep violet. grassA/grassB/build/path all sit
+// in one hue family (grassB darker shadow, build worked-stone, path worn tread); pathEdge
+// stays the vivid emissive accent. The grassA luma is asserted in-band by simcheck
+// (assertPaletteContrast) so this can never be silently re-flattened. Note the painted
+// realm-ground PNGs carry the play-surface albedo — PAL colours the rock highlands +
+// the fail-soft fallback, so raising its chroma lifts the highland framing out of mud.
 export const PAL: Record<string, FieldPalette> = {
-  meadow: { grassA: 0x74622f, grassB: 0x555029, build: 0x93855d, path: 0x9e916d, pathEdge: 0xe4a956 }, // verdantwilds · ground luma 97.8
-  frost:  { grassA: 0x365781, grassB: 0x304763, build: 0x627c9d, path: 0x7289a7, pathEdge: 0x20caba }, // frostreach   · ground luma 81.7
-  storm:  { grassA: 0x495972, grassB: 0x3e4960, build: 0x717e91, path: 0x808b9c, pathEdge: 0x37e6d4 }, // stormpeaks   · ground luma 87.0
-  lumen:  { grassA: 0x7c5c34, grassB: 0x8f6b49, build: 0x998061, path: 0xa38d71, pathEdge: 0xfaec78 }, // radiantsanctum (honey-stone, NOT white) · ground luma 97.2
-  ember:  { grassA: 0x6d4c40, grassB: 0x533c36, build: 0x8d736a, path: 0x998279, pathEdge: 0xf27823 }, // emberwaste   · ground luma 84.6
-  void:   { grassA: 0x5c4f82, grassB: 0x3a335d, build: 0x80769e, path: 0x8d84a8, pathEdge: 0x5ae6dc }, // umbralvoid (slate-violet, NOT black) · ground luma 88.5
+  meadow: { grassA: 0x2a7b2d, grassB: 0x1a5e1d, build: 0x508652, path: 0x6c8e6d, pathEdge: 0xe4a956 }, // verdantwilds · green      · grassA luma 89.9
+  frost:  { grassA: 0x2e637f, grassB: 0x1e4b63, build: 0x56788b, path: 0x708794, pathEdge: 0x20caba }, // frostreach   · ice-blue   · grassA luma 86.3
+  storm:  { grassA: 0x46548b, grassB: 0x313e70, build: 0x656f95, path: 0x7b819a, pathEdge: 0x37e6d4 }, // stormpeaks   · slate-violet· grassA luma 86.1
+  lumen:  { grassA: 0x775c21, grassB: 0x5b4514, build: 0x85734d, path: 0x8f836a, pathEdge: 0xfaec78 }, // radiantsanctum· honey-gold · grassA luma 93.3
+  ember:  { grassA: 0x8d4725, grassB: 0x6f3416, build: 0x936852, path: 0x977b6d, pathEdge: 0xf27823 }, // emberwaste   · rust-orange· grassA luma 88.1
+  void:   { grassA: 0x713c95, grassB: 0x582977, build: 0x825f99, path: 0x8d749d, pathEdge: 0x5ae6dc }, // umbralvoid   · deep violet· grassA luma 86.0
 }
 
 // --- wave construction helpers ---------------------------------------------

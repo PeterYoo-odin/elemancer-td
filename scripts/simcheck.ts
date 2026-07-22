@@ -19,7 +19,7 @@ import { NEUTRAL, WORKSHOP_NODES, aggregateRunModifiers, aggregateMetaModifiers,
 import type { SaveData } from '../src/game/save'
 import { LEVELS, pathCellsFor, pathPlanFor, type LevelDef } from '../src/game/levels'
 import { LEVEL_STORY } from '../src/game/story'
-import { buildCampaign, GENERATOR_MAX_PER_WORLD } from '../src/game/campaign'
+import { buildCampaign, GENERATOR_MAX_PER_WORLD, PAL } from '../src/game/campaign'
 import { GRID_COLS, GRID_ROWS } from '../src/game/paths'
 import { TOWER_ORDER } from '../src/game/towers'
 import { runScriptedDemo, demoSimConfig, ScriptRunner, DEMO_SCRIPT } from '../src/game/attractScript'
@@ -59,6 +59,31 @@ function fail(msg: string): void {
   if (seen[key] <= 3) console.error('  ✗ ' + msg)
   failures++
 }
+
+// PALETTE READABILITY GATE (CHROMANCER #63b). The realm ground palette (PAL) must stay
+// identifiable by HUE while keeping the ground luma in the ~80-98 band that protects
+// unit/enemy silhouette contrast — grey is the enemy colour, so the ground must never
+// drift toward it. This asserts BOTH halves of the READABILITY RULE so a future edit
+// can't silently (a) brighten/darken the ground out of the contrast band, OR (b) re-
+// flatten the chroma back to mud (the bug this fix reversed). Luma = Rec601 on 0-255;
+// chroma = HSV saturation. Cheap, deterministic, runs in the gate.
+function assertPaletteContrast(): void {
+  const LUMA_MIN = 80, LUMA_MAX = 98, CHROMA_MIN = 0.30
+  for (const [realm, p] of Object.entries(PAL)) {
+    const r = (p.grassA >> 16) & 0xff, g = (p.grassA >> 8) & 0xff, b = p.grassA & 0xff
+    const luma = 0.299 * r + 0.587 * g + 0.114 * b
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
+    const chroma = mx === 0 ? 0 : (mx - mn) / mx
+    if (luma < LUMA_MIN || luma > LUMA_MAX) {
+      fail(`palette: realm '${realm}' grassA luma ${luma.toFixed(1)} is outside the [${LUMA_MIN},${LUMA_MAX}] contrast band — it will swallow enemies or wash them out`)
+    }
+    if (chroma < CHROMA_MIN) {
+      fail(`palette: realm '${realm}' grassA chroma ${chroma.toFixed(2)} < ${CHROMA_MIN} — the ground has been re-flattened to mud (hue must carry realm identity)`)
+    }
+  }
+  if (failures === 0) console.log(`  palette ✓ — all ${Object.keys(PAL).length} realms: grassA luma∈[${LUMA_MIN},${LUMA_MAX}], chroma≥${CHROMA_MIN} (hue-identifiable, enemy-legible)`)
+}
+assertPaletteContrast()
 
 function finite(v: number): boolean {
   return typeof v === 'number' && Number.isFinite(v)
