@@ -14,6 +14,7 @@
 import type Phaser from 'phaser'
 import { qa, type QaState } from './qa'
 import { launchBattle } from '../ui/battleLoader'
+import { models, MODEL_NAMES } from '../three/models'
 
 export interface StartLevelOpts {
   levelId?: string // campaign level id, e.g. 'l1' (default), 'l2', … or 'demo'
@@ -36,6 +37,14 @@ export function installChromancer(game: Phaser.Game): void {
     get frame(): number { return qa.frame },
     get driven(): boolean { return qa.driven },
     clearEvents: (): void => qa.clearEvents(),
+
+    // ---- kit-model registry read-back (D2 silent-fallback gate) ----
+    // The Kenney kit GLBs used to fail into a silent empty-Group clone (props just
+    // absent, detectable by nobody). Expose the registry's REAL state so juicecheck
+    // can assert every MODEL_NAMES entry actually loaded.
+    get models(): { ready: boolean; missing: string[] } {
+      return { ready: models.ready, missing: (MODEL_NAMES as readonly string[]).filter((n) => !models.has(n)) }
+    },
 
     // ---- lifecycle ----
     async startLevel(opts: StartLevelOpts = {}): Promise<QaState> {

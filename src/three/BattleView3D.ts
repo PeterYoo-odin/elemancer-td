@@ -12,7 +12,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { qa } from '../game/qa'
-import { artUrl, artMiss } from '../ui/webp'
+import { artUrl, artMiss, artBound } from '../ui/webp'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 import type { Sim, SimEnemy, SimHero, SimTower, AuraElement } from '../sim'
@@ -530,6 +530,7 @@ export class BattleView3D {
   // painted-backdrop "aliveness" pass: procedural moving atmosphere layers over the
   // static per-realm painting (parallax, drifting FX, critters, foreground frame).
   private backdropMesh?: THREE.Mesh // the painted cylinder (parallax-swayed vs atmosphere)
+  private backdropMat?: THREE.MeshBasicMaterial // its material — .map !== null once the painting binds
   private atmosphere?: RealmAtmosphere
   private atmoReactFade = 0 // 0..1, a big reaction burst briefly fades ambient particles
 
@@ -669,10 +670,12 @@ export class BattleView3D {
     const geo = new THREE.CylinderGeometry(R, R, H, 48, 1, true, Math.PI - arc / 2, arc)
     this.disposables.push(geo)
     // Biome-tinted multiply — present enough that the painted world and the sculpted
-    // terrain read as the SAME place (CHROMANCER #54), still dimmed below full bright
-    // so the gameplay layer (towers/enemies/HP bars) stays the most saturated thing
-    // on screen and bloom doesn't blow the painting out.
-    const col = new THREE.Color(0xa8a8a8).lerp(new THREE.Color(this.backdrop.tint), 0.3)
+    // terrain read as the SAME place (CHROMANCER #54), kept only a MILD dim below full
+    // bright (bloom safety) so the painting reads at its authored chroma. Part D: the
+    // old 0xa8a8a8 base was a ~34% luminance haircut that greyed the painting down to
+    // ~66% before the CSS greying even ran (double-dimming); 0xe2e2e2 keeps a gentle
+    // bloom-safe dim without eating the art.
+    const col = new THREE.Color(0xe2e2e2).lerp(new THREE.Color(this.backdrop.tint), 0.15)
     const mat = new THREE.MeshBasicMaterial({
       color: col,
       side: THREE.DoubleSide, // visible whether the camera sits just inside or outside R
@@ -714,6 +717,11 @@ export class BattleView3D {
       this.disposables.push(tex)
       mat.map = tex
       mat.needsUpdate = true
+      // Positive bind (the silent-fallback trap from the OTHER side): a 404 that
+      // fails soft to the tinted gradient sky can no longer read as success —
+      // backdropState() flips to 'painted' and QA asserts this event fired.
+      this.backdropMat = mat
+      artBound('backdrop', this.backdrop?.key ?? '')
     }
     // WebP-first (≈93% smaller) → original PNG → tinted gradient sky.
     new THREE.TextureLoader().load(artUrl(bdPng), applyBd, undefined, () => {
@@ -1188,6 +1196,16 @@ export class BattleView3D {
     }
   }
 
+  // QA read-back of the painted BACKDROP cylinder: 'painted' only once the realm
+  // PNG genuinely decoded and bound to the material's `.map` (never an optimistic
+  // flag) — 'gradient' whenever the backdrop 404'd and the tinted gradient sky is
+  // (still, or permanently) all that ships. Closes the last silent-fallback: the
+  // backdrop had no read-back API, so a dropped painting read as success. See
+  // setupBackdrop / applyBd's artBound('backdrop').
+  backdropState(): 'painted' | 'gradient' {
+    return this.backdropMat && this.backdropMat.map !== null ? 'painted' : 'gradient'
+  }
+
   // On-board diorama layers (per-realm weather drifting across the plane + a
   // prism-road shimmer flowing along the lane). Isolated + fail-soft: a throw
   // here must never sink the board, so we swallow and continue on the bare tiles.
@@ -1414,6 +1432,10 @@ export class BattleView3D {
           // light + halo stay); the critical sprite only ever fades IN over it.
           if (primary) this.baseMesh.visible = false
           this.setBaseIntegrity(this.baseIntegrity) // re-apply current HP state to the new sprite
+          // Positive bind: the painted Wellspring genuinely decoded (both the
+          // radiant + critical sprites emit their own event) — a 404 that fails
+          // soft to the procedural fount can no longer read as success. See D2.
+          artBound('base', file)
       }
       // WebP-first (≈93% smaller) → original PNG → the procedural fount carries it.
       new THREE.TextureLoader().load(artUrl(png), apply, undefined, () => {

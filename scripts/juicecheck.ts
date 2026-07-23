@@ -31,7 +31,7 @@
 // ============================================================================
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 import { chromium } from 'playwright-core'
@@ -90,6 +90,152 @@ function startPreview(): Promise<ChildProcess> {
 // The 9 reaction keys (src/sim/reactions.ts REACTIONS) — qaReactionKey accepts keys.
 const REACTION_KEYS = ['thermal', 'shatter', 'flashover', 'wildfire', 'overgrow', 'eclipse', 'conduct', 'blight', 'amplify']
 
+// ---------------------------------------------------------------------------
+// D3 — VISUAL REGRESSION GATE. The check whose ABSENCE let four "it looks the
+// same" rounds ship green: it screenshots the composited canvas (CSS greying
+// filter BAKED IN — a raw canvas read bypasses it and would measure the art at
+// full chroma, defeating the point), downsamples to 64×64, converts to HSV and
+// asserts the painted world reaches the eye VIVID at the wave-1 colour floor,
+// then that the Greying arc actually RAISES saturation by the finale.
+//
+// Per-realm modal-hue targets (degrees), CALIBRATED post-D1 to the MEASURED mode
+// of the composited board's lit/saturated pixels. NB: these are the painted
+// ground/backdrop's real on-screen hue, which is what reaches the eye — not the
+// raw PAL tint (PAL colours the rock/fallback; the painted PNG carries the real
+// play-surface albedo). Emberwaste measures 25° (matches PAL's rust-orange);
+// verdantwilds measures ~65° — the painted ground is a warm OLIVE-green, not PAL's
+// 120° pure green. Only emberwaste + verdantwilds are asserted (the two D3 levels);
+// the rest are documented references for when future realms are added to D3.
+const REALM_HUE: Record<string, number> = {
+  emberwaste: 25, verdantwilds: 65, frostreach: 200, stormpeaks: 255, radiantsanctum: 48, umbralvoid: 285,
+}
+// Per-realm WAVE-1 median-saturation floors, calibrated by SANDWICH: measured at
+// the shipped 0.80 colour floor vs the old 0.45 regression floor, then set BETWEEN
+// them with margin so the shipped build PASSES and a drop back to 0.45 FAILS (red).
+//   emberwaste:   shipped 0.670 · regression 0.450 → 0.56
+//   verdantwilds: shipped 0.314 · regression 0.180 → 0.25  (its olive ground + more
+//                 visible void is inherently less saturated than ember's — a single
+//                 global floor can't discriminate both realms, hence per-realm)
+const REALM_SAT_FLOOR: Record<string, number> = { emberwaste: 0.56, verdantwilds: 0.25 }
+const GREY_FRAC_MAX = 0.30      // near-grey (S<0.08) fraction (shipped ember 0.001 / verdant 0.086; guard vs a grey wash)
+const HUE_TOL = 40              // modal hue must land within ±this of the calibrated realm target
+// finale median saturation must exceed the wave-1 floor by ≥ this. Kept modest: the
+// ember ground is ALREADY highly saturated at the 0.80 floor (0.671), so the rise to
+// the finale's ~0.97 filter is bounded by the HSV ceiling (converged finale ~0.71 →
+// rise ~0.04). 0.02 stays a clear positive signal (~8× the run-to-run noise of ±0.005)
+// without riding the ceiling. Defeat, by contrast, slams the world to grey (target 0).
+const RISE_MIN = 0.02
+
+// circular hue histogram (saturation-weighted) + saturation stats over a 64×64
+// downsample of the COMPOSITED canvas. Runs entirely in-page: the screenshot is
+// decoded by the browser (no Node PNG lib), and drawImage of the screenshot (NOT
+// the WebGL canvas — preserveDrawingBuffer is false) is what makes the CSS filter
+// survive into the pixels we measure.
+async function analyzeCanvas(page: import('playwright-core').Page, targetHue: number, savePath?: string): Promise<{ medSat: number; meanSat: number; greyFrac: number; modalHue: number; hueDist: number; huePix: number }> {
+  // Hide every DOM overlay (the ?qa juice panel, onboarding/welcome modals, the
+  // HUD) around the shot: an element screenshot composites overlapping DOM in, and
+  // those saturated amber UI panels would otherwise OWN the hue/saturation stats
+  // instead of the rendered board. visibility (not display) avoids any reflow that
+  // could resize the canvas. Canvas is a direct child of <body>.
+  await page.evaluate(() => {
+    const cv = document.querySelector('canvas.battle3d-canvas')
+    const hidden: Array<[HTMLElement, string]> = []
+    for (const el of Array.from(document.body.children)) {
+      if (el === cv) continue
+      const he = el as HTMLElement
+      hidden.push([he, he.style.visibility])
+      he.style.visibility = 'hidden'
+    }
+    ;(window as any).__jcHidden = hidden
+  })
+  const buf = await page.locator('canvas.battle3d-canvas').screenshot()
+  await page.evaluate(() => {
+    for (const [el, v] of ((window as any).__jcHidden ?? [])) el.style.visibility = v
+    ;(window as any).__jcHidden = null
+  })
+  if (savePath && process.env.JUICE_SHOTS) writeFileSync(savePath, buf)
+  const b64 = buf.toString('base64')
+  return await page.evaluate(async ({ b64, targetHue }) => {
+    const img = new Image()
+    await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error('shot decode failed')); img.src = 'data:image/png;base64,' + b64 })
+    const N = 64
+    const cv = document.createElement('canvas'); cv.width = N; cv.height = N
+    const ctx = cv.getContext('2d')!
+    ctx.drawImage(img, 0, 0, N, N)
+    const d = ctx.getImageData(0, 0, N, N).data
+    const sats: number[] = []
+    let grey = 0, huePix = 0
+    const bins = new Array(36).fill(0)
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), dlt = max - min
+      const v = max
+      const s = max === 0 ? 0 : dlt / max
+      sats.push(s)
+      if (s < 0.08) grey++
+      // MODAL HUE is measured over LIT, saturated pixels only. The board fills only
+      // the lower third of a portrait phone frame; the upper region is the near-black
+      // violet void sky which — though it's *saturated* violet — is LOW-value. Without
+      // a value floor it owns the mode (~245°) and swamps the realm's own ground/
+      // backdrop hue. Gating on v ≥ floor drops the void and lets the painted world's
+      // colour read through.
+      if (s >= 0.15 && v >= 0.42) {
+        let h = 0
+        if (dlt > 0) {
+          if (max === r) h = ((g - b) / dlt) % 6
+          else if (max === g) h = (b - r) / dlt + 2
+          else h = (r - g) / dlt + 4
+          h *= 60; if (h < 0) h += 360
+        }
+        bins[Math.floor(h / 10) % 36] += s // saturation-weighted so faint pixels don't sway the mode
+        huePix++
+      }
+    }
+    sats.sort((a, b) => a - b)
+    const medSat = sats[Math.floor(sats.length / 2)]
+    const meanSat = sats.reduce((a, b) => a + b, 0) / sats.length
+    let mb = 0; for (let i = 1; i < 36; i++) if (bins[i] > bins[mb]) mb = i
+    const modalHue = mb * 10 + 5
+    let hueDist = Math.abs(modalHue - targetHue) % 360; if (hueDist > 180) hueDist = 360 - hueDist
+    return { medSat, meanSat, greyFrac: grey / sats.length, modalHue, hueDist, huePix }
+  }, { b64, targetHue })
+}
+
+type ShotStats = { medSat: number; meanSat: number; greyFrac: number; modalHue: number; hueDist: number; huePix: number }
+
+// STABILIZED sampler: the board animates (a pulsing additive glow band, drifting
+// particles, an idle camera drift), all keyed to the sim clock. A single shot lands
+// at whatever animation phase the (variable-length) scene-swap wait left us in — so
+// the same state reads 0.68–0.72 run-to-run, which swamps the modest ember rise.
+// Sampling the MEDIAN over ~one full pulse period (5 shots × 10 frames @50ms = 2 s;
+// the ember glow pulses at 0.5 Hz) removes the phase noise, and applying the SAME
+// treatment to floor + finale keeps the rise comparison fair.
+async function analyzeStable(page: import('playwright-core').Page, targetHue: number, savePath?: string): Promise<ShotStats> {
+  const shots: ShotStats[] = []
+  const SAMPLES = 5
+  for (let i = 0; i < SAMPLES; i++) {
+    shots.push(await analyzeCanvas(page, targetHue, i === 0 ? savePath : undefined))
+    if (i < SAMPLES - 1) await page.evaluate(() => (window as any).__chromancer.stepFrames(10, 50))
+  }
+  const med = (xs: number[]): number => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)] }
+  const mid = shots[Math.floor(SAMPLES / 2)]
+  return {
+    medSat: med(shots.map((s) => s.medSat)),
+    meanSat: med(shots.map((s) => s.meanSat)),
+    greyFrac: med(shots.map((s) => s.greyFrac)),
+    modalHue: mid.modalHue, hueDist: mid.hueDist, huePix: mid.huePix,
+  }
+}
+
+// A painted enemy sprite genuinely on disk in the SERVED build (dist/, webp-first).
+// juicecheck's positive enemy-pose assertion is gated on this: a not-yet-shipped
+// grunt/keeper/boss sprite never turns CI red (only warns), but a REGRESSION on an
+// existing sprite (a 404 that fell soft) still fails. See ENEMY_ART in enemyArt.ts.
+function poseArtOnDisk(kind: string): boolean {
+  const base = join(ROOT, 'dist', 'concepts', 'enemies', 'poses')
+  return existsSync(join(base, `${kind}-walk-a.webp`)) || existsSync(join(base, `${kind}-walk-a.png`))
+}
+
 async function main(): Promise<void> {
   console.log('JUICECHECK — real-browser battle-feel verification\n')
   const server = await startPreview()
@@ -103,6 +249,7 @@ async function main(): Promise<void> {
     const page = await browser.newPage({ viewport: { width: 320, height: 568 }, hasTouch: true })
     const pageErrors: string[] = []
     page.on('pageerror', (e) => pageErrors.push(String(e)))
+    let emberFloorSat = 0 // D3: wave-1 floor median saturation, compared against the finale rise
 
     await page.goto(`http://127.0.0.1:${PORT}/?qa=1`, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => !!(window as any).__chromancer, undefined, { timeout: 30_000 })
@@ -126,6 +273,49 @@ async function main(): Promise<void> {
     }
     check(tex.ground === 'realm-png', `painted GROUND texture bound (${tex.realm}: ${tex.ground})`)
     check(tex.path === 'path-png', `painted PATH texture bound (${tex.path})`)
+
+    // ---- painted BACKDROP bound (D2 silent-fallback gate) ------------------
+    // The backdrop cylinder had no read-back API and no positive gate: a dropped
+    // painting fell soft to the tinted gradient sky and read as success. Assert the
+    // real material state ('painted') + the artBound('backdrop') ledger event.
+    let bdState = 'gradient'
+    for (let i = 0; i < 30; i++) {
+      bdState = await page.evaluate(() => (window as any).__chromancer.getState().backdrop)
+      if (bdState === 'painted') break
+      await page.waitForTimeout(300)
+    }
+    check(bdState === 'painted', `painted BACKDROP bound (${tex.realm}: ${bdState})`)
+
+    // ---- Wellspring painted base sprites bound (D2) ------------------------
+    // Both the radiant + critical Wellspring paintings must decode; a 404 that fell
+    // soft to the procedural fount used to emit NO artBound at all.
+    let wellBound: string[] = []
+    for (let i = 0; i < 30; i++) {
+      wellBound = await page.evaluate(() => (((window as any).__chromancer.assetEvents as any[])
+        .filter((e) => e.type === 'asset-bound' && e.what === 'base').map((e) => e.id)))
+      if (wellBound.includes('wellspring.png') && wellBound.includes('wellspring-critical.png')) break
+      await page.waitForTimeout(300)
+    }
+    check(wellBound.includes('wellspring.png'), `Wellspring RADIANT painting bound (base:wellspring.png)`)
+    check(wellBound.includes('wellspring-critical.png'), `Wellspring CRITICAL painting bound (base:wellspring-critical.png)`)
+
+    // ---- Kenney kit models all loaded (D2) --------------------------------
+    // A missing GLB used to clone() a silent empty Group (props just absent). Assert
+    // the registry is ready and every MODEL_NAMES entry actually has() a scene.
+    const modelState = await page.evaluate(() => (window as any).__chromancer.models)
+    check(modelState.ready === true, `kit-model registry ready (models.ready)`)
+    check(modelState.missing.length === 0, modelState.missing.length ? `kit models MISSING: ${modelState.missing.join(', ')}` : `all ${'12'} MODEL_NAMES entries loaded (has())`)
+
+    // ---- D3 VISUAL REGRESSION: wave-1 colour floor (ember) -----------------
+    // Settle the greying filter to its wave-1 floor, then measure the COMPOSITED
+    // canvas. This is the exact state a new player sees at battle start.
+    await page.evaluate(() => (window as any).__chromancer.stepFrames(6, 50))
+    const emberFloor = await analyzeStable(page, REALM_HUE[tex.realm] ?? 25, '/tmp/shot-ember.png')
+    console.log(`    · D3 ember wave-1 floor: medSat ${emberFloor.medSat.toFixed(3)} meanSat ${emberFloor.meanSat.toFixed(3)} greyFrac ${emberFloor.greyFrac.toFixed(3)} modalHue ${emberFloor.modalHue}° huePix ${emberFloor.huePix} (target ${REALM_HUE[tex.realm]}°, dist ${emberFloor.hueDist}°)`)
+    emberFloorSat = emberFloor.medSat
+    check(emberFloor.medSat >= (REALM_SAT_FLOOR[tex.realm] ?? 0.25), `D3 wave-1 median saturation ${emberFloor.medSat.toFixed(3)} ≥ ${REALM_SAT_FLOOR[tex.realm]} (painted world reaches the eye vivid, not greyed)`)
+    check(emberFloor.greyFrac <= GREY_FRAC_MAX, `D3 wave-1 grey fraction ${emberFloor.greyFrac.toFixed(3)} ≤ ${GREY_FRAC_MAX}`)
+    check(emberFloor.hueDist <= HUE_TOL, `D3 wave-1 modal hue ${emberFloor.modalHue}° within ±${HUE_TOL}° of ${tex.realm} target ${REALM_HUE[tex.realm]}°`)
 
     // ---- build a real defense (brute-force legal cells; QA grants gold) ---
     const placed = await page.evaluate(() => {
@@ -302,7 +492,26 @@ async function main(): Promise<void> {
     for (const m of tail.misses) allPoseMisses.add(m)
     const enemyBound = [...allBound].filter((b) => b.startsWith('enemy-pose:')).map((b) => b.split(':')[1])
     check(enemyBound.length >= 1, `enemy painted pose frames BOUND for ${enemyBound.length} archetype(s): ${enemyBound.join(', ') || 'none'}`)
-    check(allPoseMisses.size === 0, allPoseMisses.size ? `pose art fell back silently: ${[...allPoseMisses].join(' | ')}` : 'zero pose-art misses across the whole drive (no silent fallback)')
+
+    // D2 ENEMY-ART TOTALITY (disk-existence-aware). ENEMY_ART is now a TOTAL
+    // Record<EnemyKind, …>, so grunt/keeper/boss have art contracts whose PNGs are
+    // still being generated in parallel. Split pose misses:
+    //   · REAL regression → an existing sprite 404'd and fell soft (or any hero
+    //     pose miss, since those all ship). HARD FAIL.
+    //   · PENDING → an enemy sprite not yet on disk degrading safely. WARN only,
+    //     so a not-yet-shipped grunt/keeper/boss can't turn CI red (per Part D).
+    const ENEMY_MISS = 'enemy pose art:'
+    const enemyMissKinds = [...allPoseMisses].filter((m) => m.startsWith(ENEMY_MISS)).map((m) => m.slice(ENEMY_MISS.length))
+    const pendingMisses = [...allPoseMisses].filter((m) => m.startsWith(ENEMY_MISS) && !poseArtOnDisk(m.slice(ENEMY_MISS.length)))
+    const realMisses = [...allPoseMisses].filter((m) => !pendingMisses.includes(m))
+    // POSITIVE totality: every kind that actually SPAWNED (bound or missed) whose
+    // sprite is on disk MUST be bound — a 404 that fell soft can't read as success.
+    const spawnedKinds = new Set<string>([...enemyBound, ...enemyMissKinds])
+    for (const kind of spawnedKinds) {
+      if (poseArtOnDisk(kind)) check(enemyBound.includes(kind), `enemy '${kind}' pose frames BOUND (sprite on disk → must bind, no silent fallback)`)
+    }
+    if (pendingMisses.length) warn(`enemy pose art PENDING (sprite not yet in build, degrading safely to primitive): ${pendingMisses.join(' | ')}`)
+    check(realMisses.length === 0, realMisses.length ? `pose art fell back SILENTLY (regression — a shipped sprite 404'd): ${realMisses.join(' | ')}` : 'zero unexpected pose-art misses (no silent fallback)')
 
     // ---- painted WORLD-MAP RIDGE binding (assert-bound) --------------------
     // Reach the real map through the shipped flow (win screen → WORLD MAP),
@@ -340,6 +549,67 @@ async function main(): Promise<void> {
     check(ridge.clicked, 'win screen exposes the WORLD MAP button (map reachable)')
     check(ridge.bands === 6, `painted ridge panoramas BOUND on ${ridge.bands}/6 realm bands (.ridged only flips on a real decode)`)
     check(ridge.bound.length === 6, `6/6 'ridge-art' asset-bound ledger events (${ridge.bound.join(', ')})`)
+
+    // ---- D3 VISUAL REGRESSION: the Greying arc actually RAISES saturation ---
+    // Fresh l1, jump to the FINAL wave (colorProgress ≈ (total-1)/total ≈ 0.86, so
+    // the greying filter opens to ~0.97 sat) and measure in prep — no win overlay,
+    // no transient bloom. The finale must read clearly MORE saturated than the
+    // wave-1 floor, proving the restoration mechanic plays (not a static tint).
+    const emberRise = await page.evaluate(async () => {
+      const c = (window as any).__chromancer
+      await c.startLevel({ levelId: 'l1', seed: 11 })
+      // startLevel can return the OLD scene mid-swap (awaitScene resolves on the
+      // still-bound prior scene) — WAIT for the fresh l1 to settle into wave-1 prep
+      // before jumping, stepping frames to drive the async transition.
+      for (let i = 0; i < 50; i++) {
+        let st: any = null
+        try { st = c.getState() } catch { st = null }
+        if (st && st.state === 'prep' && st.wave === 1) break
+        c.stepFrames(4)
+        await new Promise((r) => setTimeout(r, 150))
+      }
+      const s = c.getState()
+      c.skipToWave(s.waveTotal)
+      // Fully CONVERGE the greying filter: it eases toward its target (~0.97 at this
+      // colorProgress) at ~15%/frame, so 8 frames leaves it mid-ease and the rise
+      // measurement wobbles run-to-run. ~28 frames settles it to within ~1%.
+      c.stepFrames(28, 50)
+      const st = c.getState()
+      return { realm: st.boardTexture.realm, wave: st.wave, waveTotal: st.waveTotal, state: st.state }
+    })
+    if (process.env.JUICE_SHOTS) console.log(`      (finale state: ${JSON.stringify(emberRise)})`)
+    const finaleShot = await analyzeStable(page, REALM_HUE[emberRise.realm] ?? 25, '/tmp/shot-finale.png')
+    console.log(`    · D3 ember finale: medSat ${finaleShot.medSat.toFixed(3)} (floor ${emberFloorSat.toFixed(3)}, rise ${(finaleShot.medSat - emberFloorSat).toFixed(3)})`)
+    check(finaleShot.medSat >= emberFloorSat + RISE_MIN, `D3 Greying arc RAISES saturation by the finale: ${finaleShot.medSat.toFixed(3)} ≥ floor ${emberFloorSat.toFixed(3)} + ${RISE_MIN}`)
+
+    // ---- D3 VISUAL REGRESSION: a second realm (verdant) at the wave-1 floor --
+    // A different painted realm must ALSO clear the floor and land on its own hue
+    // (guards against a single-realm calibration or a global grey wash).
+    // 'w3_0' = verdant realm's first generated level (finale ids like 'l4' are
+    // gated and fall back to l1/emberwaste through the QA drive).
+    const verdRealm = await page.evaluate(async () => {
+      const c = (window as any).__chromancer
+      await c.startLevel({ levelId: 'w3_0', seed: 12 })
+      // WAIT for the verdant scene to actually replace the prior one — poll on the
+      // DISTINGUISHING signal (realm flips to verdantwilds + its ground PNG binds),
+      // not merely 'a realm-png is bound' (the carried-over ember scene already had
+      // one). Step frames to drive the swap.
+      let t = { realm: '?', ground: '', path: '' }
+      for (let i = 0; i < 50; i++) {
+        try { t = c.getState().boardTexture } catch { /* null-control window mid-swap */ }
+        if (t.realm === 'verdantwilds' && t.ground === 'realm-png') break
+        c.stepFrames(4)
+        await new Promise((r) => setTimeout(r, 200))
+      }
+      c.stepFrames(6, 50)
+      return t.realm
+    })
+    check(verdRealm === 'verdantwilds', `verdant level w3_0 renders the verdantwilds realm (got '${verdRealm}')`)
+    const verdShot = await analyzeStable(page, REALM_HUE[verdRealm] ?? 120, '/tmp/shot-verdant.png')
+    console.log(`    · D3 verdant wave-1 floor: medSat ${verdShot.medSat.toFixed(3)} greyFrac ${verdShot.greyFrac.toFixed(3)} modalHue ${verdShot.modalHue}° huePix ${verdShot.huePix} (target ${REALM_HUE[verdRealm]}°, dist ${verdShot.hueDist}°)`)
+    check(verdShot.medSat >= (REALM_SAT_FLOOR[verdRealm] ?? 0.25), `D3 verdant wave-1 median saturation ${verdShot.medSat.toFixed(3)} ≥ ${REALM_SAT_FLOOR[verdRealm]}`)
+    check(verdShot.greyFrac <= GREY_FRAC_MAX, `D3 verdant wave-1 grey fraction ${verdShot.greyFrac.toFixed(3)} ≤ ${GREY_FRAC_MAX}`)
+    check(verdShot.hueDist <= HUE_TOL, `D3 verdant wave-1 modal hue ${verdShot.modalHue}° within ±${HUE_TOL}° of verdantwilds target ${REALM_HUE[verdRealm]}°`)
 
     // ---- page health -------------------------------------------------------
     check(pageErrors.length === 0, pageErrors.length ? `uncaught page errors: ${pageErrors.slice(0, 3).join(' | ')}` : 'zero uncaught page errors across the whole drive')

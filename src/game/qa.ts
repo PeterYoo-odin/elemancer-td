@@ -66,6 +66,10 @@ export interface QaState {
   frame: number
   driven: boolean
   boardTexture: QaBoardTexture
+  // Painted backdrop cylinder: 'painted' once the realm PNG bound to the material,
+  // 'gradient' while (or if permanently) the tinted gradient sky is all that ships.
+  // A smoke drive asserts 'painted' so a dropped backdrop can't ship green.
+  backdrop: 'painted' | 'gradient'
   // On-board weather + prism-road shimmer status. 'active' = alive; 'reduced' =
   // reduce-motion static collapse (intentional); 'fallback' = it threw and the board
   // is rendering dead. A smoke drive asserts 'active' so a dead board can't ship green.

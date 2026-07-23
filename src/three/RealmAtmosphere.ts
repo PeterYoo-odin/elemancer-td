@@ -57,17 +57,24 @@ interface RealmAtmoCfg {
 
 // Recessive by construction: colours below are already muted; the builders desaturate
 // and darken them further so nothing here competes with the play plane.
+// Part D tail: the ADDITIVE light bands (glow/aurora/shaft) were authored ~1.5× lower
+// to "hold everything desaturated" alongside the old colour floor — with the floor
+// raised (D1) they were suppressing the painted world's own atmosphere, so their
+// opacities are lifted ~1.5× to deepen each realm with COLOURED light. The dark
+// normal-blend overlays (stormpeaks cloud / umbralvoid fog) are left as-is: raising
+// those greys the world rather than enriching it. Judged under the bloom threshold
+// (0.72) so nothing blows out.
 const REALMS: Record<string, RealmAtmoCfg> = {
   emberwaste: {
     particle: { color: 0xff9a4a, count: 60, kind: 'rise', size: 0.07, spanY: [1.5, 12] },
-    bands: [{ tex: 'glow', color: 0xff7a2c, radius: 22, y: 1.4, height: 6, opacity: 0.16, blend: 'add', pulse: 0.06, pulseHz: 0.5, parallax: 0.18 }],
+    bands: [{ tex: 'glow', color: 0xff7a2c, radius: 22, y: 1.4, height: 6, opacity: 0.24, blend: 'add', pulse: 0.06, pulseHz: 0.5, parallax: 0.18 }],
     critter: { color: 0x2a1c22, count: 2, scale: 0.5, speed: 0.5 },
     ridge: { color: 0x6b4636, radius: 19, y: 6, height: 22, shape: 'mesa' },
     frame: 'branches',
   },
   frostreach: {
     particle: { color: 0xd6ecff, count: 80, kind: 'fall', size: 0.06, spanY: [1, 13] },
-    bands: [{ tex: 'aurora', color: 0x6cc6e8, radius: 24, y: 9, height: 12, opacity: 0.12, blend: 'add', pulse: 0.05, pulseHz: 0.22, hueDrift: 0.5, parallax: 0.1 }],
+    bands: [{ tex: 'aurora', color: 0x6cc6e8, radius: 24, y: 9, height: 12, opacity: 0.18, blend: 'add', pulse: 0.05, pulseHz: 0.22, hueDrift: 0.5, parallax: 0.1 }],
     critter: { color: 0x2b3440, count: 2, scale: 0.5, speed: 0.45 },
     ridge: { color: 0x8fa8be, radius: 19, y: 6, height: 22, shape: 'drift' },
     frame: 'crags',
@@ -84,7 +91,7 @@ const REALMS: Record<string, RealmAtmoCfg> = {
   },
   verdantwilds: {
     particle: { color: 0xc8e89a, count: 66, kind: 'float', size: 0.06, spanY: [1, 10] },
-    bands: [{ tex: 'shaft', color: 0xbfe57a, radius: 22, y: 8, height: 14, opacity: 0.1, blend: 'add', pulse: 0.05, pulseHz: 0.3, parallax: 0.16 }],
+    bands: [{ tex: 'shaft', color: 0xbfe57a, radius: 22, y: 8, height: 14, opacity: 0.15, blend: 'add', pulse: 0.05, pulseHz: 0.3, parallax: 0.16 }],
     critter: { color: 0x24301f, count: 3, scale: 0.44, speed: 0.6 },
     ridge: { color: 0x3f5a3a, radius: 18.5, y: 6.5, height: 24, shape: 'trees' },
     frame: 'canopy',
@@ -92,8 +99,8 @@ const REALMS: Record<string, RealmAtmoCfg> = {
   radiantsanctum: {
     particle: { color: 0xffe9b0, count: 54, kind: 'float', size: 0.07, spanY: [1.5, 12] },
     bands: [
-      { tex: 'shaft', color: 0xf0d68a, radius: 23, y: 9, height: 16, opacity: 0.12, blend: 'add', pulse: 0.06, pulseHz: 0.18, parallax: 0.14 },
-      { tex: 'shaft', color: 0xffe6a8, radius: 20, y: 8, height: 15, opacity: 0.08, blend: 'add', pulse: 0.06, pulseHz: 0.24, parallax: 0.2 },
+      { tex: 'shaft', color: 0xf0d68a, radius: 23, y: 9, height: 16, opacity: 0.18, blend: 'add', pulse: 0.06, pulseHz: 0.18, parallax: 0.14 },
+      { tex: 'shaft', color: 0xffe6a8, radius: 20, y: 8, height: 15, opacity: 0.12, blend: 'add', pulse: 0.06, pulseHz: 0.24, parallax: 0.2 },
     ],
     critter: { color: 0x3a3020, count: 2, scale: 0.46, speed: 0.4 },
     ridge: { color: 0x9a8a64, radius: 19, y: 7, height: 22, shape: 'spires' },

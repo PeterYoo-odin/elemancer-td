@@ -24,6 +24,17 @@ jobs:
         run: npm run build
       - name: Sim gate (determinism + beatability)
         run: npm run simcheck
+
+      # THE CI GAP (Part D): juicecheck is the ONLY gate that verifies pixels can
+      # actually render — the real browser render+view loop, painted-asset binding
+      # (no silent fallbacks), AND the D3 visual-regression gate (wave-1 colour
+      # floor + the Greying arc raising saturation). It ran locally but never in
+      # CI, which is the exact mechanism by which "it looks the same" rounds
+      # shipped green. It drives a real Chromium via ?qa=1, so install one first.
+      - name: Install Chromium for the juice gate
+        run: npx playwright install --with-deps chromium
+      - name: Juice gate (real-browser render + asset binding + visual regression)
+        run: npm run juicecheck
       - name: Balance harness (seeded sweep → report)
         # Advisory sweep. Set BALANCE_RUNS higher for a deeper (slower) sweep, or add
         # `-- --fail-on-degenerate` to make a flagged combo fail the build.

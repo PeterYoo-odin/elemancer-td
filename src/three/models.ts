@@ -16,6 +16,7 @@
 
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { qa } from '../game/qa'
 
 const KIT_BASE = `${import.meta.env.BASE_URL}models/kenney-td/`
 
@@ -60,7 +61,15 @@ class ModelRegistry {
       this.loader
         .loadAsync(KIT_BASE + n + '.glb')
         .then((gltf) => { this.scenes.set(n, gltf.scene) })
-        .catch((err) => { console.error('[models] failed to load', n, err) })
+        .catch((err) => {
+          // FAIL LOUD (D2): a missing GLB used to console.error then silently
+          // clone() an empty Group — props just absent, detectable by nobody in
+          // QA terms. Emit telemetry so a dropped kit model is a red juicecheck,
+          // not an invisible gap (juicecheck asserts models.ready + every
+          // MODEL_NAMES entry has()).
+          console.error('[models] failed to load', n, err)
+          if (qa.enabled) qa.emit('asset', { what: 'kit-model', url: n })
+        })
         .finally(() => { done++; onProgress?.(done / names.length) })
     this.loadPromise = Promise.all(names.map(one)).then(() => {
       this.ready = true

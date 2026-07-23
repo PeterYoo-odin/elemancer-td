@@ -18,19 +18,21 @@ interface EnemyArtDef {
   accent: number // signature Greying accent glow (matches manifest.json)
 }
 
-// EnemyKind → painted sprite + accent. The manifest ships eight archetypes; the
-// sim's eleven kinds map on so every role reads at a glance:
-//   armored → armored (steel-blue) · the Fortified rank-and-file, its own kind now
-//   grunt   → no painted art (no dedicated asset) · falls back to its primitive
-//             shape/colour, which stays visually distinct from armored's plate
-//   elite   → elite   (crimson)    · the Warded veteran, its own kind now
-//   keeper  → elite   (crimson)    · sub-boss silhouette, differentiated by its
-//                                    per-Keeper crown retint + set-piece scale
-//   boss    → elite   (crimson)    · the Morose Titan, scaled to fill the arena
-// (keeper/boss reusing elite's art is safe — both are always clearly telegraphed
-// by name/BOSS banner + huge scale, so there's no read-at-a-glance collision.)
-const ENEMY_ART: Partial<Record<EnemyKind, EnemyArtDef>> = {
+// EnemyKind → painted sprite + accent. This is a TOTAL Record over EnemyKind (D2):
+// every one of the sim's eleven kinds has its own painted-art contract, so adding a
+// new kind without wiring its sprite is a COMPILE ERROR, not a silent primitive.
+//   grunt   → grunt.png   (amber)      · the ashen foot-soldier of level 1
+//   keeper  → keeper.png  (violet)     · sub-boss silhouette, own set-piece art
+//   boss    → boss.png    (magenta)    · the Morose Titan, scaled to fill the arena
+// grunt/keeper/boss PNGs are generated in parallel with this wiring — until they
+// land, each degrades SAFELY: pose 404 → loud artMiss → base-sprite 404 → loud
+// artMiss → primitive mesh kept (crash-safe, never blanks a unit). juicecheck's
+// positive enemy-pose assertion is gated on the file existing on disk, so a
+// not-yet-shipped sprite never turns CI red — but a REGRESSION on an existing
+// sprite (a 404 that fails soft) does. See scripts/juicecheck.ts.
+const ENEMY_ART: Record<EnemyKind, EnemyArtDef> = {
   runner: { file: 'runner.png', accent: 0x7fe05a },
+  grunt: { file: 'grunt.png', accent: 0xff9b2f },
   brute: { file: 'brute.png', accent: 0xe8a23c },
   flyer: { file: 'flyer.png', accent: 0x63d6e0 },
   shielded: { file: 'shielded.png', accent: 0xb07de0 },
@@ -38,8 +40,8 @@ const ENEMY_ART: Partial<Record<EnemyKind, EnemyArtDef>> = {
   swarm: { file: 'swarm.png', accent: 0xe8d24a },
   armored: { file: 'armored.png', accent: 0x7fa8d6 },
   elite: { file: 'elite.png', accent: 0xe0507d },
-  keeper: { file: 'elite.png', accent: 0xe0507d },
-  boss: { file: 'elite.png', accent: 0xe0507d },
+  keeper: { file: 'keeper.png', accent: 0xc9b6ff },
+  boss: { file: 'boss.png', accent: 0xff4db8 },
 }
 
 export interface EnemyFrame {
