@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     // ---- board textures (silent-fallback trap) ----------------------------
     // Textures load async over local HTTP; POLL (network+decode timing varies
     // headless) and read back what is ACTUALLY bound to the materials.
-    let tex = { realm: '?', ground: '', path: '' }
+    let tex = { realm: '?', ground: '', path: '', facing: '' }
     for (let i = 0; i < 30; i++) {
       tex = await page.evaluate(() => (window as any).__chromancer.getState().boardTexture)
       if (tex.ground === 'realm-png' && tex.path === 'path-png') break
@@ -273,6 +273,11 @@ async function main(): Promise<void> {
     }
     check(tex.ground === 'realm-png', `painted GROUND texture bound (${tex.realm}: ${tex.ground})`)
     check(tex.path === 'path-png', `painted PATH texture bound (${tex.path})`)
+    // BOUND IS NOT VISIBLE. The board once shipped wound backwards: both textures
+    // above reported bound while the play surface was backface-culled and the
+    // player saw the backdrop through it. Assert the surface actually faces the
+    // camera, or this gate goes green on an invisible board again.
+    check(tex.facing === 'up', `painted play surface faces the camera (facing: ${tex.facing})`)
 
     // ---- painted BACKDROP bound (D2 silent-fallback gate) ------------------
     // The backdrop cylinder had no read-back API and no positive gate: a dropped

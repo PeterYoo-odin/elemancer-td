@@ -393,6 +393,7 @@ export class BattleView3D {
   private pathMat?: THREE.MeshStandardMaterial
   private groundMat?: THREE.MeshStandardMaterial
   private rockMat?: THREE.MeshStandardMaterial
+  private boardFacing: 'up' | 'down' = 'down' // play-surface normal read-back (see buildTerrainMesh)
   // The SPECIFIC loaded painted textures — compared by reference at QA-query time
   // against each material's live `.map` so boardTexture() reports reality (loaded
   // vs fell back to the kit atlas), never an optimistically-set flag.
@@ -1077,9 +1078,17 @@ export class BattleView3D {
               groupMatIndex = matIndex
             }
             const texRepeat = matIndex === 0 ? PATH_TEX_REPEAT : GROUND_TEX_REPEAT
+            // WINDING: wx()/wz() both increase, so the corners A(x0,z0) B(x1,z0)
+            // C(x1,z1) D(x0,z1) wind CLOCKWISE seen from above. Emitting A,B,C /
+            // A,C,D therefore gives (B-A)×(C-B) = x̂×ẑ = -ŷ — every face normal
+            // pointed DOWN, so computeVertexNormals() lit the board from beneath
+            // and FrontSide backface-culled the play surface entirely: the painted
+            // ground/path textures bound fine and were never drawn (the "board" on
+            // screen was the backdrop showing through). Emit A,C,B / A,D,C so the
+            // top face is front-facing and its normal is +ŷ.
             const quad: Array<[number, number, number, number, number]> = [
-              [x0, h00, z0, gx0, gz0], [x1, h10, z0, gx1, gz0], [x1, h11, z1, gx1, gz1],
-              [x0, h00, z0, gx0, gz0], [x1, h11, z1, gx1, gz1], [x0, h01, z1, gx0, gz1],
+              [x0, h00, z0, gx0, gz0], [x1, h11, z1, gx1, gz1], [x1, h10, z0, gx1, gz0],
+              [x0, h00, z0, gx0, gz0], [x0, h01, z1, gx0, gz1], [x1, h11, z1, gx1, gz1],
             ]
             for (const [x, y, z, gx, gz] of quad) {
               pos[vi * 3] = x; pos[vi * 3 + 1] = y; pos[vi * 3 + 2] = z
@@ -1099,6 +1108,19 @@ export class BattleView3D {
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
     geo.computeVertexNormals()
+    // Read back which way the PAINTED play surface (path + buildable groups, not the
+    // skirt) actually ends up facing. A board wound the wrong way is backface-culled
+    // and renders as the backdrop showing through — while every texture still reports
+    // bound. That shipped once; boardTextureState().facing makes it assertable.
+    {
+      const nrm = geo.getAttribute('normal')
+      let sum = 0, n = 0
+      for (const g of geo.groups) {
+        if (g.materialIndex === 2) continue // skirt/highland rock: steep by design
+        for (let i = g.start; i < g.start + g.count; i++) { sum += nrm.getY(i); n++ }
+      }
+      this.boardFacing = n > 0 && sum / n > 0 ? 'up' : 'down'
+    }
 
     const kitAtlas = models.atlas()
     // Buildable ground: the realm's painted cel-shaded texture. Falls back to the
@@ -1188,11 +1210,15 @@ export class BattleView3D {
   // ?qa=1 drive-API surface (see qa.ts QaBoardTexture): reads the LIVE material's
   // bound `.map` reference back against the specific textures we loaded above —
   // never an optimistic flag — so a silent texture 404 can't report as success.
-  boardTextureState(): { realm: string; ground: 'realm-png' | 'fallback-atlas'; path: 'path-png' | 'fallback-atlas' } {
+  // `facing` closes the gap this API had: a bound texture on a board whose faces
+  // point DOWN is culled and never reaches a pixel, so 'realm-png' alone was not
+  // evidence the art is visible. See buildTerrainMesh's winding note.
+  boardTextureState(): { realm: string; ground: 'realm-png' | 'fallback-atlas'; path: 'path-png' | 'fallback-atlas'; facing: 'up' | 'down' } {
     return {
       realm: this.backdrop?.key ?? '',
       ground: this.groundMat && this.groundMat.map === this.realmGroundTex && this.realmGroundTex ? 'realm-png' : 'fallback-atlas',
       path: this.pathMat && this.pathMat.map === this.pathRoadTex && this.pathRoadTex ? 'path-png' : 'fallback-atlas',
+      facing: this.boardFacing,
     }
   }
 

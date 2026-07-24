@@ -47,6 +47,10 @@ export interface QaBoardTexture {
   realm: string
   ground: 'realm-png' | 'fallback-atlas'
   path: 'path-png' | 'fallback-atlas'
+  // Which way the painted play surface faces. 'down' means the board is wound
+  // backwards and backface-culled: the textures above still read as bound, but
+  // NOTHING of them reaches a pixel (the backdrop shows through instead).
+  facing: 'up' | 'down'
 }
 
 export interface QaState {
