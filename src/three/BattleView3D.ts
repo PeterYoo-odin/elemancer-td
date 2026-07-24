@@ -47,14 +47,18 @@ const GROUND = 0.2
 // board into the fog/haze.
 const TSUB = 3
 const TSKIRT = 3
-// Ground/path texture tiling: repeats per BOARD TILE (not per quad) — kept well
-// under 1 so a SINGLE painted slab spans roughly ten board tiles (the Kingdom
-// Rush scale a top-down camera reads at), computed from a continuous tile-space
-// UV so there are no seams anywhere on the merged mesh regardless of this value.
-// (A value >=1 crams many slabs into a few on-screen pixels; mipmapping then
-// averages them down to a flat tint — that was the "washed beige board" bug.)
-const GROUND_TEX_REPEAT = 0.1
-const PATH_TEX_REPEAT = 0.1
+// Ground/path texture tiling: repeats per BOARD TILE (not per quad), computed from
+// a continuous tile-space UV so there are no seams anywhere on the merged mesh
+// regardless of these values. Both were 0.1 — one painted slab stretched across the
+// WHOLE 9x11 board — which nobody could judge, because the board was wound backwards
+// and culled from #58 until the winding fix (see buildTerrainMesh): these are the
+// first values ever art-directed against a board that actually renders. Chosen by
+// A/B: ~1 texture repeat per 3 tiles on the ground (the painted lava cells land at
+// roughly one per board tile — detail that reads without visible tiling) and per 2
+// tiles on the path (one paving slab per tile). Pushing past ~0.5 makes the repeat
+// obvious; at 0.1 the art is an unreadable smear.
+const GROUND_TEX_REPEAT = 1 / 3
+const PATH_TEX_REPEAT = 0.5
 // Empirical: the scene's stacked lighting reads a flat-vertex-coloured surface
 // noticeably brighter than its input albedo — this compensates so the sculpted
 // terrain's ON-SCREEN mid-luma matches the per-realm design target, not a washed

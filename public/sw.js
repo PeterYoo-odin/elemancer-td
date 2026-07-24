@@ -52,6 +52,19 @@ function isHashedAsset(url) {
   return url.pathname.includes('/assets/')
 }
 
+// Painted art that ships from public/ keeps a STABLE filename across builds, so an
+// art redrop overwrites the same URL (e.g. textures/realms/emberwaste-ground.webp).
+// Under stale-while-revalidate a returning player therefore sees the OLD painting
+// for a whole session after a deploy — indistinguishable from "the art never
+// shipped". These get network-first with a cache fallback instead: the CDN already
+// serves them must-revalidate + ETag, so a warm hit is a cheap 304, and offline
+// still works. Genuinely additive media (audio, models, icons, fonts) stays on
+// stale-while-revalidate, where instant-from-cache is the right trade.
+const REDRAWN_ART = ['/textures/', '/concepts/', '/brand/']
+function isRedrawnArt(url) {
+  return REDRAWN_ART.some((p) => url.pathname.includes(p))
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
@@ -91,7 +104,21 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // STALE-WHILE-REVALIDATE for other same-origin static (icons, art, audio…).
+  if (isRedrawnArt(url)) {
+    // NETWORK-FIRST: a redrawn painting at a stable URL must never lose to the cache.
+    event.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone()
+          caches.open(RUNTIME).then((c) => c.put(req, copy)).catch(() => {})
+        }
+        return res
+      }).catch(() => caches.match(req).then((hit) => hit || Response.error())),
+    )
+    return
+  }
+
+  // STALE-WHILE-REVALIDATE for other same-origin static (icons, audio, models…).
   event.respondWith(
     caches.match(req).then((hit) => {
       const net = fetch(req).then((res) => {
